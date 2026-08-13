@@ -35,6 +35,7 @@ private slots:
     void futureProductPagesConstructAndRender();
     void companionStartsInLowCostExpression();
     void pagesExposeSemanticSignals();
+    void statusBarContainsTheFullSettingsButton();
     void touchRevealsHomeAndTimeoutReturnsToCompanion();
     void interactionInsideHomeRestartsTimeout();
     void unavailableCapabilitiesUseTruthfulToast();
@@ -182,6 +183,27 @@ void V01UiTest::pagesExposeSemanticSignals()
     QCOMPARE(careSpy.count(), 1);
     QCOMPARE(reminderSpy.count(), 1);
     QCOMPARE(settingsSpy.count(), 1);
+}
+
+void V01UiTest::statusBarContainsTheFullSettingsButton()
+{
+    StatusBarWidget status(true);
+    status.setFixedWidth(LongPetUi::Metrics::CanvasWidth);
+    status.show();
+    QTest::qWait(20);
+
+    auto* settings = status.settingsButton();
+    QVERIFY(settings);
+    QCOMPARE(status.height(), LongPetUi::Metrics::StatusBarHeight);
+    QCOMPARE(settings->size(), QSize(LongPetUi::Metrics::StatusBarHeight,
+                                     LongPetUi::Metrics::StatusBarHeight));
+
+    const QRect buttonInStatus(settings->mapTo(&status, QPoint(0, 0)),
+                               settings->size());
+    QVERIFY2(status.rect().contains(buttonInStatus),
+             "the status bar must not clip the settings button");
+    QVERIFY2(settings->parentWidget()->rect().contains(settings->geometry()),
+             "the settings-button host must contain its full geometry");
 }
 
 void V01UiTest::touchRevealsHomeAndTimeoutReturnsToCompanion()

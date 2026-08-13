@@ -107,6 +107,15 @@ QPushButton[role="back"] {
     background: #23211E;
 }
 
+QPushButton[role="statusAction"] {
+    min-width: 62px; max-width: 62px;
+    min-height: 62px; max-height: 62px;
+    padding: 0;
+    border: 1px solid #3C3934;
+    border-radius: 20px;
+    background: #23211E;
+}
+
 QPushButton[role="segment"] {
     min-height: 64px;
     border-radius: 16px;

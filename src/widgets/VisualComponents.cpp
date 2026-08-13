@@ -77,8 +77,9 @@ StatusBarWidget::StatusBarWidget(bool showSettings, QWidget* parent)
     if (showSettings) {
         m_settingsButton = new QPushButton(rightHost);
         m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
-        m_settingsButton->setProperty("role", "back");
-        m_settingsButton->setFixedSize(80, 64);
+        m_settingsButton->setProperty("role", "statusAction");
+        m_settingsButton->setFixedSize(LongPetUi::Metrics::StatusBarHeight,
+                                       LongPetUi::Metrics::StatusBarHeight);
         m_settingsButton->setIcon(QIcon(QStringLiteral(":/icons/settings.svg")));
         m_settingsButton->setIconSize(QSize(32, 32));
         m_settingsButton->setAccessibleName(QStringLiteral("设置"));
