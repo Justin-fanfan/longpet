@@ -1,0 +1,17 @@
+# CMake / Qt Creator build output
+/build*/
+/cmake-build*/
+CMakeUserPresets.json
+
+# Generated binaries and runtime files
+*.exe
+*.dll
+*.pdb
+*.log
+
+# Local IDE state is machine-specific
+.vscode/
+.vs/
+.qtcreator/
+
+docs/
