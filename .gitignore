@@ -14,4 +14,6 @@ CMakeUserPresets.json
 .vs/
 .qtcreator/
 
-docs/
+# Keep the V0.2 delivery report in Git; ignore other document artifacts.
+docs/*
+# !docs/LongPet-V0.2-Work-Report.md

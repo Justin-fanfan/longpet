@@ -1,9 +1,9 @@
 #include <QApplication>
 #include <QFile>
 #include <QIODevice>
+#include <QMessageBox>
 
-#include "mainwindow.h"
-#include "widgets/VisualTokens.h"
+#include "app/Application.h"
 
 int main(int argc, char* argv[])
 {
@@ -19,15 +19,16 @@ int main(int argc, char* argv[])
         qWarning("LongPet: failed to load the embedded application stylesheet");
     }
 
-    MainWindow window;
-
-#ifdef Q_OS_WIN
-    window.setFixedSize(LongPetUi::Metrics::CanvasWidth,
-                        LongPetUi::Metrics::CanvasHeight);
-    window.show();
-#else
-    window.showFullScreen();
-#endif
-
-    return app.exec();
+    Application longPet;
+    QString error;
+    if (!longPet.initialize(&error)) {
+        qCritical("LongPet initialization failed: %s", qPrintable(error));
+        QMessageBox::critical(nullptr, QStringLiteral("LongPet 无法启动"),
+                              QStringLiteral("本地数据初始化失败：\n%1").arg(error));
+        return 1;
+    }
+    longPet.show();
+    const int exitCode = app.exec();
+    longPet.shutdown();
+    return exitCode;
 }

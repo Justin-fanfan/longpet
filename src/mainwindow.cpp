@@ -1,18 +1,18 @@
 #include "mainwindow.h"
 
+#include "pages/CarePage.h"
 #include "pages/CompanionPage.h"
 #include "pages/HomePage.h"
+#include "pages/ReminderEditPage.h"
+#include "pages/ReminderPage.h"
+#include "pages/SettingsPage.h"
 #include "widgets/VisualComponents.h"
 #include "widgets/VisualTokens.h"
 
+#include <QApplication>
 #include <QEvent>
 #include <QStackedWidget>
-#include <QTimer>
 #include <QVBoxLayout>
-
-namespace {
-constexpr int ControlTimeoutMs = 15'000;
-}
 
 MainWindow::MainWindow(QWidget* parent)
     : QWidget(parent)
@@ -32,49 +32,88 @@ MainWindow::MainWindow(QWidget* parent)
     m_stack->setObjectName(QStringLiteral("pageStack"));
     m_companionPage = new CompanionPage(m_stack);
     m_homePage = new HomePage(m_stack);
-    m_stack->addWidget(m_companionPage);
-    m_stack->addWidget(m_homePage);
+    m_carePage = new CarePage(m_stack);
+    m_reminderPage = new ReminderPage(m_stack);
+    m_reminderEditPage = new ReminderEditPage(m_stack);
+    m_settingsPage = new SettingsPage(m_stack);
+    for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
+                          static_cast<QWidget*>(m_homePage),
+                          static_cast<QWidget*>(m_carePage),
+                          static_cast<QWidget*>(m_reminderPage),
+                          static_cast<QWidget*>(m_reminderEditPage),
+                          static_cast<QWidget*>(m_settingsPage)}) {
+        m_stack->addWidget(page);
+    }
     root->addWidget(m_stack);
 
     m_toast = new ToastWidget(this);
     m_toast->setAccessibleName(QStringLiteral("功能提示"));
-
-    m_controlTimeout = new QTimer(this);
-    m_controlTimeout->setObjectName(QStringLiteral("controlTimeout"));
-    m_controlTimeout->setSingleShot(true);
-    m_controlTimeout->setInterval(ControlTimeoutMs);
-
     connect(m_companionPage, &CompanionPage::controlRequested,
-            this, &MainWindow::showHome);
+            this, &MainWindow::controlRequested);
     connect(m_homePage, &HomePage::talkRequested,
-            this, [this] { showUnavailable(QStringLiteral("语音")); });
+            this, &MainWindow::talkRequested);
     connect(m_homePage, &HomePage::careRequested,
-            this, [this] { showUnavailable(QStringLiteral("今日关怀")); });
+            this, &MainWindow::careRequested);
     connect(m_homePage, &HomePage::reminderRequested,
-            this, [this] { showUnavailable(QStringLiteral("提醒")); });
+            this, &MainWindow::reminderRequested);
     connect(m_homePage, &HomePage::settingsRequested,
-            this, [this] { showUnavailable(QStringLiteral("设置")); });
-    connect(m_controlTimeout, &QTimer::timeout,
-            this, &MainWindow::showCompanion);
+            this, &MainWindow::settingsRequested);
 
-    m_homePage->installEventFilter(this);
-    for (QObject* child : m_homePage->findChildren<QObject*>())
-        child->installEventFilter(this);
-    showCompanion();
+    connect(m_carePage, &CarePage::backRequested,
+            this, &MainWindow::homeRequested);
+    connect(m_carePage, &CarePage::reminderRequested,
+            this, &MainWindow::reminderRequested);
+    connect(m_carePage, &CarePage::recordWaterRequested,
+            this, &MainWindow::recordWaterRequested);
+    connect(m_reminderPage, &ReminderPage::backRequested,
+            this, &MainWindow::homeRequested);
+    connect(m_reminderPage, &ReminderPage::addReminderRequested,
+            this, &MainWindow::addReminderRequested);
+    connect(m_reminderPage, &ReminderPage::editReminderRequested,
+            this, &MainWindow::editReminderRequested);
+    connect(m_reminderPage, &ReminderPage::completeReminderRequested,
+            this, &MainWindow::completeReminderRequested);
+    connect(m_reminderEditPage, &ReminderEditPage::backRequested,
+            this, &MainWindow::cancelReminderEditRequested);
+    connect(m_reminderEditPage, &ReminderEditPage::cancelRequested,
+            this, &MainWindow::cancelReminderEditRequested);
+    connect(m_reminderEditPage, &ReminderEditPage::saveRequested,
+            this, &MainWindow::saveReminderRequested);
+    connect(m_reminderEditPage, &ReminderEditPage::deleteRequested,
+            this, &MainWindow::deleteReminderRequested);
+    connect(m_settingsPage, &SettingsPage::backRequested,
+            this, &MainWindow::homeRequested);
+    connect(m_settingsPage, &SettingsPage::volumeChangeRequested,
+            this, &MainWindow::volumeChangeRequested);
+    connect(m_settingsPage, &SettingsPage::brightnessChangeRequested,
+            this, &MainWindow::brightnessChangeRequested);
+    connect(m_settingsPage, &SettingsPage::petStyleChangeRequested,
+            this, &MainWindow::petStyleChangeRequested);
+    connect(m_settingsPage, &SettingsPage::pairFamilyRequested,
+            this, &MainWindow::pairFamilyRequested);
+    qApp->installEventFilter(this);
+    showPage(PageId::Companion);
+}
+
+MainWindow::~MainWindow()
+{
+    if (qApp)
+        qApp->removeEventFilter(this);
 }
 
 MainWindow::PageId MainWindow::currentPage() const
 {
-    return m_stack->currentWidget() == m_homePage
-        ? PageId::Home : PageId::Companion;
+    return m_currentPage;
 }
 
 void MainWindow::showPage(PageId page)
 {
-    if (page == PageId::Home)
-        showHome();
-    else
-        showCompanion();
+    QWidget* target = pageWidget(page);
+    if (!target)
+        return;
+    m_toast->hide();
+    m_stack->setCurrentWidget(target);
+    m_currentPage = page;
 }
 
 void MainWindow::showToast(const QString& text)
@@ -82,17 +121,50 @@ void MainWindow::showToast(const QString& text)
     m_toast->showMessage(text);
 }
 
+void MainWindow::setReminders(const QList<Reminder>& reminders)
+{
+    m_reminderPage->setReminders(reminders);
+}
+
+void MainWindow::setReminderDraft(const ReminderDraft& draft)
+{
+    m_reminderEditPage->setDraft(draft);
+}
+
+void MainWindow::setCareSummary(const CareSummary& summary)
+{
+    m_carePage->setSummary(summary);
+}
+
+void MainWindow::setSettings(const UserSettings& settings)
+{
+    m_settingsPage->setSettings(settings);
+}
+
+void MainWindow::setSystemStatus(const SystemStatus& status)
+{
+    const QList<StatusBarWidget*> statusBars = findChildren<StatusBarWidget*>();
+    for (StatusBarWidget* statusBar : statusBars)
+        statusBar->setStatus(status);
+}
+
+void MainWindow::setDeviceSummary(const DeviceSummary& summary)
+{
+    m_settingsPage->setDeviceSummary(summary);
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
     const auto* watchedWidget = qobject_cast<QWidget*>(watched);
-    const bool belongsToHome = watched == m_homePage
-        || (watchedWidget && m_homePage->isAncestorOf(watchedWidget));
-    if (belongsToHome && currentPage() == PageId::Home) {
+    QWidget* current = pageWidget(m_currentPage);
+    const bool belongsToCurrent = watched == current
+        || (watchedWidget && current && current->isAncestorOf(watchedWidget));
+    if (belongsToCurrent && m_currentPage != PageId::Companion) {
         switch (event->type()) {
         case QEvent::MouseButtonPress:
         case QEvent::TouchBegin:
         case QEvent::KeyPress:
-            restartControlTimeout();
+            emit userActivity(m_currentPage);
             break;
         default:
             break;
@@ -101,27 +173,15 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
     return QWidget::eventFilter(watched, event);
 }
 
-void MainWindow::showCompanion()
+QWidget* MainWindow::pageWidget(PageId page) const
 {
-    m_controlTimeout->stop();
-    m_toast->hide();
-    m_stack->setCurrentWidget(m_companionPage);
-}
-
-void MainWindow::showHome()
-{
-    m_stack->setCurrentWidget(m_homePage);
-    restartControlTimeout();
-}
-
-void MainWindow::restartControlTimeout()
-{
-    if (currentPage() == PageId::Home)
-        m_controlTimeout->start();
-}
-
-void MainWindow::showUnavailable(const QString& capabilityName)
-{
-    restartControlTimeout();
-    showToast(tr("%1功能将在后续版本接入").arg(capabilityName));
+    switch (page) {
+    case PageId::Companion: return m_companionPage;
+    case PageId::Home: return m_homePage;
+    case PageId::Care: return m_carePage;
+    case PageId::Reminder: return m_reminderPage;
+    case PageId::ReminderEdit: return m_reminderEditPage;
+    case PageId::Settings: return m_settingsPage;
+    }
+    return nullptr;
 }

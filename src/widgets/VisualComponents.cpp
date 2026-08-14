@@ -74,6 +74,10 @@ StatusBarWidget::StatusBarWidget(bool showSettings, QWidget* parent)
     right->setContentsMargins(0, 0, 0, 0);
     right->setSpacing(12);
 
+    m_systemLabel = makeLabel(QStringLiteral("状态待设备接口接入"), "status", rightHost);
+    m_systemLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    right->addWidget(m_systemLabel);
+
     if (showSettings) {
         m_settingsButton = new QPushButton(rightHost);
         m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
@@ -84,28 +88,37 @@ StatusBarWidget::StatusBarWidget(bool showSettings, QWidget* parent)
         m_settingsButton->setIconSize(QSize(32, 32));
         m_settingsButton->setAccessibleName(QStringLiteral("设置"));
         right->addWidget(m_settingsButton);
+        connect(m_settingsButton, &QPushButton::clicked,
+                this, &StatusBarWidget::settingsRequested);
     }
 
     layout->addWidget(m_dateLabel, 0, 0, Qt::AlignLeft | Qt::AlignVCenter);
     layout->addWidget(m_timeLabel, 0, 1, Qt::AlignCenter);
     layout->addWidget(rightHost, 0, 2, Qt::AlignRight | Qt::AlignVCenter);
 
-    m_clockTimer.setInterval(30'000);
-    m_clockTimer.setTimerType(Qt::VeryCoarseTimer);
-    connect(&m_clockTimer, &QTimer::timeout,
-            this, &StatusBarWidget::updateDateTime);
-    updateDateTime();
-    m_clockTimer.start();
+    SystemStatus initial;
+    initial.currentDateTime = QDateTime::currentDateTime();
+    setStatus(initial);
 }
 
-QPushButton* StatusBarWidget::settingsButton() const { return m_settingsButton; }
-
-void StatusBarWidget::updateDateTime()
+void StatusBarWidget::setStatus(const SystemStatus& status)
 {
-    const QDateTime now = QDateTime::currentDateTime();
+    const QDateTime now = status.currentDateTime.isValid()
+        ? status.currentDateTime : QDateTime::currentDateTime();
     const QLocale chinese(QLocale::Chinese, QLocale::China);
     m_dateLabel->setText(chinese.toString(now.date(), QStringLiteral("M月d日  dddd")));
     m_timeLabel->setText(now.time().toString(QStringLiteral("HH:mm")));
+
+    QStringList summaries;
+    if (status.networkKnown)
+        summaries.append(status.networkAvailable ? QStringLiteral("网络正常")
+                                                 : QStringLiteral("网络断开"));
+    if (status.batteryPercent >= 0)
+        summaries.append(QStringLiteral("电量 %1%").arg(status.batteryPercent));
+    if (status.weatherSummary != QStringLiteral("--") && !status.weatherSummary.isEmpty())
+        summaries.prepend(status.weatherSummary);
+    m_systemLabel->setText(summaries.isEmpty()
+        ? QStringLiteral("状态待设备接口接入") : summaries.join(QStringLiteral(" · ")));
 }
 
 PageHeaderWidget::PageHeaderWidget(const QString& title, QWidget* parent)
@@ -125,14 +138,14 @@ PageHeaderWidget::PageHeaderWidget(const QString& title, QWidget* parent)
     m_backButton->setIcon(QIcon(QStringLiteral(":/icons/back.svg")));
     m_backButton->setIconSize(QSize(34, 34));
     m_backButton->setAccessibleName(QStringLiteral("返回"));
+    connect(m_backButton, &QPushButton::clicked,
+            this, &PageHeaderWidget::backRequested);
     auto* titleLabel = makeLabel(title, "pageTitle", this);
     row->addWidget(m_backButton);
     row->addWidget(titleLabel);
     row->addStretch();
     outer->addLayout(row);
 }
-
-QPushButton* PageHeaderWidget::backButton() const { return m_backButton; }
 
 SectionCard::SectionCard(QWidget* parent)
     : QFrame(parent)
@@ -159,11 +172,18 @@ SettingRow::SettingRow(const QString& iconPath, const QString& title,
     auto* texts = new QVBoxLayout;
     texts->setSpacing(2);
     texts->addWidget(makeLabel(title, "body", this));
-    if (!subtitle.isEmpty())
-        texts->addWidget(makeLabel(subtitle, "assist", this));
+    m_subtitleLabel = makeLabel(subtitle, "assist", this);
+    m_subtitleLabel->setVisible(!subtitle.isEmpty());
+    texts->addWidget(m_subtitleLabel);
     layout->addLayout(texts, 1);
     if (control)
         layout->addWidget(control);
+}
+
+void SettingRow::setSubtitle(const QString& subtitle)
+{
+    m_subtitleLabel->setText(subtitle);
+    m_subtitleLabel->setVisible(!subtitle.isEmpty());
 }
 
 ReminderItem::ReminderItem(const QString& time, const QString& title,
@@ -180,7 +200,8 @@ ReminderItem::ReminderItem(const QString& time, const QString& title,
     auto* marker = new QFrame(this);
     marker->setObjectName(QStringLiteral("reminderMarker"));
     marker->setProperty("visualState", state == ReminderVisualState::Completed ? "completed"
-        : state == ReminderVisualState::Pending ? "pending" : "missed");
+        : state == ReminderVisualState::Pending ? "pending"
+        : state == ReminderVisualState::Disabled ? "disabled" : "missed");
     marker->setFixedSize(6, 64);
     layout->addWidget(marker);
 
@@ -198,13 +219,18 @@ ReminderItem::ReminderItem(const QString& time, const QString& title,
     const QString stateIcon = state == ReminderVisualState::Completed
         ? QStringLiteral(":/icons/check.svg")
         : state == ReminderVisualState::Pending
-            ? QStringLiteral(":/icons/clock.svg") : QStringLiteral(":/icons/alert.svg");
+            ? QStringLiteral(":/icons/clock.svg")
+            : state == ReminderVisualState::Disabled
+                ? QStringLiteral(":/icons/clock.svg") : QStringLiteral(":/icons/alert.svg");
     const QString stateText = state == ReminderVisualState::Completed
         ? QStringLiteral("已完成")
         : state == ReminderVisualState::Pending
-            ? QStringLiteral("待完成") : QStringLiteral("已错过");
+            ? QStringLiteral("待完成")
+            : state == ReminderVisualState::Disabled
+                ? QStringLiteral("已停用") : QStringLiteral("已错过");
     const char* stateRole = state == ReminderVisualState::Completed ? "success"
-        : state == ReminderVisualState::Pending ? "warning" : "danger";
+        : state == ReminderVisualState::Pending ? "warning"
+        : state == ReminderVisualState::Disabled ? "assist" : "danger";
     layout->addWidget(new SvgIconWidget(stateIcon, 32, this));
     auto* stateLabel = makeLabel(stateText, stateRole, this);
     stateLabel->setFixedWidth(76);

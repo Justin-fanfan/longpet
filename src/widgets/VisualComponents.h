@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model/SystemModels.h"
+
 #include <QFrame>
 #include <QLabel>
 #include <QPushButton>
@@ -31,23 +33,30 @@ public:
 };
 
 class StatusBarWidget final : public QWidget {
+    Q_OBJECT
+
 public:
     explicit StatusBarWidget(bool showSettings = false, QWidget* parent = nullptr);
-    QPushButton* settingsButton() const;
+    void setStatus(const SystemStatus& status);
+
+signals:
+    void settingsRequested();
 
 private:
-    void updateDateTime();
-
     QLabel* m_dateLabel = nullptr;
     QLabel* m_timeLabel = nullptr;
+    QLabel* m_systemLabel = nullptr;
     QPushButton* m_settingsButton = nullptr;
-    QTimer m_clockTimer;
 };
 
 class PageHeaderWidget final : public QWidget {
+    Q_OBJECT
+
 public:
     explicit PageHeaderWidget(const QString& title, QWidget* parent = nullptr);
-    QPushButton* backButton() const;
+
+signals:
+    void backRequested();
 
 private:
     QPushButton* m_backButton = nullptr;
@@ -67,9 +76,13 @@ public:
     explicit SettingRow(const QString& iconPath, const QString& title,
                         const QString& subtitle, QWidget* control,
                         QWidget* parent = nullptr);
+    void setSubtitle(const QString& subtitle);
+
+private:
+    QLabel* m_subtitleLabel = nullptr;
 };
 
-enum class ReminderVisualState { Completed, Pending, Missed };
+enum class ReminderVisualState { Completed, Pending, Missed, Disabled };
 
 class ReminderItem final : public QPushButton {
 public:

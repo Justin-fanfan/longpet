@@ -2,44 +2,47 @@
 
 #include "widgets/VisualComponents.h"
 
-#include <QCheckBox>
 #include <QGridLayout>
+#include <QHBoxLayout>
 #include <QIcon>
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+#include <QTimer>
 #include <QVBoxLayout>
 
 namespace {
-QWidget* sliderControl(int value, QWidget* parent)
+struct SliderControl {
+    QWidget* widget = nullptr;
+    QSlider* slider = nullptr;
+    QLabel* value = nullptr;
+};
+
+SliderControl sliderControl(QWidget* parent)
 {
-    auto* box = new QWidget(parent);
-    box->setFixedWidth(220);
-    auto* layout = new QVBoxLayout(box);
+    SliderControl result;
+    result.widget = new QWidget(parent);
+    result.widget->setFixedWidth(160);
+    auto* layout = new QVBoxLayout(result.widget);
     layout->setContentsMargins(0, 0, 0, 0);
     layout->setSpacing(0);
-    auto* valueLabel = makeLabel(QString::number(value) + QStringLiteral("%"), "assist", box);
-    valueLabel->setAlignment(Qt::AlignRight);
-    auto* slider = new QSlider(Qt::Horizontal, box);
-    slider->setRange(0, 100);
-    slider->setValue(value);
-    slider->setFixedHeight(64);
-    QObject::connect(slider, &QSlider::valueChanged, valueLabel, [valueLabel](int v) {
-        valueLabel->setText(QString::number(v) + QStringLiteral("%"));
-    });
-    layout->addWidget(valueLabel);
-    layout->addWidget(slider);
-    return box;
+    result.value = makeLabel({}, "assist", result.widget);
+    result.value->setAlignment(Qt::AlignRight);
+    result.slider = new QSlider(Qt::Horizontal, result.widget);
+    result.slider->setRange(0, 100);
+    result.slider->setFixedHeight(64);
+    layout->addWidget(result.value);
+    layout->addWidget(result.slider);
+    return result;
 }
 
-QPushButton* chevronButton(QWidget* parent)
+QWidget* summaryControl(QLabel** label, QWidget* parent)
 {
-    auto* button = new QPushButton(parent);
-    button->setFixedSize(64, 64);
-    button->setIcon(QIcon(QStringLiteral(":/icons/chevron.svg")));
-    button->setIconSize(QSize(30, 30));
-    button->setAccessibleName(QStringLiteral("查看"));
-    return button;
+    *label = makeLabel({}, "assist", parent);
+    (*label)->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    (*label)->setFixedWidth(160);
+    (*label)->setWordWrap(true);
+    return *label;
 }
 }
 
@@ -52,51 +55,117 @@ SettingsPage::SettingsPage(QWidget* parent)
     root->setContentsMargins(0, 0, 0, 0);
     root->setSpacing(0);
     auto* header = new PageHeaderWidget(QStringLiteral("设置"), this);
-    m_backButton = header->backButton();
     root->addWidget(header);
+    connect(header, &PageHeaderWidget::backRequested,
+            this, &SettingsPage::backRequested);
 
     auto* grid = new QGridLayout;
     grid->setContentsMargins(32, 16, 32, 32);
     grid->setHorizontalSpacing(32);
     grid->setVerticalSpacing(16);
-    auto* sound = new SettingRow(QStringLiteral(":/icons/volume.svg"), QStringLiteral("声音大小"),
-        QStringLiteral("演示数值"), sliderControl(60, this), this);
-    auto* brightness = new SettingRow(QStringLiteral(":/icons/brightness.svg"), QStringLiteral("屏幕亮度"),
-        QStringLiteral("演示数值"), sliderControl(72, this), this);
 
-    auto* networkSwitch = new QCheckBox(QStringLiteral("已连接"), this);
-    networkSwitch->setChecked(true);
-    networkSwitch->setFixedHeight(64);
-    connect(networkSwitch, &QCheckBox::toggled, networkSwitch, [networkSwitch](bool checked) {
-        networkSwitch->setText(checked ? QStringLiteral("已连接") : QStringLiteral("未连接"));
-    });
-    auto* network = new SettingRow(QStringLiteral(":/icons/network.svg"), QStringLiteral("网络连接"),
-        QStringLiteral("仅改变视觉状态"), networkSwitch, this);
+    const SliderControl volume = sliderControl(this);
+    m_volumeSlider = volume.slider;
+    m_volumeSlider->setObjectName(QStringLiteral("volumeSlider"));
+    m_volumeValue = volume.value;
+    const SliderControl brightness = sliderControl(this);
+    m_brightnessSlider = brightness.slider;
+    m_brightnessSlider->setObjectName(QStringLiteral("brightnessSlider"));
+    m_brightnessValue = brightness.value;
 
-    auto* familyButton = chevronButton(this);
-    auto* family = new SettingRow(QStringLiteral(":/icons/family.svg"), QStringLiteral("家人联系方式"),
-        QStringLiteral("查看演示信息"), familyButton, this);
-    auto* petButton = chevronButton(this);
-    auto* pet = new SettingRow(QStringLiteral(":/icons/pet.svg"), QStringLiteral("宠物设置"),
-        QStringLiteral("表情与陪伴风格"), petButton, this);
-    auto* aboutButton = chevronButton(this);
-    auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"), QStringLiteral("关于设备"),
-        QStringLiteral("LongPet UI Prototype"), aboutButton, this);
+    auto* sound = new SettingRow(QStringLiteral(":/icons/volume.svg"),
+        QStringLiteral("声音大小"), QStringLiteral("设备音量待接入"),
+        volume.widget, this);
+    auto* light = new SettingRow(QStringLiteral(":/icons/brightness.svg"),
+        QStringLiteral("屏幕亮度"), QStringLiteral("设备背光待接入"),
+        brightness.widget, this);
+    auto* network = new SettingRow(QStringLiteral(":/icons/network.svg"),
+        QStringLiteral("网络连接"), QStringLiteral("来自 SystemService"),
+        summaryControl(&m_networkSummary, this), this);
+
+    auto* familyButton = new QPushButton(QStringLiteral("开始配对"), this);
+    familyButton->setObjectName(QStringLiteral("pairFamilyButton"));
+    familyButton->setProperty("role", "secondaryCompact");
+    familyButton->setFixedSize(128, 64);
+    m_familyRow = new SettingRow(QStringLiteral(":/icons/family.svg"),
+        QStringLiteral("家属配对"), QStringLiteral("尚未配对"),
+        familyButton, this);
+
+    m_petStyleButton = new QPushButton(this);
+    m_petStyleButton->setObjectName(QStringLiteral("petStyleButton"));
+    m_petStyleButton->setProperty("role", "secondaryCompact");
+    m_petStyleButton->setFixedSize(180, 64);
+    auto* pet = new SettingRow(QStringLiteral(":/icons/pet.svg"),
+        QStringLiteral("宠物风格"), QStringLiteral("本地用户设置"),
+        m_petStyleButton, this);
+
+    auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"),
+        QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
+        summaryControl(&m_versionSummary, this), this);
 
     grid->addWidget(sound, 0, 0);
-    grid->addWidget(brightness, 0, 1);
+    grid->addWidget(light, 0, 1);
     grid->addWidget(network, 1, 0);
-    grid->addWidget(family, 1, 1);
+    grid->addWidget(m_familyRow, 1, 1);
     grid->addWidget(pet, 2, 0);
     grid->addWidget(about, 2, 1);
     grid->setRowStretch(3, 1);
     root->addLayout(grid, 1);
 
-    m_toast = new ToastWidget(this);
-    const auto showDemo = [this] { m_toast->showMessage(QStringLiteral("仅演示界面，不会读取或修改设备")); };
-    connect(familyButton, &QPushButton::clicked, this, showDemo);
-    connect(petButton, &QPushButton::clicked, this, showDemo);
-    connect(aboutButton, &QPushButton::clicked, this, showDemo);
+    auto connectSlider = [this](QSlider* slider, QLabel* label, bool isVolume) {
+        auto* debounce = new QTimer(slider);
+        debounce->setSingleShot(true);
+        debounce->setInterval(180);
+        connect(slider, &QSlider::valueChanged, this,
+                [this, label, debounce](int value) {
+                    updateValueLabel(label, value);
+                    if (!m_updating)
+                        debounce->start();
+                });
+        connect(debounce, &QTimer::timeout, this, [this, slider, isVolume] {
+            if (isVolume)
+                emit volumeChangeRequested(slider->value());
+            else
+                emit brightnessChangeRequested(slider->value());
+        });
+    };
+    connectSlider(m_volumeSlider, m_volumeValue, true);
+    connectSlider(m_brightnessSlider, m_brightnessValue, false);
+    connect(m_petStyleButton, &QPushButton::clicked, this, [this] {
+        const QString next = m_petStyleButton->text() == QStringLiteral("温和陪伴")
+            ? QStringLiteral("活泼陪伴") : QStringLiteral("温和陪伴");
+        emit petStyleChangeRequested(next);
+    });
+    connect(familyButton, &QPushButton::clicked,
+            this, &SettingsPage::pairFamilyRequested);
+
+    setSettings({});
+    setDeviceSummary({});
 }
 
-QPushButton* SettingsPage::backButton() const { return m_backButton; }
+void SettingsPage::setSettings(const UserSettings& settings)
+{
+    m_updating = true;
+    m_volumeSlider->setValue(settings.volume);
+    m_brightnessSlider->setValue(settings.brightness);
+    updateValueLabel(m_volumeValue, settings.volume);
+    updateValueLabel(m_brightnessValue, settings.brightness);
+    m_petStyleButton->setText(settings.petStyle);
+    m_updating = false;
+}
+
+void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
+{
+    m_networkSummary->setText(summary.networkSummary.isEmpty()
+        ? QStringLiteral("网络待接入") : summary.networkSummary);
+    m_familyRow->setSubtitle(summary.familySummary.isEmpty()
+        ? QStringLiteral("尚未配对") : summary.familySummary);
+    m_versionSummary->setText(summary.softwareVersion.isEmpty()
+        ? QStringLiteral("LongPet V0.2")
+        : QStringLiteral("LongPet V%1").arg(summary.softwareVersion));
+}
+
+void SettingsPage::updateValueLabel(QLabel* label, int value)
+{
+    label->setText(QStringLiteral("%1%").arg(value));
+}

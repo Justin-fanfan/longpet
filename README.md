@@ -1,64 +1,55 @@
-# LongPet V0.1
+# LongPet V0.2
 
-LongPet V0.1 是面向龙芯 2K0300 宠物终端的正式 Qt 6 Widgets UI 骨架。它从 `longpetui_2` 视觉原型提取经过验证的视觉组件，但不包含 Demo 导航、假业务数据或尚未接入的 AI/硬件能力。
+LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本在 V0.1 的正式 UI 骨架上完成了首个可持久化的本地业务闭环：提醒管理、今日关怀、用户设置与设备状态入口。
 
-## V0.1 功能范围
+## 已实现
 
-- 1024×600 正式产品画布；
-- 低 CPU 的 `DefaultOpen` 宠物待机界面；
-- 整屏触摸进入控制页；
-- 语义化页面信号，不向外暴露按钮控件；
-- 15 秒无操作后自动返回待机页；
-- 未接入能力使用非模态 Toast 明确说明；
-- Windows 窗口预览，Linux/2K0300 全屏运行；
-- QRC 内嵌 QSS 和 SVG，无本机绝对资源路径。
+- `Application` 作为组合根，统一创建和销毁数据库、Repository、Service、Controller 与窗口；
+- `AppController` 负责页面流程和 15 秒控制页无操作返回；
+- SQLite 版本化建库与事务迁移；
+- 提醒新增、编辑、删除、完成、每日/工作日/单次调度与防重复触发；
+- 喝水、用药完成、活动分钟和互动次数的本地汇总；
+- 音量、亮度、宠物风格持久化，设备应用通过 Service 信号预留；
+- 状态栏真实时钟，以及网络、电量、天气的统一输入接口；
+- QRC 内嵌 QSS/SVG，保留后续版本会使用的页面与资源；
+- 正式页面全部使用语义信号，页面不直接访问 SQL 或硬件。
 
-语音、关怀、提醒、设置、SQLite、视觉、运动和远端通信不属于 V0.1。它们按照整体架构路线在后续版本逐步接入。
+未接入的硬件与远端能力会明确显示“待接入”，不会用假数据冒充可用状态。
 
-## Windows 构建
+## 目录
 
-需要 Qt 6.5+（Core、Gui、Widgets、Svg）、CMake 3.21+ 和与 Qt 匹配的 C++17 工具链。
+```text
+src/app/       应用组合根与业务流程控制
+src/model/     跨层数据模型
+src/data/      SQLite、Repository 与迁移
+src/services/  提醒、关怀、设置、系统状态
+src/pages/     正式页面及保留的后续页面
+src/widgets/   可复用视觉组件
+resources/     内嵌样式与图标
+tests/         V0.2 自动化与页面渲染验证
+docs/          版本工作报告
+```
+
+## 构建
+
+需要 CMake 3.21+、C++17 与 Qt 6.5+，Qt 组件为 Core、Gui、Widgets、Svg、Sql；测试还需要 Qt Test。
 
 ```powershell
 cmake -S . -B build -G Ninja `
   -DCMAKE_BUILD_TYPE=Release `
-  -DCMAKE_PREFIX_PATH=D:/Qt/6.11.0/mingw_64 `
-  -DCMAKE_MAKE_PROGRAM=D:/Qt/Tools/Ninja/ninja.exe `
-  -DCMAKE_CXX_COMPILER=D:/Qt/Tools/mingw1310_64/bin/g++.exe
-cmake --build build
+  -DLONGPET_BUILD_TESTS=ON `
+  -DCMAKE_PREFIX_PATH=D:/Qt/6.11.0/mingw_64
+cmake --build build --parallel 1
+ctest --test-dir build --output-on-failure
 ```
 
-## LoongArch64 交叉构建
+默认数据库位于 `QStandardPaths::AppLocalDataLocation/longpet.db`。部署时可用环境变量 `LONGPET_DATABASE_PATH` 指定绝对路径；该目录必须可写。
 
-默认 SDK 路径为 `/opt/loongarch64-buildroot-linux-gnu_sdk-buildroot`。可通过 `LOONGARCH_SDK_ROOT` 覆盖。
+## 设备接入点
 
-```bash
-./scripts/build-loongarch.sh
-```
+- `SystemService::setNetworkState / setBatteryPercent / setWeatherSummary`
+- `SettingsService::settingApplyRequested`
+- `CareService::recordActivityMinutes / recordInteraction`
+- `ReminderService::reminderTriggered`
 
-板端运行环境需设置与镜像匹配的 `QT_QPA_PLATFORM=linuxfb` 和 `TSLIB_*` 参数。实际 CPU、触摸和长稳指标必须在 2K0300 Release 环境验收。
-
-## 项目结构
-
-```text
-src/main.cpp
-src/mainwindow.*
-src/pages/CompanionPage.*
-src/pages/HomePage.*
-src/pages/ConversationPage.*
-src/pages/CarePage.*
-src/pages/ReminderPage.*
-src/pages/ReminderEditPage.*
-src/pages/SettingsPage.*
-src/pages/EmergencyPage.*
-src/pages/SleepPage.*
-src/widgets/PetFaceWidget.*
-src/widgets/VisualComponents.*
-src/widgets/VisualTokens.h
-resources/
-cmake/toolchains/
-docs/
-```
-
-V0.1 运行主路径只实例化 `CompanionPage` 与 `HomePage`。其余产品页面已经作为后续版本的设计资产迁入并持续参加编译/渲染测试，但在对应业务 Service 和语义信号改造完成前不进入正式导航。
-
+具体上机验证项和当前限制见 [V0.2 工作报告](docs/LongPet-V0.2-Work-Report.md)。

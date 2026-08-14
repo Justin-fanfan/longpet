@@ -16,8 +16,8 @@ HomePage::HomePage(QWidget* parent)
     root->setContentsMargins(0, 0, 0, 32);
     root->setSpacing(0);
 
-    auto* status = new StatusBarWidget(true, this);
-    root->addWidget(status);
+    m_statusBar = new StatusBarWidget(true, this);
+    root->addWidget(m_statusBar);
     root->addSpacing(8);
 
     auto* face = new PetFaceWidget(PetExpression::DefaultOpen, this);
@@ -57,6 +57,11 @@ HomePage::HomePage(QWidget* parent)
             this, &HomePage::careRequested);
     connect(m_reminderButton, &QPushButton::clicked,
             this, &HomePage::reminderRequested);
-    connect(status->settingsButton(), &QPushButton::clicked,
+    connect(m_statusBar, &StatusBarWidget::settingsRequested,
             this, &HomePage::settingsRequested);
+}
+
+void HomePage::setSystemStatus(const SystemStatus& status)
+{
+    m_statusBar->setStatus(status);
 }

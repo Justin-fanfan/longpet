@@ -41,6 +41,7 @@ QFrame#reminderMarker { border: none; border-radius: 3px; }
 QFrame#reminderMarker[visualState="completed"] { background: #82C9A5; }
 QFrame#reminderMarker[visualState="pending"] { background: #E4BE72; }
 QFrame#reminderMarker[visualState="missed"] { background: #EF7B70; }
+QFrame#reminderMarker[visualState="disabled"] { background: #777168; }
 QFrame#sectionCard,
 QFrame[card="true"] {
     background: #23211E;
@@ -79,6 +80,23 @@ QPushButton[role="primary"][compact="true"] {
     max-height: 80px;
     font-size: 24px;
 }
+QPushButton[role="primaryCompact"] {
+    min-height: 80px; max-height: 80px;
+    padding: 0 12px;
+    border: none;
+    border-radius: 18px;
+    background: #F2B84B;
+    color: #17130B;
+    font-size: 20px;
+}
+QPushButton[role="secondaryCompact"] {
+    min-height: 80px; max-height: 80px;
+    padding: 0 12px;
+    border-radius: 18px;
+    background: #23211E;
+    color: #B8B0A3;
+    font-size: 20px;
+}
 
 QPushButton[role="secondary"] {
     min-height: 88px;
@@ -98,6 +116,15 @@ QPushButton[role="danger"] {
 }
 QPushButton[role="danger"]:hover { background: #F38B81; }
 QPushButton[role="danger"]:pressed { background: #D96960; }
+QPushButton[role="dangerCompact"] {
+    min-height: 88px;
+    padding: 0 18px;
+    border-radius: 20px;
+    border: none;
+    background: #EF7B70;
+    color: #1B0F0D;
+    font-size: 22px;
+}
 
 QPushButton[role="back"] {
     min-width: 80px; max-width: 80px;
@@ -241,6 +268,16 @@ QLineEdit {
     font-size: 24px;
     selection-background-color: #F2B84B;
     selection-color: #17130B;
+}
+
+QTimeEdit, QDateEdit {
+    min-height: 64px;
+    padding: 0 12px;
+    border: 1px solid #3C3934;
+    border-radius: 14px;
+    background: #23211E;
+    color: #F6F1E7;
+    font-size: 24px;
 }
 
 QLabel#toastWidget {

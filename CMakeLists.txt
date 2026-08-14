@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     LongPet
-    VERSION 0.1.0
+    VERSION 0.2.0
     LANGUAGES CXX
 )
 
@@ -21,10 +21,34 @@ find_package(
         Gui
         Widgets
         Svg
+        Sql
 )
 
 set(
-    LONGPET_UI_SOURCES
+    LONGPET_SOURCES
+    src/app/Application.cpp
+    src/app/Application.h
+    src/app/AppController.cpp
+    src/app/AppController.h
+    src/model/ReminderModels.h
+    src/model/SettingsModels.h
+    src/model/SystemModels.h
+    src/data/DatabaseManager.cpp
+    src/data/DatabaseManager.h
+    src/data/ReminderRepository.cpp
+    src/data/ReminderRepository.h
+    src/data/CareEventRepository.cpp
+    src/data/CareEventRepository.h
+    src/data/SettingsRepository.cpp
+    src/data/SettingsRepository.h
+    src/services/ReminderService.cpp
+    src/services/ReminderService.h
+    src/services/CareService.cpp
+    src/services/CareService.h
+    src/services/SettingsService.cpp
+    src/services/SettingsService.h
+    src/services/SystemService.cpp
+    src/services/SystemService.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp
@@ -52,26 +76,41 @@ set(
     src/widgets/VisualTokens.h
 )
 
-qt_add_executable(
-    LongPet
-    src/main.cpp
-    ${LONGPET_UI_SOURCES}
-    resources/resources.qrc
-)
+function(longpet_enable_warnings target)
+    if(MSVC)
+        target_compile_options(${target} PRIVATE /W4 /permissive-)
+    else()
+        target_compile_options(${target} PRIVATE -Wall -Wextra -Wpedantic)
+    endif()
+endfunction()
+
+# Compile the application layers once. Both the product executable and the
+# test executable reuse these objects, avoiding two concurrent full builds.
+add_library(LongPetCore OBJECT ${LONGPET_SOURCES})
 
 target_link_libraries(
-    LongPet PRIVATE
+    LongPetCore PUBLIC
         Qt6::Core
         Qt6::Gui
         Qt6::Widgets
         Qt6::Svg
+        Qt6::Sql
 )
 
 target_include_directories(
-    LongPet
-    PRIVATE
+    LongPetCore PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+longpet_enable_warnings(LongPetCore)
+
+qt_add_executable(
+    LongPet
+    src/main.cpp
+    resources/resources.qrc
+)
+
+target_link_libraries(LongPet PRIVATE LongPetCore)
 
 target_compile_definitions(
     LongPet
@@ -79,22 +118,7 @@ target_compile_definitions(
         LONGPET_VERSION="${PROJECT_VERSION}"
 )
 
-if(MSVC)
-    target_compile_options(
-        LongPet
-        PRIVATE
-            /W4
-            /permissive-
-    )
-else()
-    target_compile_options(
-        LongPet
-        PRIVATE
-            -Wall
-            -Wextra
-            -Wpedantic
-    )
-endif()
+longpet_enable_warnings(LongPet)
 
 set_target_properties(LongPet PROPERTIES WIN32_EXECUTABLE TRUE)
 
@@ -103,44 +127,30 @@ install(
     RUNTIME DESTINATION bin
 )
 
-option(LONGPET_BUILD_TESTS "Build LongPet V0.1 UI tests" OFF)
+option(LONGPET_BUILD_TESTS "Build LongPet V0.2 tests" OFF)
 
 if(LONGPET_BUILD_TESTS)
     enable_testing()
     find_package(Qt6 6.5 REQUIRED COMPONENTS Test)
 
     qt_add_executable(
-        LongPetV01Tests
-        tests/V01UiTest.cpp
-        ${LONGPET_UI_SOURCES}
+        LongPetV02Tests
+        tests/V02Test.cpp
         resources/resources.qrc
     )
 
-    target_include_directories(
-        LongPetV01Tests
-        PRIVATE
-            ${CMAKE_CURRENT_SOURCE_DIR}/src
-    )
-
     target_link_libraries(
-        LongPetV01Tests
+        LongPetV02Tests
         PRIVATE
-            Qt6::Core
-            Qt6::Gui
-            Qt6::Widgets
-            Qt6::Svg
+            LongPetCore
             Qt6::Test
     )
 
-    if(MSVC)
-        target_compile_options(LongPetV01Tests PRIVATE /W4 /permissive-)
-    else()
-        target_compile_options(LongPetV01Tests PRIVATE -Wall -Wextra -Wpedantic)
-    endif()
+    longpet_enable_warnings(LongPetV02Tests)
 
-    add_test(NAME LongPet.V01.Ui COMMAND LongPetV01Tests)
+    add_test(NAME LongPet.V02 COMMAND LongPetV02Tests)
     set_tests_properties(
-        LongPet.V01.Ui
+        LongPet.V02
         PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
