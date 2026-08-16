@@ -10,6 +10,7 @@
 #include "pages\ReminderEditPage.h"
 #include "pages\ReminderPage.h"
 #include "pages\SettingsPage.h"
+#include "platform\NetworkStatusAdapter.h"
 #include "services\CareService.h"
 #include "services\ReminderService.h"
 #include "services\SettingsService.h"
@@ -40,6 +41,7 @@ private slots:
     void resourcesAreEmbedded();
     void databaseCreatesVersionedSchema();
     void applicationCompositionRootInitializes();
+    void networkStatusAdapterMapsAndDegrades();
     void reminderCrudPersistsAndRejectsStaleRevision();
     void reminderSchedulerDoesNotRedeliverToday();
     void careAndSettingsArePersistentServices();
@@ -155,6 +157,75 @@ void V02Test::applicationCompositionRootInitializes()
         QCOMPARE(application.databasePath(), databasePath);
     }
     qunsetenv("LONGPET_DATABASE_PATH");
+}
+
+void V02Test::networkStatusAdapterMapsAndDegrades()
+{
+    using Reachability = QNetworkInformation::Reachability;
+    using Transport = QNetworkInformation::TransportMedium;
+
+    const NetworkStatusSnapshot unknown = NetworkStatusAdapter::mapState(
+        Reachability::Unknown, Transport::WiFi);
+    QVERIFY(!unknown.known);
+    QVERIFY(!unknown.internetAvailable);
+    QCOMPARE(unknown.summary, QStringLiteral("Wi-Fi · 状态未知"));
+
+    const NetworkStatusSnapshot disconnected = NetworkStatusAdapter::mapState(
+        Reachability::Disconnected, Transport::Unknown);
+    QVERIFY(disconnected.known);
+    QVERIFY(!disconnected.internetAvailable);
+    QCOMPARE(disconnected.summary, QStringLiteral("未连接"));
+
+    const NetworkStatusSnapshot local = NetworkStatusAdapter::mapState(
+        Reachability::Local, Transport::WiFi);
+    QVERIFY(local.known);
+    QVERIFY(!local.internetAvailable);
+    QCOMPARE(local.summary, QStringLiteral("Wi-Fi · 无互联网"));
+
+    const NetworkStatusSnapshot site = NetworkStatusAdapter::mapState(
+        Reachability::Site, Transport::Ethernet);
+    QVERIFY(site.known);
+    QVERIFY(!site.internetAvailable);
+    QCOMPARE(site.summary, QStringLiteral("以太网 · 无互联网"));
+
+    const NetworkStatusSnapshot online = NetworkStatusAdapter::mapState(
+        Reachability::Online, Transport::WiFi);
+    QVERIFY(online.known);
+    QVERIFY(online.internetAvailable);
+    QCOMPARE(online.summary, QStringLiteral("Wi-Fi · 已联网"));
+
+    QCOMPARE(NetworkStatusAdapter::mapState(
+        Reachability::Online, Transport::Cellular).summary,
+        QStringLiteral("蜂窝网络 · 已联网"));
+    QCOMPARE(NetworkStatusAdapter::mapState(
+        Reachability::Online, Transport::Bluetooth).summary,
+        QStringLiteral("蓝牙 · 已联网"));
+
+    const NetworkStatusSnapshot captivePortal = NetworkStatusAdapter::mapState(
+        Reachability::Online, Transport::Ethernet, true);
+    QVERIFY(captivePortal.known);
+    QVERIFY(!captivePortal.internetAvailable);
+    QCOMPARE(captivePortal.summary, QStringLiteral("以太网 · 需认证"));
+
+    NetworkStatusAdapter unavailable(
+        NetworkStatusAdapter::BackendProvider([] { return nullptr; }));
+    SystemService systemService;
+    connect(&unavailable, &NetworkStatusAdapter::networkStateChanged,
+            &systemService, &SystemService::setNetworkState);
+    QSignalSpy statusSpy(&unavailable,
+                         &NetworkStatusAdapter::networkStateChanged);
+    QVERIFY(!unavailable.start());
+    QCOMPARE(statusSpy.count(), 1);
+    const QList<QVariant> arguments = statusSpy.takeFirst();
+    QVERIFY(!arguments.at(0).toBool());
+    QVERIFY(!arguments.at(1).toBool());
+    QCOMPARE(arguments.at(2).toString(), QStringLiteral("网络状态未知"));
+    QVERIFY(!systemService.status().networkKnown);
+    QVERIFY(!systemService.status().networkAvailable);
+    QCOMPARE(systemService.status().networkSummary,
+             QStringLiteral("网络状态未知"));
+    QCOMPARE(systemService.deviceSummary().networkSummary,
+             QStringLiteral("网络状态未知"));
 }
 
 void V02Test::reminderCrudPersistsAndRejectsStaleRevision()
@@ -325,6 +396,7 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
     input.currentDateTime = QDateTime(QDate(2026, 8, 14), QTime(9, 30));
     input.networkKnown = true;
     input.networkAvailable = true;
+    input.networkSummary = QStringLiteral("Wi-Fi · 已联网");
     input.batteryPercent = 87;
     input.weatherSummary = QStringLiteral("晴 26°");
     status.setStatus(input);
@@ -338,7 +410,9 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
     QVERIFY(status.rect().contains(geometry));
     bool foundSummary = false;
     for (QLabel* label : status.findChildren<QLabel*>())
-        foundSummary = foundSummary || label->text().contains(QStringLiteral("电量 87%"));
+        foundSummary = foundSummary
+            || (label->text().contains(QStringLiteral("Wi-Fi · 已联网"))
+                && label->text().contains(QStringLiteral("电量 87%")));
     QVERIFY(foundSummary);
 
     MainWindow window;
@@ -347,7 +421,9 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
     for (StatusBarWidget* pageStatus : window.findChildren<StatusBarWidget*>()) {
         bool pageHasSummary = false;
         for (QLabel* label : pageStatus->findChildren<QLabel*>())
-            pageHasSummary = pageHasSummary || label->text().contains(QStringLiteral("电量 87%"));
+            pageHasSummary = pageHasSummary
+                || (label->text().contains(QStringLiteral("Wi-Fi · 已联网"))
+                    && label->text().contains(QStringLiteral("电量 87%")));
         QVERIFY(pageHasSummary);
     }
 }
@@ -404,9 +480,15 @@ void V02Test::renderV02Pages()
     window.setSettings({});
     DeviceSummary device;
     device.softwareVersion = QStringLiteral("0.2.0");
-    device.networkSummary = QStringLiteral("网络待接入");
+    device.networkSummary = QStringLiteral("Wi-Fi · 已联网");
     device.familySummary = QStringLiteral("尚未配对");
     window.setDeviceSummary(device);
+    SystemStatus systemStatus;
+    systemStatus.currentDateTime = QDateTime::currentDateTime();
+    systemStatus.networkKnown = true;
+    systemStatus.networkAvailable = true;
+    systemStatus.networkSummary = QStringLiteral("Wi-Fi · 已联网");
+    window.setSystemStatus(systemStatus);
     window.show();
 
     const QList<QPair<MainWindow::PageId, QString>> pages {

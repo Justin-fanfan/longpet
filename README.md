@@ -10,7 +10,7 @@ LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本
 - 提醒新增、编辑、删除、完成、每日/工作日/单次调度与防重复触发；
 - 喝水、用药完成、活动分钟和互动次数的本地汇总；
 - 音量、亮度、宠物风格持久化，设备应用通过 Service 信号预留；
-- 状态栏真实时钟，以及网络、电量、天气的统一输入接口；
+- 状态栏真实时钟，以及基于 QNetworkInformation 的事件驱动网络状态；
 - QRC 内嵌 QSS/SVG，保留后续版本会使用的页面与资源；
 - 正式页面全部使用语义信号，页面不直接访问 SQL 或硬件。
 
@@ -23,6 +23,7 @@ src/app/       应用组合根与业务流程控制
 src/model/     跨层数据模型
 src/data/      SQLite、Repository 与迁移
 src/services/  提醒、关怀、设置、系统状态
+src/platform/  操作系统与设备能力 Adapter
 src/pages/     正式页面及保留的后续页面
 src/widgets/   可复用视觉组件
 resources/     内嵌样式与图标
@@ -32,7 +33,7 @@ docs/          版本工作报告
 
 ## 构建
 
-需要 CMake 3.21+、C++17 与 Qt 6.5+，Qt 组件为 Core、Gui、Widgets、Svg、Sql；测试还需要 Qt Test。
+需要 CMake 3.21+、C++17 与 Qt 6.5+，Qt 组件为 Core、Gui、Widgets、Svg、Sql、Network；测试还需要 Qt Test。
 
 ```powershell
 cmake -S . -B build -G Ninja `
@@ -47,7 +48,8 @@ ctest --test-dir build --output-on-failure
 
 ## 设备接入点
 
-- `SystemService::setNetworkState / setBatteryPercent / setWeatherSummary`
+- `NetworkStatusAdapter → SystemService::setNetworkState`
+- `SystemService::setBatteryPercent / setWeatherSummary`
 - `SettingsService::settingApplyRequested`
 - `CareService::recordActivityMinutes / recordInteraction`
 - `ReminderService::reminderTriggered`

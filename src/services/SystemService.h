@@ -26,7 +26,5 @@ private:
     void refreshClock();
 
     SystemStatus m_status;
-    QString m_networkSummary;
     QTimer m_clockTimer;
 };
-

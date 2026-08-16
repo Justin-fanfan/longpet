@@ -22,6 +22,7 @@ find_package(
         Widgets
         Svg
         Sql
+        Network
 )
 
 set(
@@ -33,6 +34,8 @@ set(
     src/model/ReminderModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
+    src/platform/NetworkStatusAdapter.cpp
+    src/platform/NetworkStatusAdapter.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp
@@ -95,6 +98,7 @@ target_link_libraries(
         Qt6::Widgets
         Qt6::Svg
         Qt6::Sql
+        Qt6::Network
 )
 
 target_include_directories(

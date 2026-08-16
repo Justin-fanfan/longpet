@@ -10,6 +10,7 @@ class CareEventRepository;
 class CareService;
 class DatabaseManager;
 class MainWindow;
+class NetworkStatusAdapter;
 class ReminderRepository;
 class ReminderService;
 class SettingsRepository;
@@ -41,7 +42,7 @@ private:
     std::unique_ptr<CareService> m_careService;
     std::unique_ptr<SettingsService> m_settingsService;
     std::unique_ptr<SystemService> m_systemService;
+    std::unique_ptr<NetworkStatusAdapter> m_networkStatusAdapter;
     std::unique_ptr<MainWindow> m_window;
     std::unique_ptr<AppController> m_controller;
 };
-

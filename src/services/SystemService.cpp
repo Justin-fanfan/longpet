@@ -22,11 +22,8 @@ DeviceSummary SystemService::deviceSummary() const
 {
     DeviceSummary summary;
     summary.softwareVersion = QCoreApplication::applicationVersion();
-    summary.networkSummary = m_status.networkKnown
-        ? (m_networkSummary.isEmpty()
-            ? (m_status.networkAvailable ? QStringLiteral("网络可用") : QStringLiteral("网络不可用"))
-            : m_networkSummary)
-        : QStringLiteral("网络待接入");
+    summary.networkSummary = m_status.networkSummary.isEmpty()
+        ? QStringLiteral("网络状态未知") : m_status.networkSummary;
     summary.familySummary = QStringLiteral("尚未配对");
     return summary;
 }
@@ -34,8 +31,13 @@ DeviceSummary SystemService::deviceSummary() const
 void SystemService::setNetworkState(bool known, bool available, const QString& summary)
 {
     m_status.networkKnown = known;
-    m_status.networkAvailable = available;
-    m_networkSummary = summary;
+    m_status.networkAvailable = known && available;
+    m_status.networkSummary = summary.simplified();
+    if (m_status.networkSummary.isEmpty()) {
+        m_status.networkSummary = known
+            ? (available ? QStringLiteral("已联网") : QStringLiteral("未连接"))
+            : QStringLiteral("网络状态未知");
+    }
     emit statusChanged(m_status);
     emit deviceSummaryChanged(deviceSummary());
 }

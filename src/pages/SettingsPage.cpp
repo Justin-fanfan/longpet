@@ -157,7 +157,7 @@ void SettingsPage::setSettings(const UserSettings& settings)
 void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
 {
     m_networkSummary->setText(summary.networkSummary.isEmpty()
-        ? QStringLiteral("网络待接入") : summary.networkSummary);
+        ? QStringLiteral("网络状态未知") : summary.networkSummary);
     m_familyRow->setSubtitle(summary.familySummary.isEmpty()
         ? QStringLiteral("尚未配对") : summary.familySummary);
     m_versionSummary->setText(summary.softwareVersion.isEmpty()

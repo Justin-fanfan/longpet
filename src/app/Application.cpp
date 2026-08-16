@@ -6,6 +6,7 @@
 #include "data/ReminderRepository.h"
 #include "data/SettingsRepository.h"
 #include "mainwindow.h"
+#include "platform/NetworkStatusAdapter.h"
 #include "services/CareService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
@@ -40,6 +41,10 @@ bool Application::initialize(QString* error)
                                                   m_reminderService.get());
     m_settingsService = std::make_unique<SettingsService>(m_settingsRepository.get());
     m_systemService = std::make_unique<SystemService>();
+    m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
+    connect(m_networkStatusAdapter.get(), &NetworkStatusAdapter::networkStateChanged,
+            m_systemService.get(), &SystemService::setNetworkState);
+    m_networkStatusAdapter->start();
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
@@ -65,8 +70,11 @@ void Application::shutdown()
 {
     if (m_reminderService)
         m_reminderService->stop();
+    if (m_networkStatusAdapter)
+        m_networkStatusAdapter->stop();
     m_controller.reset();
     m_window.reset();
+    m_networkStatusAdapter.reset();
     m_systemService.reset();
     m_settingsService.reset();
     m_careService.reset();

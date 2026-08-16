@@ -110,7 +110,9 @@ void StatusBarWidget::setStatus(const SystemStatus& status)
     m_timeLabel->setText(now.time().toString(QStringLiteral("HH:mm")));
 
     QStringList summaries;
-    if (status.networkKnown)
+    if (!status.networkSummary.isEmpty())
+        summaries.append(status.networkSummary);
+    else if (status.networkKnown)
         summaries.append(status.networkAvailable ? QStringLiteral("网络正常")
                                                  : QStringLiteral("网络断开"));
     if (status.batteryPercent >= 0)
