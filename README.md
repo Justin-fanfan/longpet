@@ -9,12 +9,13 @@ LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本
 - SQLite 版本化建库与事务迁移；
 - 提醒新增、编辑、删除、完成、每日/工作日/单次调度与防重复触发；
 - 喝水、用药完成、活动分钟和互动次数的本地汇总；
-- 音量、亮度、宠物风格持久化，设备应用通过 Service 信号预留；
+- 音量、亮度、宠物风格持久化；音量通过 ALSA mixer 接入，背光通过 sysfs 接入；
 - 状态栏真实时钟，以及基于 QNetworkInformation 的事件驱动网络状态；
+- power-supply 电池状态读取，以及无电池设备的正常降级；
 - QRC 内嵌 QSS/SVG，保留后续版本会使用的页面与资源；
 - 正式页面全部使用语义信号，页面不直接访问 SQL 或硬件。
 
-未接入的硬件与远端能力会明确显示“待接入”，不会用假数据冒充可用状态。
+开发板启动脚本会使用 `linuxfb` 显示后端和 `evdevtouch` 触摸后端。未接入的硬件与远端能力会明确显示“未检测到”或“待接入”，不会用假数据冒充可用状态。
 
 ## 目录
 
@@ -49,9 +50,23 @@ ctest --test-dir build --output-on-failure
 ## 设备接入点
 
 - `NetworkStatusAdapter → SystemService::setNetworkState`
-- `SystemService::setBatteryPercent / setWeatherSummary`
-- `SettingsService::settingApplyRequested`
+- `AudioVolumeAdapter ← SettingsService::settingApplyRequested(volume)`
+- `BacklightAdapter ← SettingsService::settingApplyRequested(brightness)`
+- `PowerStatusAdapter → SystemService::setBatteryPercent`
+- `SystemService::setWeatherSummary`
 - `CareService::recordActivityMinutes / recordInteraction`
 - `ReminderService::reminderTriggered`
 
 具体上机验证项和当前限制见 [V0.2 工作报告](docs/LongPet-V0.2-Work-Report.md)。
+
+## LS2K300 板端运行
+
+交叉构建完成后，将 `LongPet` 与 `scripts/run-board.sh` 放入
+`/root/mytest/qt`，并赋予启动脚本执行权限。启动脚本默认使用：
+
+- framebuffer：`/dev/fb0`，Qt `linuxfb`；
+- 触摸：`/dev/input/event0`，Qt `evdevtouch`；
+- 数据库：`/root/mytest/qt/data/longpet.db`。
+
+可选的 systemd 单元位于 `deploy/longpet.service`。实际设备路径均可通过
+启动脚本中的环境变量覆盖，应用代码不依赖页面或窗口直接访问硬件。

@@ -6,7 +6,10 @@
 #include "data/ReminderRepository.h"
 #include "data/SettingsRepository.h"
 #include "mainwindow.h"
+#include "platform/AudioVolumeAdapter.h"
+#include "platform/BacklightAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
+#include "platform/PowerStatusAdapter.h"
 #include "services/CareService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
@@ -42,9 +45,33 @@ bool Application::initialize(QString* error)
     m_settingsService = std::make_unique<SettingsService>(m_settingsRepository.get());
     m_systemService = std::make_unique<SystemService>();
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
+    m_audioVolumeAdapter = std::make_unique<AudioVolumeAdapter>();
+    m_backlightAdapter = std::make_unique<BacklightAdapter>();
+    m_powerStatusAdapter = std::make_unique<PowerStatusAdapter>();
     connect(m_networkStatusAdapter.get(), &NetworkStatusAdapter::networkStateChanged,
             m_systemService.get(), &SystemService::setNetworkState);
+    connect(m_audioVolumeAdapter.get(), &AudioVolumeAdapter::controlStateChanged,
+            m_systemService.get(), &SystemService::setAudioControlState);
+    connect(m_backlightAdapter.get(), &BacklightAdapter::controlStateChanged,
+            m_systemService.get(), &SystemService::setBacklightControlState);
+    connect(m_powerStatusAdapter.get(), &PowerStatusAdapter::batteryPercentChanged,
+            m_systemService.get(), &SystemService::setBatteryPercent);
+    connect(m_powerStatusAdapter.get(), &PowerStatusAdapter::powerStateChanged,
+            m_systemService.get(), &SystemService::setPowerSummary);
+    connect(m_settingsService.get(), &SettingsService::settingApplyRequested,
+            this, [this](const QString& key, const QVariant& value) {
+        if (key == QStringLiteral("volume"))
+            m_audioVolumeAdapter->applyVolume(value.toInt());
+        else if (key == QStringLiteral("brightness"))
+            m_backlightAdapter->applyBrightness(value.toInt());
+    });
     m_networkStatusAdapter->start();
+    m_audioVolumeAdapter->start();
+    m_backlightAdapter->start();
+    m_powerStatusAdapter->start();
+    const UserSettings currentSettings = m_settingsService->settings();
+    m_audioVolumeAdapter->applyVolume(currentSettings.volume);
+    m_backlightAdapter->applyBrightness(currentSettings.brightness);
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
@@ -72,8 +99,17 @@ void Application::shutdown()
         m_reminderService->stop();
     if (m_networkStatusAdapter)
         m_networkStatusAdapter->stop();
+    if (m_audioVolumeAdapter)
+        m_audioVolumeAdapter->stop();
+    if (m_backlightAdapter)
+        m_backlightAdapter->stop();
+    if (m_powerStatusAdapter)
+        m_powerStatusAdapter->stop();
     m_controller.reset();
     m_window.reset();
+    m_powerStatusAdapter.reset();
+    m_backlightAdapter.reset();
+    m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
     m_systemService.reset();
     m_settingsService.reset();

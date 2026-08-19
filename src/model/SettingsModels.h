@@ -12,5 +12,10 @@ struct DeviceSummary {
     QString softwareVersion;
     QString networkSummary;
     QString familySummary;
+    bool audioControlAvailable = false;
+    QString audioSummary;
+    bool brightnessControlAvailable = false;
+    int brightnessLevels = 0;
+    QString brightnessSummary;
+    QString powerSummary;
 };
-

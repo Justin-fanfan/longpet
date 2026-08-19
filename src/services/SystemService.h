@@ -17,6 +17,9 @@ public:
     void setNetworkState(bool known, bool available, const QString& summary = {});
     void setBatteryPercent(int percent);
     void setWeatherSummary(const QString& summary);
+    void setAudioControlState(bool available, const QString& summary);
+    void setBacklightControlState(bool available, int levels, const QString& summary);
+    void setPowerSummary(const QString& summary);
 
 signals:
     void statusChanged(const SystemStatus& status);
@@ -26,5 +29,6 @@ private:
     void refreshClock();
 
     SystemStatus m_status;
+    DeviceSummary m_deviceSummary;
     QTimer m_clockTimer;
 };

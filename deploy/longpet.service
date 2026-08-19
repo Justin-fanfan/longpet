@@ -1,0 +1,15 @@
+[Unit]
+Description=LongPet touch terminal
+After=NetworkManager.service systemd-timesyncd.service
+Wants=NetworkManager.service systemd-timesyncd.service
+
+[Service]
+Type=simple
+WorkingDirectory=/root/mytest/qt
+ExecStart=/root/mytest/qt/run-board.sh
+SuccessExitStatus=1
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target

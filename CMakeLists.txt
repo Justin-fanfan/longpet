@@ -25,6 +25,10 @@ find_package(
         Network
 )
 
+if(UNIX AND NOT APPLE)
+    find_package(ALSA QUIET)
+endif()
+
 set(
     LONGPET_SOURCES
     src/app/Application.cpp
@@ -36,6 +40,12 @@ set(
     src/model/SystemModels.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
+    src/platform/AudioVolumeAdapter.cpp
+    src/platform/AudioVolumeAdapter.h
+    src/platform/BacklightAdapter.cpp
+    src/platform/BacklightAdapter.h
+    src/platform/PowerStatusAdapter.cpp
+    src/platform/PowerStatusAdapter.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp
@@ -105,6 +115,11 @@ target_include_directories(
     LongPetCore PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}/src
 )
+
+if(ALSA_FOUND)
+    target_link_libraries(LongPetCore PUBLIC ALSA::ALSA)
+    target_compile_definitions(LongPetCore PRIVATE LONGPET_HAS_ALSA=1)
+endif()
 
 longpet_enable_warnings(LongPetCore)
 

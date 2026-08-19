@@ -10,7 +10,10 @@
 #include "pages\ReminderEditPage.h"
 #include "pages\ReminderPage.h"
 #include "pages\SettingsPage.h"
+#include "platform\AudioVolumeAdapter.h"
+#include "platform\BacklightAdapter.h"
 #include "platform\NetworkStatusAdapter.h"
+#include "platform\PowerStatusAdapter.h"
 #include "services\CareService.h"
 #include "services\ReminderService.h"
 #include "services\SettingsService.h"
@@ -42,6 +45,7 @@ private slots:
     void databaseCreatesVersionedSchema();
     void applicationCompositionRootInitializes();
     void networkStatusAdapterMapsAndDegrades();
+    void hardwareAdaptersMapAndDegrade();
     void reminderCrudPersistsAndRejectsStaleRevision();
     void reminderSchedulerDoesNotRedeliverToday();
     void careAndSettingsArePersistentServices();
@@ -228,6 +232,78 @@ void V02Test::networkStatusAdapterMapsAndDegrades()
              QStringLiteral("网络状态未知"));
 }
 
+void V02Test::hardwareAdaptersMapAndDegrade()
+{
+    QCOMPARE(AudioVolumeAdapter::scalePercentToRange(0, 0, 192), 0L);
+    QCOMPARE(AudioVolumeAdapter::scalePercentToRange(50, 0, 192), 96L);
+    QCOMPARE(AudioVolumeAdapter::scalePercentToRange(100, 0, 192), 192L);
+    QCOMPARE(AudioVolumeAdapter::scalePercentToRange(120, 10, 20), 20L);
+
+    QCOMPARE(BacklightAdapter::percentToRaw(0, 1), 0);
+    QCOMPARE(BacklightAdapter::percentToRaw(1, 1), 1);
+    QCOMPARE(BacklightAdapter::percentToRaw(50, 255), 128);
+    QCOMPARE(BacklightAdapter::rawToPercent(128, 255), 50);
+
+    QTemporaryDir backlightRoot;
+    QVERIFY(backlightRoot.isValid());
+    const QString devicePath = QDir(backlightRoot.path()).filePath(
+        QStringLiteral("panel"));
+    QVERIFY(QDir().mkpath(devicePath));
+    auto writeValue = [&devicePath](const QString& name, const QByteArray& value) {
+        QFile file(QDir(devicePath).filePath(name));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return false;
+        return file.write(value) == value.size();
+    };
+    QVERIFY(writeValue(QStringLiteral("max_brightness"), QByteArrayLiteral("1")));
+    QVERIFY(writeValue(QStringLiteral("brightness"), QByteArrayLiteral("0")));
+    QVERIFY(writeValue(QStringLiteral("actual_brightness"), QByteArrayLiteral("1")));
+
+    BacklightAdapter backlight(backlightRoot.path());
+    QSignalSpy backlightStateSpy(&backlight,
+        &BacklightAdapter::controlStateChanged);
+    QSignalSpy brightnessSpy(&backlight,
+        &BacklightAdapter::brightnessApplied);
+    QVERIFY(backlight.start());
+    QCOMPARE(backlight.brightnessLevels(), 2);
+    QCOMPARE(backlightStateSpy.count(), 1);
+    backlight.applyBrightness(72);
+    QCOMPARE(brightnessSpy.count(), 1);
+    QCOMPARE(brightnessSpy.takeFirst().at(0).toInt(), 100);
+    QFile brightnessFile(QDir(devicePath).filePath(QStringLiteral("brightness")));
+    QVERIFY(brightnessFile.open(QIODevice::ReadOnly));
+    QCOMPARE(brightnessFile.readAll(), QByteArrayLiteral("1"));
+
+    QTemporaryDir powerRoot;
+    QVERIFY(powerRoot.isValid());
+    const QString batteryPath = QDir(powerRoot.path()).filePath(
+        QStringLiteral("BAT0"));
+    QVERIFY(QDir().mkpath(batteryPath));
+    auto writeBatteryValue = [&batteryPath](const QString& name,
+                                             const QByteArray& value) {
+        QFile file(QDir(batteryPath).filePath(name));
+        if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+            return false;
+        return file.write(value) == value.size();
+    };
+    QVERIFY(writeBatteryValue(QStringLiteral("type"), QByteArrayLiteral("Battery")));
+    QVERIFY(writeBatteryValue(QStringLiteral("capacity"), QByteArrayLiteral("73")));
+    QVERIFY(writeBatteryValue(QStringLiteral("status"), QByteArrayLiteral("Charging")));
+    PowerStatusAdapter power(powerRoot.path(), 60'000);
+    QSignalSpy batterySpy(&power, &PowerStatusAdapter::batteryPercentChanged);
+    QVERIFY(power.start());
+    QCOMPARE(batterySpy.count(), 1);
+    QCOMPARE(batterySpy.takeFirst().at(0).toInt(), 73);
+
+    PowerStatusAdapter unavailablePower(
+        QDir(powerRoot.path()).filePath(QStringLiteral("missing")), 60'000);
+    QSignalSpy unavailableBatterySpy(
+        &unavailablePower, &PowerStatusAdapter::batteryPercentChanged);
+    QVERIFY(!unavailablePower.start());
+    QCOMPARE(unavailableBatterySpy.count(), 1);
+    QCOMPARE(unavailableBatterySpy.takeFirst().at(0).toInt(), -1);
+}
+
 void V02Test::reminderCrudPersistsAndRejectsStaleRevision()
 {
     ServiceFixture fixture;
@@ -360,6 +436,17 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     settingsPage.setSettings(settings);
     QCOMPARE(settingsPage.findChild<QSlider*>(QStringLiteral("volumeSlider"))->value(), 41);
     QCOMPARE(settingsPage.findChild<QSlider*>(QStringLiteral("brightnessSlider"))->value(), 63);
+
+    DeviceSummary binaryBacklight;
+    binaryBacklight.brightnessControlAvailable = true;
+    binaryBacklight.brightnessLevels = 2;
+    binaryBacklight.brightnessSummary = QStringLiteral("GPIO 背光 · 仅开/关");
+    settingsPage.setDeviceSummary(binaryBacklight);
+    auto* brightnessSlider = settingsPage.findChild<QSlider*>(
+        QStringLiteral("brightnessSlider"));
+    QCOMPARE(brightnessSlider->minimum(), 0);
+    QCOMPARE(brightnessSlider->maximum(), 1);
+    QCOMPARE(brightnessSlider->value(), 1);
 }
 
 void V02Test::applicationControllerOwnsNavigation()
@@ -482,6 +569,11 @@ void V02Test::renderV02Pages()
     device.softwareVersion = QStringLiteral("0.2.0");
     device.networkSummary = QStringLiteral("Wi-Fi · 已联网");
     device.familySummary = QStringLiteral("尚未配对");
+    device.audioControlAvailable = true;
+    device.audioSummary = QStringLiteral("ES8388 · ALSA 音量");
+    device.brightnessControlAvailable = true;
+    device.brightnessLevels = 2;
+    device.brightnessSummary = QStringLiteral("GPIO 背光 · 仅开/关");
     window.setDeviceSummary(device);
     SystemStatus systemStatus;
     systemStatus.currentDateTime = QDateTime::currentDateTime();

@@ -14,5 +14,4 @@ CMakeUserPresets.json
 .vs/
 .qtcreator/
 
-docs/*
 quicktest/

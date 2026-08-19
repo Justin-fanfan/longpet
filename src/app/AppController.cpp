@@ -92,14 +92,14 @@ void AppController::connectUi()
         if (!m_settingsService->setVolume(value, &error))
             showDataError(QStringLiteral("保存音量"), error);
         else
-            m_window->showToast(QStringLiteral("音量已保存；设备接口待接入"));
+            m_window->showToast(QStringLiteral("音量设置已保存"));
     });
     connect(m_window, &MainWindow::brightnessChangeRequested, this, [this](int value) {
         QString error;
         if (!m_settingsService->setBrightness(value, &error))
             showDataError(QStringLiteral("保存亮度"), error);
         else
-            m_window->showToast(QStringLiteral("亮度已保存；设备接口待接入"));
+            m_window->showToast(QStringLiteral("背光设置已保存"));
     });
     connect(m_window, &MainWindow::petStyleChangeRequested, this, [this](const QString& style) {
         QString error;

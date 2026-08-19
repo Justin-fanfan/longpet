@@ -73,10 +73,10 @@ SettingsPage::SettingsPage(QWidget* parent)
     m_brightnessSlider->setObjectName(QStringLiteral("brightnessSlider"));
     m_brightnessValue = brightness.value;
 
-    auto* sound = new SettingRow(QStringLiteral(":/icons/volume.svg"),
+    m_soundRow = new SettingRow(QStringLiteral(":/icons/volume.svg"),
         QStringLiteral("声音大小"), QStringLiteral("设备音量待接入"),
         volume.widget, this);
-    auto* light = new SettingRow(QStringLiteral(":/icons/brightness.svg"),
+    m_brightnessRow = new SettingRow(QStringLiteral(":/icons/brightness.svg"),
         QStringLiteral("屏幕亮度"), QStringLiteral("设备背光待接入"),
         brightness.widget, this);
     auto* network = new SettingRow(QStringLiteral(":/icons/network.svg"),
@@ -103,8 +103,8 @@ SettingsPage::SettingsPage(QWidget* parent)
         QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
         summaryControl(&m_versionSummary, this), this);
 
-    grid->addWidget(sound, 0, 0);
-    grid->addWidget(light, 0, 1);
+    grid->addWidget(m_soundRow, 0, 0);
+    grid->addWidget(m_brightnessRow, 0, 1);
     grid->addWidget(network, 1, 0);
     grid->addWidget(m_familyRow, 1, 1);
     grid->addWidget(pet, 2, 0);
@@ -117,8 +117,13 @@ SettingsPage::SettingsPage(QWidget* parent)
         debounce->setSingleShot(true);
         debounce->setInterval(180);
         connect(slider, &QSlider::valueChanged, this,
-                [this, label, debounce](int value) {
-                    updateValueLabel(label, value);
+                [this, label, debounce, isVolume](int value) {
+                    if (isVolume)
+                        updateValueLabel(label, value);
+                    else
+                        m_brightnessValue->setText(m_binaryBrightness
+                            ? (value == 0 ? QStringLiteral("关") : QStringLiteral("开"))
+                            : QStringLiteral("%1%").arg(value));
                     if (!m_updating)
                         debounce->start();
                 });
@@ -126,7 +131,9 @@ SettingsPage::SettingsPage(QWidget* parent)
             if (isVolume)
                 emit volumeChangeRequested(slider->value());
             else
-                emit brightnessChangeRequested(slider->value());
+                emit brightnessChangeRequested(m_binaryBrightness
+                    ? (slider->value() == 0 ? 0 : 100)
+                    : slider->value());
         });
     };
     connectSlider(m_volumeSlider, m_volumeValue, true);
@@ -145,17 +152,29 @@ SettingsPage::SettingsPage(QWidget* parent)
 
 void SettingsPage::setSettings(const UserSettings& settings)
 {
+    m_settings = settings;
     m_updating = true;
     m_volumeSlider->setValue(settings.volume);
-    m_brightnessSlider->setValue(settings.brightness);
     updateValueLabel(m_volumeValue, settings.volume);
-    updateValueLabel(m_brightnessValue, settings.brightness);
+    updateBrightnessPresentation();
     m_petStyleButton->setText(settings.petStyle);
     m_updating = false;
 }
 
 void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
 {
+    m_soundRow->setSubtitle(summary.audioSummary.isEmpty()
+        ? QStringLiteral("未检测到音量控制") : summary.audioSummary);
+    m_brightnessRow->setSubtitle(summary.brightnessSummary.isEmpty()
+        ? QStringLiteral("未检测到背光控制") : summary.brightnessSummary);
+    const bool binaryBrightness = summary.brightnessControlAvailable
+        && summary.brightnessLevels == 2;
+    if (m_binaryBrightness != binaryBrightness) {
+        m_binaryBrightness = binaryBrightness;
+        m_updating = true;
+        updateBrightnessPresentation();
+        m_updating = false;
+    }
     m_networkSummary->setText(summary.networkSummary.isEmpty()
         ? QStringLiteral("网络状态未知") : summary.networkSummary);
     m_familyRow->setSubtitle(summary.familySummary.isEmpty()
@@ -168,4 +187,23 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
 void SettingsPage::updateValueLabel(QLabel* label, int value)
 {
     label->setText(QStringLiteral("%1%").arg(value));
+}
+
+void SettingsPage::updateBrightnessPresentation()
+{
+    if (m_binaryBrightness) {
+        m_brightnessSlider->setRange(0, 1);
+        m_brightnessSlider->setSingleStep(1);
+        m_brightnessSlider->setPageStep(1);
+        const int value = m_settings.brightness == 0 ? 0 : 1;
+        m_brightnessSlider->setValue(value);
+        m_brightnessValue->setText(value == 0
+            ? QStringLiteral("关") : QStringLiteral("开"));
+        return;
+    }
+    m_brightnessSlider->setRange(0, 100);
+    m_brightnessSlider->setSingleStep(1);
+    m_brightnessSlider->setPageStep(10);
+    m_brightnessSlider->setValue(m_settings.brightness);
+    updateValueLabel(m_brightnessValue, m_settings.brightness);
 }
