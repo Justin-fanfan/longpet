@@ -46,6 +46,8 @@ EmergencyPage::EmergencyPage(QWidget* parent)
         QStringLiteral(":/icons/check-dark.svg"), "primary", this);
     m_contactButton = new LargeActionButton(QStringLiteral("联系家人"),
         QStringLiteral(":/icons/phone-dark.svg"), "danger", this);
+    m_okayButton->setObjectName(QStringLiteral("emergencyDismissButton"));
+    m_contactButton->setObjectName(QStringLiteral("emergencyContactButton"));
     m_okayButton->setFixedHeight(112);
     m_contactButton->setFixedHeight(112);
     actions->addWidget(m_okayButton, 1);
@@ -54,6 +56,10 @@ EmergencyPage::EmergencyPage(QWidget* parent)
     root->addLayout(content, 1);
 
     m_toast = new ToastWidget(this);
+    connect(m_okayButton, &QPushButton::clicked,
+            this, &EmergencyPage::dismissRequested);
+    connect(m_contactButton, &QPushButton::clicked,
+            this, &EmergencyPage::contactRequested);
 }
 
 QPushButton* EmergencyPage::okayButton() const { return m_okayButton; }

@@ -6,11 +6,17 @@ class QPushButton;
 class ToastWidget;
 
 class EmergencyPage final : public QWidget {
+    Q_OBJECT
+
 public:
     explicit EmergencyPage(QWidget* parent = nullptr);
     QPushButton* okayButton() const;
     QPushButton* contactButton() const;
     ToastWidget* toast() const;
+
+signals:
+    void dismissRequested();
+    void contactRequested();
 
 private:
     QPushButton* m_okayButton = nullptr;

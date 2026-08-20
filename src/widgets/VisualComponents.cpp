@@ -202,6 +202,8 @@ ReminderItem::ReminderItem(const QString& time, const QString& title,
     auto* marker = new QFrame(this);
     marker->setObjectName(QStringLiteral("reminderMarker"));
     marker->setProperty("visualState", state == ReminderVisualState::Completed ? "completed"
+        : state == ReminderVisualState::Acknowledged ? "acknowledged"
+        : state == ReminderVisualState::Presented ? "presented"
         : state == ReminderVisualState::Pending ? "pending"
         : state == ReminderVisualState::Disabled ? "disabled" : "missed");
     marker->setFixedSize(6, 64);
@@ -218,24 +220,40 @@ ReminderItem::ReminderItem(const QString& time, const QString& title,
     layout->addWidget(new SvgIconWidget(iconPath, 40, this));
     layout->addWidget(makeLabel(title, "body", this), 1);
 
-    const QString stateIcon = state == ReminderVisualState::Completed
-        ? QStringLiteral(":/icons/check.svg")
-        : state == ReminderVisualState::Pending
-            ? QStringLiteral(":/icons/clock.svg")
-            : state == ReminderVisualState::Disabled
-                ? QStringLiteral(":/icons/clock.svg") : QStringLiteral(":/icons/alert.svg");
-    const QString stateText = state == ReminderVisualState::Completed
-        ? QStringLiteral("已完成")
-        : state == ReminderVisualState::Pending
-            ? QStringLiteral("待完成")
-            : state == ReminderVisualState::Disabled
-                ? QStringLiteral("已停用") : QStringLiteral("已错过");
-    const char* stateRole = state == ReminderVisualState::Completed ? "success"
-        : state == ReminderVisualState::Pending ? "warning"
-        : state == ReminderVisualState::Disabled ? "assist" : "danger";
+    QString stateIcon = QStringLiteral(":/icons/clock.svg");
+    QString stateText = QStringLiteral("待提醒");
+    const char* stateRole = "warning";
+    switch (state) {
+    case ReminderVisualState::Completed:
+        stateIcon = QStringLiteral(":/icons/check.svg");
+        stateText = QStringLiteral("已完成");
+        stateRole = "success";
+        break;
+    case ReminderVisualState::Acknowledged:
+        stateIcon = QStringLiteral(":/icons/check.svg");
+        stateText = QStringLiteral("已知晓");
+        stateRole = "accent";
+        break;
+    case ReminderVisualState::Presented:
+        stateIcon = QStringLiteral(":/icons/alert.svg");
+        stateText = QStringLiteral("提醒中");
+        stateRole = "warning";
+        break;
+    case ReminderVisualState::Missed:
+        stateIcon = QStringLiteral(":/icons/alert.svg");
+        stateText = QStringLiteral("已错过");
+        stateRole = "danger";
+        break;
+    case ReminderVisualState::Disabled:
+        stateText = QStringLiteral("已停用");
+        stateRole = "assist";
+        break;
+    case ReminderVisualState::Pending:
+        break;
+    }
     layout->addWidget(new SvgIconWidget(stateIcon, 32, this));
     auto* stateLabel = makeLabel(stateText, stateRole, this);
-    stateLabel->setFixedWidth(76);
+    stateLabel->setFixedWidth(82);
     layout->addWidget(stateLabel);
 }
 

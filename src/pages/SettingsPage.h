@@ -32,6 +32,8 @@ private:
     QLabel* m_volumeValue = nullptr;
     QLabel* m_brightnessValue = nullptr;
     QLabel* m_networkSummary = nullptr;
+    QLabel* m_keywordSpottingSummary = nullptr;
+    QLabel* m_powerSummary = nullptr;
     SettingRow* m_soundRow = nullptr;
     SettingRow* m_brightnessRow = nullptr;
     SettingRow* m_familyRow = nullptr;

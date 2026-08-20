@@ -8,20 +8,12 @@
 #include <QVBoxLayout>
 
 namespace {
-QString iconFor(ReminderType type)
-{
-    switch (type) {
-    case ReminderType::Medicine: return QStringLiteral(":/icons/pill.svg");
-    case ReminderType::Water: return QStringLiteral(":/icons/water.svg");
-    case ReminderType::Other: return QStringLiteral(":/icons/reminder.svg");
-    }
-    return QStringLiteral(":/icons/reminder.svg");
-}
-
 ReminderVisualState visualStateFor(ReminderOccurrenceStatus status)
 {
     switch (status) {
     case ReminderOccurrenceStatus::Completed: return ReminderVisualState::Completed;
+    case ReminderOccurrenceStatus::Acknowledged: return ReminderVisualState::Acknowledged;
+    case ReminderOccurrenceStatus::Presented: return ReminderVisualState::Presented;
     case ReminderOccurrenceStatus::Missed: return ReminderVisualState::Missed;
     case ReminderOccurrenceStatus::Disabled: return ReminderVisualState::Disabled;
     case ReminderOccurrenceStatus::Pending: return ReminderVisualState::Pending;
@@ -95,7 +87,8 @@ void ReminderPage::setReminders(const QList<Reminder>& reminders)
         row->setContentsMargins(0, 0, 0, 0);
         row->setSpacing(8);
         auto* item = new ReminderItem(reminder.timeOfDay.toString(QStringLiteral("HH:mm")),
-                                      reminder.title, iconFor(reminder.type),
+                                      reminder.title,
+                                      reminderIconResourcePath(reminder.iconKey),
                                       visualStateFor(reminder.status), rowHost);
         item->setObjectName(QStringLiteral("reminderItem_%1").arg(reminder.id));
         const QDate today = QDate::currentDate();

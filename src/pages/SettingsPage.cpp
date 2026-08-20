@@ -102,6 +102,14 @@ SettingsPage::SettingsPage(QWidget* parent)
     auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"),
         QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
         summaryControl(&m_versionSummary, this), this);
+    auto* keywordSpotting = new SettingRow(QStringLiteral(":/icons/microphone.svg"),
+        QStringLiteral("语音关键词"), QStringLiteral("本地离线识别"),
+        summaryControl(&m_keywordSpottingSummary, this), this);
+    m_keywordSpottingSummary->setObjectName(QStringLiteral("keywordSpottingSummary"));
+    auto* power = new SettingRow(QStringLiteral(":/icons/battery.svg"),
+        QStringLiteral("设备电源"), QStringLiteral("来自设备 Adapter"),
+        summaryControl(&m_powerSummary, this), this);
+    m_powerSummary->setObjectName(QStringLiteral("powerSummary"));
 
     grid->addWidget(m_soundRow, 0, 0);
     grid->addWidget(m_brightnessRow, 0, 1);
@@ -109,7 +117,9 @@ SettingsPage::SettingsPage(QWidget* parent)
     grid->addWidget(m_familyRow, 1, 1);
     grid->addWidget(pet, 2, 0);
     grid->addWidget(about, 2, 1);
-    grid->setRowStretch(3, 1);
+    grid->addWidget(keywordSpotting, 3, 0);
+    grid->addWidget(power, 3, 1);
+    grid->setRowStretch(4, 1);
     root->addLayout(grid, 1);
 
     auto connectSlider = [this](QSlider* slider, QLabel* label, bool isVolume) {
@@ -182,6 +192,13 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
     m_versionSummary->setText(summary.softwareVersion.isEmpty()
         ? QStringLiteral("LongPet V0.2")
         : QStringLiteral("LongPet V%1").arg(summary.softwareVersion));
+    QString keywordSummary = summary.keywordSpottingSummary.isEmpty()
+        ? QStringLiteral("关键词识别未启动") : summary.keywordSpottingSummary;
+    if (!summary.lastKeyword.isEmpty())
+        keywordSummary += QStringLiteral("\n最近：%1").arg(summary.lastKeyword);
+    m_keywordSpottingSummary->setText(keywordSummary);
+    m_powerSummary->setText(summary.powerSummary.isEmpty()
+        ? QStringLiteral("电源状态未知") : summary.powerSummary);
 }
 
 void SettingsPage::updateValueLabel(QLabel* label, int value)

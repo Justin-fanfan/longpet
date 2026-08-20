@@ -2,8 +2,10 @@
 
 #include "pages/CarePage.h"
 #include "pages/CompanionPage.h"
+#include "pages/EmergencyPage.h"
 #include "pages/HomePage.h"
 #include "pages/ReminderEditPage.h"
+#include "pages/ReminderAlertPage.h"
 #include "pages/ReminderPage.h"
 #include "pages/SettingsPage.h"
 #include "widgets/VisualComponents.h"
@@ -36,12 +38,16 @@ MainWindow::MainWindow(QWidget* parent)
     m_reminderPage = new ReminderPage(m_stack);
     m_reminderEditPage = new ReminderEditPage(m_stack);
     m_settingsPage = new SettingsPage(m_stack);
+    m_reminderAlertPage = new ReminderAlertPage(m_stack);
+    m_emergencyPage = new EmergencyPage(m_stack);
     for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
                           static_cast<QWidget*>(m_homePage),
                           static_cast<QWidget*>(m_carePage),
                           static_cast<QWidget*>(m_reminderPage),
                           static_cast<QWidget*>(m_reminderEditPage),
-                          static_cast<QWidget*>(m_settingsPage)}) {
+                          static_cast<QWidget*>(m_settingsPage),
+                          static_cast<QWidget*>(m_reminderAlertPage),
+                          static_cast<QWidget*>(m_emergencyPage)}) {
         m_stack->addWidget(page);
     }
     root->addWidget(m_stack);
@@ -81,6 +87,10 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::saveReminderRequested);
     connect(m_reminderEditPage, &ReminderEditPage::deleteRequested,
             this, &MainWindow::deleteReminderRequested);
+    connect(m_reminderAlertPage, &ReminderAlertPage::acknowledgeRequested,
+            this, &MainWindow::acknowledgeReminderAlertRequested);
+    connect(m_reminderAlertPage, &ReminderAlertPage::completeRequested,
+            this, &MainWindow::completeReminderAlertRequested);
     connect(m_settingsPage, &SettingsPage::backRequested,
             this, &MainWindow::homeRequested);
     connect(m_settingsPage, &SettingsPage::volumeChangeRequested,
@@ -91,6 +101,10 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::petStyleChangeRequested);
     connect(m_settingsPage, &SettingsPage::pairFamilyRequested,
             this, &MainWindow::pairFamilyRequested);
+    connect(m_emergencyPage, &EmergencyPage::dismissRequested,
+            this, &MainWindow::emergencyDismissRequested);
+    connect(m_emergencyPage, &EmergencyPage::contactRequested,
+            this, &MainWindow::emergencyContactRequested);
     qApp->installEventFilter(this);
     showPage(PageId::Companion);
 }
@@ -131,6 +145,16 @@ void MainWindow::setReminderDraft(const ReminderDraft& draft)
     m_reminderEditPage->setDraft(draft);
 }
 
+void MainWindow::setReminderPresentation(const ReminderPresentation& presentation)
+{
+    m_reminderAlertPage->setPresentation(presentation);
+}
+
+void MainWindow::clearReminderPresentation()
+{
+    m_reminderAlertPage->clearPresentation();
+}
+
 void MainWindow::setCareSummary(const CareSummary& summary)
 {
     m_carePage->setSummary(summary);
@@ -159,7 +183,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
     QWidget* current = pageWidget(m_currentPage);
     const bool belongsToCurrent = watched == current
         || (watchedWidget && current && current->isAncestorOf(watchedWidget));
-    if (belongsToCurrent && m_currentPage != PageId::Companion) {
+    if (belongsToCurrent && m_currentPage != PageId::Companion
+        && m_currentPage != PageId::ReminderAlert) {
         switch (event->type()) {
         case QEvent::MouseButtonPress:
         case QEvent::TouchBegin:
@@ -182,6 +207,8 @@ QWidget* MainWindow::pageWidget(PageId page) const
     case PageId::Reminder: return m_reminderPage;
     case PageId::ReminderEdit: return m_reminderEditPage;
     case PageId::Settings: return m_settingsPage;
+    case PageId::ReminderAlert: return m_reminderAlertPage;
+    case PageId::Emergency: return m_emergencyPage;
     }
     return nullptr;
 }

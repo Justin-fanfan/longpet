@@ -8,9 +8,11 @@
 #include "mainwindow.h"
 #include "platform/AudioVolumeAdapter.h"
 #include "platform/BacklightAdapter.h"
+#include "platform/KeywordSpottingAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/PowerStatusAdapter.h"
 #include "services/CareService.h"
+#include "services/KeywordSpottingService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
@@ -19,6 +21,11 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QStandardPaths>
+#include <QTimer>
+
+namespace {
+constexpr int KeywordSpottingStartupDelayMs = 1'500;
+}
 
 Application::Application(QObject* parent)
     : QObject(parent)
@@ -44,6 +51,9 @@ bool Application::initialize(QString* error)
                                                   m_reminderService.get());
     m_settingsService = std::make_unique<SettingsService>(m_settingsRepository.get());
     m_systemService = std::make_unique<SystemService>();
+    m_keywordSpottingAdapter = std::make_unique<KeywordSpottingAdapter>();
+    m_keywordSpottingService = std::make_unique<KeywordSpottingService>(
+        m_keywordSpottingAdapter.get());
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
     m_audioVolumeAdapter = std::make_unique<AudioVolumeAdapter>();
     m_backlightAdapter = std::make_unique<BacklightAdapter>();
@@ -58,6 +68,12 @@ bool Application::initialize(QString* error)
             m_systemService.get(), &SystemService::setBatteryPercent);
     connect(m_powerStatusAdapter.get(), &PowerStatusAdapter::powerStateChanged,
             m_systemService.get(), &SystemService::setPowerSummary);
+    connect(m_keywordSpottingService.get(), &KeywordSpottingService::statusChanged,
+            this, [this](const KeywordSpottingStatus& status) {
+        m_systemService->setKeywordSpottingState(
+            status.available, status.listening, status.summary,
+            status.lastKeyword);
+    });
     connect(m_settingsService.get(), &SettingsService::settingApplyRequested,
             this, [this](const QString& key, const QVariant& value) {
         if (key == QStringLiteral("volume"))
@@ -75,8 +91,16 @@ bool Application::initialize(QString* error)
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
-        m_systemService.get(), 15'000);
+        m_systemService.get(), 15'000, m_keywordSpottingService.get());
     m_controller->initialize();
+    const KeywordSpottingStatus keywordStatus = m_keywordSpottingService->status();
+    m_systemService->setKeywordSpottingState(
+        keywordStatus.available, keywordStatus.listening,
+        keywordStatus.summary, keywordStatus.lastKeyword);
+    QTimer::singleShot(KeywordSpottingStartupDelayMs, this, [this] {
+        if (m_keywordSpottingAdapter)
+            m_keywordSpottingAdapter->start();
+    });
     return true;
 }
 
@@ -95,6 +119,8 @@ void Application::show()
 
 void Application::shutdown()
 {
+    if (m_keywordSpottingAdapter)
+        m_keywordSpottingAdapter->stop();
     if (m_reminderService)
         m_reminderService->stop();
     if (m_networkStatusAdapter)
@@ -111,6 +137,8 @@ void Application::shutdown()
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
+    m_keywordSpottingService.reset();
+    m_keywordSpottingAdapter.reset();
     m_systemService.reset();
     m_settingsService.reset();
     m_careService.reset();

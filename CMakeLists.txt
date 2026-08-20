@@ -35,11 +35,15 @@ set(
     src/app/Application.h
     src/app/AppController.cpp
     src/app/AppController.h
+    src/model/ReminderModels.cpp
     src/model/ReminderModels.h
+    src/model/KeywordSpottingModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
+    src/platform/KeywordSpottingAdapter.cpp
+    src/platform/KeywordSpottingAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
     src/platform/BacklightAdapter.cpp
@@ -56,6 +60,8 @@ set(
     src/data/SettingsRepository.h
     src/services/ReminderService.cpp
     src/services/ReminderService.h
+    src/services/KeywordSpottingService.cpp
+    src/services/KeywordSpottingService.h
     src/services/CareService.cpp
     src/services/CareService.h
     src/services/SettingsService.cpp
@@ -72,6 +78,8 @@ set(
     src/pages/CarePage.h
     src/pages/ReminderPage.cpp
     src/pages/ReminderPage.h
+    src/pages/ReminderAlertPage.cpp
+    src/pages/ReminderAlertPage.h
     src/pages/ReminderEditPage.cpp
     src/pages/ReminderEditPage.h
     src/pages/SettingsPage.cpp
@@ -144,6 +152,14 @@ set_target_properties(LongPet PROPERTIES WIN32_EXECUTABLE TRUE)
 install(
     TARGETS LongPet
     RUNTIME DESTINATION bin
+)
+
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/third_party/loongson-kws/
+    DESTINATION share/longpet/kws
+    PATTERN ".git" EXCLUDE
+    PATTERN ".artifacts" EXCLUDE
+    PATTERN "__pycache__" EXCLUDE
 )
 
 option(LONGPET_BUILD_TESTS "Build LongPet V0.2 tests" OFF)

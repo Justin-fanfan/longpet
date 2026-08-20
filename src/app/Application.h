@@ -11,6 +11,8 @@ class BacklightAdapter;
 class CareEventRepository;
 class CareService;
 class DatabaseManager;
+class KeywordSpottingAdapter;
+class KeywordSpottingService;
 class MainWindow;
 class NetworkStatusAdapter;
 class PowerStatusAdapter;
@@ -45,6 +47,8 @@ private:
     std::unique_ptr<CareService> m_careService;
     std::unique_ptr<SettingsService> m_settingsService;
     std::unique_ptr<SystemService> m_systemService;
+    std::unique_ptr<KeywordSpottingAdapter> m_keywordSpottingAdapter;
+    std::unique_ptr<KeywordSpottingService> m_keywordSpottingService;
     std::unique_ptr<NetworkStatusAdapter> m_networkStatusAdapter;
     std::unique_ptr<AudioVolumeAdapter> m_audioVolumeAdapter;
     std::unique_ptr<BacklightAdapter> m_backlightAdapter;

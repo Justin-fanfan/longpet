@@ -34,11 +34,17 @@ QLabel[role="warning"] { color: #E4BE72; font-size: 20px; }
 QLabel[role="accent"] { color: #F2B84B; font-size: 20px; }
 QLabel[role="sleepTime"] { color: #8E887E; font-size: 56px; font-weight: 600; }
 QLabel[role="sleepText"] { color: #8E887E; font-size: 20px; }
+QLabel[role="reminderAlertHeading"] { color: #F2B84B; font-size: 30px; font-weight: 600; }
+QLabel[role="reminderAlertText"] { color: #F6F1E7; font-size: 48px; font-weight: 700; }
+QLabel[role="reminderAlertTime"] { color: #B8B0A3; font-size: 26px; }
+QLabel[role="reminderAlertHint"] { color: #B8B0A3; font-size: 18px; }
 
 QFrame#divider { background: #3C3934; border: none; }
 QFrame#dangerBar { background: #EF7B70; border: none; }
 QFrame#reminderMarker { border: none; border-radius: 3px; }
 QFrame#reminderMarker[visualState="completed"] { background: #82C9A5; }
+QFrame#reminderMarker[visualState="acknowledged"] { background: #F2B84B; }
+QFrame#reminderMarker[visualState="presented"] { background: #E4BE72; }
 QFrame#reminderMarker[visualState="pending"] { background: #E4BE72; }
 QFrame#reminderMarker[visualState="missed"] { background: #EF7B70; }
 QFrame#reminderMarker[visualState="disabled"] { background: #777168; }
@@ -105,6 +111,24 @@ QPushButton[role="secondary"] {
     color: #F6F1E7;
     font-size: 24px;
 }
+
+QPushButton[role="reminderAcknowledge"] {
+    border: none;
+    border-radius: 24px;
+    background: #F2B84B;
+    color: #17130B;
+    font-size: 32px;
+    font-weight: 700;
+}
+QPushButton[role="reminderAcknowledge"]:pressed { background: #D89D34; }
+QPushButton[role="reminderComplete"] {
+    border: 2px solid #82C9A5;
+    border-radius: 24px;
+    background: #23211E;
+    color: #82C9A5;
+    font-size: 26px;
+}
+QPushButton[role="reminderComplete"]:pressed { background: #2B2925; }
 
 QPushButton[role="danger"] {
     min-height: 104px;

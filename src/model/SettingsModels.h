@@ -18,4 +18,8 @@ struct DeviceSummary {
     int brightnessLevels = 0;
     QString brightnessSummary;
     QString powerSummary;
+    bool keywordSpottingAvailable = false;
+    bool keywordSpottingListening = false;
+    QString keywordSpottingSummary;
+    QString lastKeyword;
 };

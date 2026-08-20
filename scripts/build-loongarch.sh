@@ -3,6 +3,7 @@
 set -euo pipefail
 PROJECT_DIR="/mnt/d/code_qt/longpet"
 BUILD_DIR="$HOME/build/LongPet-loongarch64-release"
+BUILD_JOBS="${LONGPET_BUILD_JOBS:-$(nproc)}"
 
 cmake \
     -S "${PROJECT_DIR}" \
@@ -13,6 +14,6 @@ cmake \
 
 cmake \
     --build "${BUILD_DIR}" \
-    --parallel "$(nproc)"
+    --parallel "${BUILD_JOBS}"
 
 file "${BUILD_DIR}/LongPet"

@@ -8,10 +8,12 @@
 
 class CarePage;
 class CompanionPage;
+class EmergencyPage;
 class HomePage;
 class QEvent;
 class QStackedWidget;
 class ReminderEditPage;
+class ReminderAlertPage;
 class ReminderPage;
 class SettingsPage;
 class ToastWidget;
@@ -29,7 +31,9 @@ public:
         Care,
         Reminder,
         ReminderEdit,
-        Settings
+        Settings,
+        ReminderAlert,
+        Emergency
     };
 
     PageId currentPage() const;
@@ -37,6 +41,8 @@ public:
     void showToast(const QString& text);
     void setReminders(const QList<Reminder>& reminders);
     void setReminderDraft(const ReminderDraft& draft);
+    void setReminderPresentation(const ReminderPresentation& presentation);
+    void clearReminderPresentation();
     void setCareSummary(const CareSummary& summary);
     void setSettings(const UserSettings& settings);
     void setSystemStatus(const SystemStatus& status);
@@ -53,6 +59,8 @@ signals:
     void addReminderRequested();
     void editReminderRequested(ReminderId id);
     void completeReminderRequested(ReminderId id);
+    void acknowledgeReminderAlertRequested(ReminderEventId eventId);
+    void completeReminderAlertRequested(ReminderEventId eventId);
     void saveReminderRequested(const ReminderDraft& draft);
     void deleteReminderRequested(ReminderId id);
     void cancelReminderEditRequested();
@@ -61,6 +69,8 @@ signals:
     void brightnessChangeRequested(int value);
     void petStyleChangeRequested(const QString& style);
     void pairFamilyRequested();
+    void emergencyDismissRequested();
+    void emergencyContactRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -73,7 +83,9 @@ private:
     CarePage* m_carePage = nullptr;
     ReminderPage* m_reminderPage = nullptr;
     ReminderEditPage* m_reminderEditPage = nullptr;
+    ReminderAlertPage* m_reminderAlertPage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
+    EmergencyPage* m_emergencyPage = nullptr;
     ToastWidget* m_toast = nullptr;
     PageId m_currentPage = PageId::Companion;
 };

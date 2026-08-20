@@ -26,6 +26,7 @@ private:
     ReminderDraft currentDraft() const;
     int checkedId(const QButtonGroup* group, int fallback) const;
 
+    ReminderDraft m_sourceDraft;
     ReminderId m_editingId = 0;
     int m_expectedRevision = 0;
     QTimeEdit* m_timeEdit = nullptr;
