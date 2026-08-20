@@ -10,6 +10,7 @@
 #include <QTimer>
 
 class CareService;
+class DeveloperService;
 class KeywordSpottingService;
 class ReminderService;
 class SettingsService;
@@ -28,6 +29,7 @@ public:
                   int controlTimeoutMs = 15'000,
                   KeywordSpottingService* keywordSpottingService = nullptr,
                   VisionService* visionService = nullptr,
+                  DeveloperService* developerService = nullptr,
                   QObject* parent = nullptr);
 
     void initialize();
@@ -51,6 +53,7 @@ private:
     void showCare();
     void showReminders();
     void showSettings();
+    void showDeveloper();
     void editReminder(ReminderId id);
     void saveReminder(const ReminderDraft& draft);
     void deleteReminder(ReminderId id);
@@ -74,6 +77,7 @@ private:
     SystemService* m_systemService = nullptr;
     KeywordSpottingService* m_keywordSpottingService = nullptr;
     VisionService* m_visionService = nullptr;
+    DeveloperService* m_developerService = nullptr;
     QTimer m_controlTimeout;
     QTimer m_alertPresentationTimeout;
     QQueue<ReminderPresentation> m_pendingPresentations;

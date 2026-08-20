@@ -3,12 +3,14 @@
 #include "model/ReminderModels.h"
 #include "model/SettingsModels.h"
 #include "model/SystemModels.h"
+#include "model/DiagnosticsModels.h"
 
 #include <QWidget>
 
 class CarePage;
 class CompanionPage;
 class EmergencyPage;
+class DeveloperPage;
 class HomePage;
 class QEvent;
 class QStackedWidget;
@@ -22,7 +24,7 @@ class MainWindow final : public QWidget {
     Q_OBJECT
 
 public:
-    explicit MainWindow(QWidget* parent = nullptr);
+    explicit MainWindow(bool developerMode = false, QWidget* parent = nullptr);
     ~MainWindow() override;
 
     enum class PageId {
@@ -33,7 +35,8 @@ public:
         ReminderEdit,
         Settings,
         ReminderAlert,
-        Emergency
+        Emergency,
+        Developer
     };
 
     PageId currentPage() const;
@@ -48,6 +51,10 @@ public:
     void setSystemStatus(const SystemStatus& status);
     void setDeviceSummary(const DeviceSummary& summary);
     void setEmergencyDetail(const QString& detail);
+    void setDeveloperSnapshot(const DeveloperSnapshot& snapshot);
+    void setDiagnosticEvents(const QList<DiagnosticEvent>& events);
+    void appendDiagnosticEvent(const DiagnosticEvent& event);
+    void setDeveloperAudioLevel(double rms, double peak);
 
 signals:
     void controlRequested();
@@ -72,6 +79,18 @@ signals:
     void pairFamilyRequested();
     void emergencyDismissRequested();
     void emergencyContactRequested();
+    void developerRequested();
+    void kwsEnableRequested(bool enabled);
+    void kwsStartRequested();
+    void kwsStopRequested();
+    void kwsRestartRequested();
+    void kwsReconfigureRequested(const KeywordSpottingConfig& config);
+    void visionEnableRequested(bool enabled);
+    void visionStartRequested();
+    void visionStopRequested();
+    void visionRestartRequested();
+    void visionReconfigureRequested(const VisionConfig& config);
+    void developerSimulationRequested(DeveloperSimulation simulation);
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -87,6 +106,7 @@ private:
     ReminderAlertPage* m_reminderAlertPage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
     EmergencyPage* m_emergencyPage = nullptr;
+    DeveloperPage* m_developerPage = nullptr;
     ToastWidget* m_toast = nullptr;
     PageId m_currentPage = PageId::Companion;
 };

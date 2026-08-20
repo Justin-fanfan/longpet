@@ -8,6 +8,7 @@
 #include <QJsonParseError>
 #include <QJsonValue>
 #include <QProcessEnvironment>
+#include <QStandardPaths>
 
 #include <cmath>
 
@@ -132,6 +133,11 @@ VisionAdapter::VisionAdapter(const Options& options, QObject* parent)
       m_options(options)
 {
     m_startupTimer.setSingleShot(true);
+    m_killTimer.setSingleShot(true);
+    m_retryTimer.setSingleShot(true);
+    m_stabilityTimer.setSingleShot(true);
+    m_stabilityTimer.setInterval(5 * 60 * 1000);
+    updateStatusConfiguration();
     m_startupTimer.setInterval(qMax(1, m_options.startupTimeoutMs));
     connect(&m_startupTimer, &QTimer::timeout, this, [this] {
         if (m_status.state != VisionRuntimeState::Starting)
@@ -139,9 +145,17 @@ VisionAdapter::VisionAdapter(const Options& options, QObject* parent)
         publishStatus(VisionRuntimeState::Degraded, false, false, false,
                       QStringLiteral("视觉进程启动超时"), 0.0, 0.0,
                       m_options.cameraIndex);
-        m_stopping = true;
         m_process.terminate();
+        m_killTimer.start(qMax(100, m_options.killFallbackMs));
     });
+    connect(&m_killTimer, &QTimer::timeout,
+            this, &VisionAdapter::forceKill);
+    connect(&m_retryTimer, &QTimer::timeout, this, [this] {
+        if (m_options.enabled && m_process.state() == QProcess::NotRunning)
+            start();
+    });
+    connect(&m_stabilityTimer, &QTimer::timeout, this,
+            [this] { m_retryAttempt = 0; });
     connect(&m_process, &QProcess::readyReadStandardOutput,
             this, &VisionAdapter::readStandardOutput);
     connect(&m_process, &QProcess::readyReadStandardError,
@@ -151,6 +165,7 @@ VisionAdapter::VisionAdapter(const Options& options, QObject* parent)
         if (m_stopping || error == QProcess::Crashed)
             return;
         m_startupTimer.stop();
+        m_nonRecoverableFailure = error == QProcess::FailedToStart;
         publishStatus(VisionRuntimeState::Degraded, false, false, false,
                       QStringLiteral("无法启动视觉进程：%1")
                           .arg(m_process.errorString()),
@@ -159,10 +174,18 @@ VisionAdapter::VisionAdapter(const Options& options, QObject* parent)
     connect(&m_process,
             qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
             this, &VisionAdapter::handleFinished);
+    connect(&m_process, &QProcess::started, this, [this] {
+        m_processGroupId = m_process.processId();
+        m_status.workerPid = m_process.processId();
+        m_status.startedAt = QDateTime::currentDateTime();
+        m_status.running = true;
+        emit statusChanged(m_status);
+    });
 #ifdef Q_OS_LINUX
     const int niceAdjustment = qBound(0, m_options.niceAdjustment, 19);
     m_process.setChildProcessModifier([niceAdjustment] {
         const pid_t expectedParent = getppid();
+        setpgid(0, 0);
         setpriority(PRIO_PROCESS, 0, niceAdjustment);
         if (prctl(PR_SET_PDEATHSIG, SIGTERM) != 0)
             return;
@@ -174,11 +197,19 @@ VisionAdapter::VisionAdapter(const Options& options, QObject* parent)
 
 VisionAdapter::~VisionAdapter()
 {
-    stop();
+    m_startupTimer.stop();
+    m_retryTimer.stop();
+    m_stabilityTimer.stop();
+    m_killTimer.stop();
+    if (m_process.state() != QProcess::NotRunning) {
+        forceKill();
+        m_process.waitForFinished(100);
+    }
 }
 
 bool VisionAdapter::start()
 {
+    m_retryTimer.stop();
     if (m_process.state() != QProcess::NotRunning)
         return true;
     if (!m_options.enabled) {
@@ -189,6 +220,7 @@ bool VisionAdapter::start()
 
     QString error;
     if (!validateRuntime(&error)) {
+        m_nonRecoverableFailure = true;
         publishStatus(VisionRuntimeState::Degraded, false, false, false, error,
                       0.0, 0.0, m_options.cameraIndex);
         return false;
@@ -214,6 +246,8 @@ bool VisionAdapter::start()
     m_stdoutBuffer.clear();
     m_stderrBuffer.clear();
     m_stopping = false;
+    m_nonRecoverableFailure = false;
+    updateStatusConfiguration();
     m_process.setProcessEnvironment(environment);
     m_process.setWorkingDirectory(root.absolutePath());
     m_process.setProcessChannelMode(QProcess::SeparateChannels);
@@ -229,21 +263,61 @@ bool VisionAdapter::start()
 
 void VisionAdapter::stop()
 {
-    m_startupTimer.stop();
+    m_retryTimer.stop();
+    if (m_process.state() != QProcess::NotRunning)
+        requestStop(false);
+    else
+        publishStatus(VisionRuntimeState::Disabled, false, false, false,
+                      QStringLiteral("视觉感知已停止"), 0.0, 0.0,
+                      m_options.cameraIndex);
+}
+
+bool VisionAdapter::restart()
+{
+    m_retryAttempt = 0;
+    m_retryTimer.stop();
+    if (!m_options.enabled)
+        m_options.enabled = true;
     if (m_process.state() != QProcess::NotRunning) {
-        m_stopping = true;
-        m_process.terminate();
-        if (!m_process.waitForFinished(3'500)) {
-            m_process.kill();
-            m_process.waitForFinished(1'000);
-        }
+        requestStop(true);
+        return true;
     }
-    m_stopping = false;
-    m_stdoutBuffer.clear();
-    m_stderrBuffer.clear();
-    publishStatus(VisionRuntimeState::Disabled, false, false, false,
-                  QStringLiteral("视觉感知已停止"), 0.0, 0.0,
-                  m_options.cameraIndex);
+    return start();
+}
+
+bool VisionAdapter::setEnabled(bool enabled)
+{
+    m_options.enabled = enabled;
+    updateStatusConfiguration();
+    emit statusChanged(m_status);
+    if (!enabled) {
+        stop();
+        return true;
+    }
+    return restart();
+}
+
+bool VisionAdapter::reconfigure(const Options& options, QString* error)
+{
+    if (options.cameraIndex < 0 || options.cameraIndex > 32
+        || options.frameWidth < 64 || options.frameWidth > 1920
+        || options.frameHeight < 48 || options.frameHeight > 1080
+        || options.targetFps < 1 || options.targetFps > 30) {
+        if (error)
+            *error = QStringLiteral("视觉输入参数无效");
+        return false;
+    }
+    m_options = options;
+    m_startupTimer.setInterval(qMax(1, m_options.startupTimeoutMs));
+    updateStatusConfiguration();
+    emit statusChanged(m_status);
+    m_retryAttempt = 0;
+    m_retryTimer.stop();
+    if (m_process.state() != QProcess::NotRunning) {
+        requestStop(m_options.enabled);
+        return true;
+    }
+    return !m_options.enabled || start();
 }
 
 bool VisionAdapter::isRunning() const
@@ -436,10 +510,20 @@ void VisionAdapter::readStandardOutput()
         }
         VisionStatus runtimeStatus;
         if (parseRuntimeStatusEvent(line, &runtimeStatus)) {
+            QJsonParseError statusError;
+            const QJsonDocument statusDocument = QJsonDocument::fromJson(
+                line, &statusError);
+            if (statusError.error == QJsonParseError::NoError
+                && statusDocument.isObject()) {
+                m_nonRecoverableFailure = !statusDocument.object().value(
+                    QStringLiteral("recoverable")).toBool(true);
+            }
             if (runtimeStatus.state == VisionRuntimeState::Running
                 || runtimeStatus.state == VisionRuntimeState::Degraded
                 || runtimeStatus.state == VisionRuntimeState::Error) {
                 m_startupTimer.stop();
+                if (runtimeStatus.state == VisionRuntimeState::Running)
+                    m_stabilityTimer.start();
             }
             publishStatus(runtimeStatus.state, runtimeStatus.available,
                           runtimeStatus.cameraAvailable, runtimeStatus.monitoring,
@@ -469,13 +553,93 @@ void VisionAdapter::readStandardError()
 void VisionAdapter::handleFinished(int exitCode, QProcess::ExitStatus exitStatus)
 {
     m_startupTimer.stop();
-    if (m_stopping)
+    m_killTimer.stop();
+    m_stabilityTimer.stop();
+#ifdef Q_OS_LINUX
+    if (m_processGroupId > 0)
+        ::kill(-static_cast<pid_t>(m_processGroupId), SIGTERM);
+#endif
+    m_status.running = false;
+    m_status.workerPid = 0;
+    m_processGroupId = 0;
+    if (m_stopping) {
+        const bool shouldRestart = m_restartAfterStop;
+        m_stopping = false;
+        m_restartAfterStop = false;
+        m_stdoutBuffer.clear();
+        m_stderrBuffer.clear();
+        publishStatus(VisionRuntimeState::Disabled, false, false, false,
+                      QStringLiteral("视觉感知已停止"), 0.0, 0.0,
+                      m_options.cameraIndex);
+        if (shouldRestart)
+            QTimer::singleShot(0, this, [this] { start(); });
         return;
+    }
     const QString reason = exitStatus == QProcess::CrashExit
         ? QStringLiteral("视觉进程异常退出，LongPet 已降级运行")
         : QStringLiteral("视觉进程已退出（%1），LongPet 已降级运行").arg(exitCode);
-    publishStatus(VisionRuntimeState::Degraded, false, false, false, reason,
+    scheduleRecovery(reason);
+}
+
+void VisionAdapter::requestStop(bool restartAfterStop)
+{
+    m_startupTimer.stop();
+    m_retryTimer.stop();
+    m_stopping = true;
+    m_restartAfterStop = restartAfterStop;
+#ifdef Q_OS_LINUX
+    if (m_processGroupId > 0)
+        ::kill(-static_cast<pid_t>(m_processGroupId), SIGTERM);
+#endif
+    m_process.terminate();
+    m_killTimer.start(qMax(100, m_options.killFallbackMs));
+}
+
+void VisionAdapter::forceKill()
+{
+    if (m_process.state() == QProcess::NotRunning)
+        return;
+    emit forceKillInvoked();
+#ifdef Q_OS_LINUX
+    if (m_processGroupId > 0)
+        ::kill(-static_cast<pid_t>(m_processGroupId), SIGKILL);
+#endif
+    m_process.kill();
+}
+
+void VisionAdapter::scheduleRecovery(const QString& reason)
+{
+    if (!m_options.enabled || m_nonRecoverableFailure
+        || m_retryAttempt >= m_options.retryDelaysMs.size()) {
+        publishStatus(m_nonRecoverableFailure
+                          ? VisionRuntimeState::Error
+                          : VisionRuntimeState::Degraded,
+                      false, false, false,
+                      m_nonRecoverableFailure ? reason
+                          : QStringLiteral("%1；自动恢复次数已用尽").arg(reason),
+                      0.0, 0.0, m_options.cameraIndex);
+        return;
+    }
+    const int delay = qMax(1, m_options.retryDelaysMs.at(m_retryAttempt));
+    ++m_retryAttempt;
+    publishStatus(VisionRuntimeState::Degraded, false, false, false,
+                  QStringLiteral("%1；%2 秒后第 %3 次重试")
+                      .arg(reason).arg(delay / 1000.0, 0, 'f', 1)
+                      .arg(m_retryAttempt),
                   0.0, 0.0, m_options.cameraIndex);
+    emit recoveryScheduled(m_retryAttempt, delay);
+    m_retryTimer.start(delay);
+}
+
+void VisionAdapter::updateStatusConfiguration()
+{
+    m_status.enabled = m_options.enabled;
+    m_status.frameWidth = m_options.frameWidth;
+    m_status.frameHeight = m_options.frameHeight;
+    m_status.targetFps = m_options.targetFps;
+    m_status.waveEnabled = m_options.waveEnabled;
+    m_status.fallCandidateEnabled = m_options.fallEnabled;
+    m_status.cameraIndex = m_options.cameraIndex;
 }
 
 void VisionAdapter::publishStatus(VisionRuntimeState state, bool available,
@@ -483,15 +647,21 @@ void VisionAdapter::publishStatus(VisionRuntimeState state, bool available,
                                   const QString& summary, double effectiveFps,
                                   double frameTimeMs, int cameraIndex)
 {
+    updateStatusConfiguration();
     VisionStatus next = m_status;
     next.state = state;
+    next.enabled = m_options.enabled;
     next.available = available;
+    next.running = m_process.state() != QProcess::NotRunning;
     next.cameraAvailable = cameraAvailable;
     next.monitoring = monitoring;
     next.summary = summary.simplified();
     next.effectiveFps = effectiveFps;
     next.frameTimeMs = frameTimeMs;
-    next.cameraIndex = cameraIndex;
+    next.cameraIndex = cameraIndex >= 0 ? cameraIndex : m_options.cameraIndex;
+    next.errorDetail = (state == VisionRuntimeState::Degraded
+                        || state == VisionRuntimeState::Error)
+        ? next.summary : QString();
     if (sameStatus(next, m_status))
         return;
     m_status = next;
@@ -500,6 +670,23 @@ void VisionAdapter::publishStatus(VisionRuntimeState state, bool available,
 
 bool VisionAdapter::validateRuntime(QString* error) const
 {
+    if (m_options.cameraIndex < 0 || m_options.cameraIndex > 32
+        || m_options.frameWidth < 64 || m_options.frameWidth > 1920
+        || m_options.frameHeight < 48 || m_options.frameHeight > 1080
+        || m_options.targetFps < 1 || m_options.targetFps > 30) {
+        if (error)
+            *error = QStringLiteral("视觉配置无效，拒绝启动 worker");
+        return false;
+    }
+    const QFileInfo executable(m_options.pythonExecutable);
+    if ((executable.isAbsolute() && !executable.isExecutable())
+        || (!executable.isAbsolute()
+            && QStandardPaths::findExecutable(m_options.pythonExecutable).isEmpty())) {
+        if (error)
+            *error = QStringLiteral("Vision Python 可执行文件不可用：%1")
+                         .arg(m_options.pythonExecutable);
+        return false;
+    }
     const QDir root(m_options.runtimeRoot);
     if (!root.exists()) {
         if (error)

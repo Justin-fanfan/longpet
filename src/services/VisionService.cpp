@@ -27,6 +27,10 @@ VisionService::VisionService(VisionAdapter* adapter, Clock clock, QObject* paren
             this, &VisionService::handleDetection);
     connect(m_adapter, &VisionAdapter::statusChanged,
             this, &VisionService::handleRuntimeStatus);
+    connect(m_adapter, &VisionAdapter::diagnosticMessage,
+            this, &VisionService::adapterDiagnostic);
+    connect(m_adapter, &VisionAdapter::recoveryScheduled,
+            this, &VisionService::recoveryScheduled);
 }
 
 VisionStatus VisionService::status() const
@@ -68,6 +72,73 @@ int VisionService::defaultCooldownMs(VisionEventType type)
     return 0;
 }
 
+VisionConfig VisionService::config() const
+{
+    VisionConfig config;
+    if (!m_adapter)
+        return config;
+    const auto options = m_adapter->options();
+    config.enabled = options.enabled;
+    config.cameraIndex = options.cameraIndex;
+    config.frameWidth = options.frameWidth;
+    config.frameHeight = options.frameHeight;
+    config.targetFps = options.targetFps;
+    config.waveEnabled = options.waveEnabled;
+    config.fallCandidateEnabled = options.fallEnabled;
+    return config;
+}
+
+bool VisionService::setEnabled(bool enabled)
+{
+    return m_adapter && m_adapter->setEnabled(enabled);
+}
+
+bool VisionService::start()
+{
+    return m_adapter && m_adapter->start();
+}
+
+void VisionService::stop()
+{
+    if (m_adapter)
+        m_adapter->stop();
+}
+
+bool VisionService::restart()
+{
+    return m_adapter && m_adapter->restart();
+}
+
+bool VisionService::reconfigure(const VisionConfig& config, QString* error)
+{
+    if (!m_adapter) {
+        if (error)
+            *error = QStringLiteral("Vision Adapter 未配置");
+        return false;
+    }
+    auto options = m_adapter->options();
+    options.enabled = config.enabled;
+    options.cameraIndex = config.cameraIndex;
+    options.frameWidth = config.frameWidth;
+    options.frameHeight = config.frameHeight;
+    options.targetFps = config.targetFps;
+    options.waveEnabled = config.waveEnabled;
+    options.fallEnabled = config.fallCandidateEnabled;
+    return m_adapter->reconfigure(options, error);
+}
+
+void VisionService::injectDiagnosticDetection(VisionEventType type,
+                                              double confidence)
+{
+    VisionDetection detection;
+    detection.type = type;
+    detection.confidence = confidence;
+    detection.timestamp = m_clock();
+    detection.source = QStringLiteral("developer_simulation");
+    emit diagnosticInjectionRequested(detection);
+    handleDetection(detection);
+}
+
 void VisionService::handleDetection(const VisionDetection& detection)
 {
     QString invalidReason;
@@ -94,6 +165,7 @@ void VisionService::handleDetection(const VisionDetection& detection)
     m_lastAcceptedAt.insert(key, now);
     m_status.lastEventType = accepted.type;
     m_status.lastEventAt = accepted.timestamp;
+    m_status.lastConfidence = accepted.confidence;
     emit statusChanged(m_status);
     emit detectionAccepted(accepted);
 
@@ -119,8 +191,10 @@ void VisionService::handleRuntimeStatus(const VisionStatus& status)
 {
     const VisionEventType lastEventType = m_status.lastEventType;
     const QDateTime lastEventAt = m_status.lastEventAt;
+    const double lastConfidence = m_status.lastConfidence;
     m_status = status;
     m_status.lastEventType = lastEventType;
     m_status.lastEventAt = lastEventAt;
+    m_status.lastConfidence = lastConfidence;
     emit statusChanged(m_status);
 }

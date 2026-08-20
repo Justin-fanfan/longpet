@@ -15,6 +15,7 @@ public:
     explicit SettingsPage(QWidget* parent = nullptr);
     void setSettings(const UserSettings& settings);
     void setDeviceSummary(const DeviceSummary& summary);
+    void setDeveloperMode(bool enabled);
 
 signals:
     void backRequested();
@@ -22,6 +23,7 @@ signals:
     void brightnessChangeRequested(int value);
     void petStyleChangeRequested(const QString& style);
     void pairFamilyRequested();
+    void developerRequested();
 
 private:
     void updateValueLabel(QLabel* label, int value);
@@ -39,6 +41,7 @@ private:
     SettingRow* m_familyRow = nullptr;
     QLabel* m_versionSummary = nullptr;
     class QPushButton* m_petStyleButton = nullptr;
+    class QPushButton* m_developerButton = nullptr;
     UserSettings m_settings;
     bool m_binaryBrightness = false;
     bool m_updating = false;

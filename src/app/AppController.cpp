@@ -2,6 +2,7 @@
 
 #include "mainwindow.h"
 #include "services/CareService.h"
+#include "services/DeveloperService.h"
 #include "services/KeywordSpottingService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
@@ -16,6 +17,7 @@ AppController::AppController(MainWindow* window,
                              int controlTimeoutMs,
                              KeywordSpottingService* keywordSpottingService,
                              VisionService* visionService,
+                             DeveloperService* developerService,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
@@ -24,7 +26,8 @@ AppController::AppController(MainWindow* window,
       m_settingsService(settingsService),
       m_systemService(systemService),
       m_keywordSpottingService(keywordSpottingService),
-      m_visionService(visionService)
+      m_visionService(visionService),
+      m_developerService(developerService)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -71,6 +74,10 @@ bool AppController::handleReminderConfirmation(
 {
     if (!hasActiveReminderAlert())
         return false;
+    if (m_currentPresentation.diagnostic) {
+        finishCurrentReminderPresentation();
+        return true;
+    }
     const ReminderEventId eventId = m_currentPresentation.occurrence.id;
     const ServiceResult result = semantic == ReminderConfirmationSemantic::Complete
         ? m_reminderService->completeOccurrence(eventId, source)
@@ -87,21 +94,53 @@ bool AppController::handleKeywordSemantic(KeywordSemantic semantic,
                                           const QString& keyword)
 {
     switch (semantic) {
-    case KeywordSemantic::Acknowledge:
-        return handleReminderConfirmation(ReminderConfirmationSemantic::Acknowledge,
-                                          ReminderAckSource::Voice);
-    case KeywordSemantic::Complete:
-        return handleReminderConfirmation(ReminderConfirmationSemantic::Complete,
-                                          ReminderAckSource::Voice);
+    case KeywordSemantic::Acknowledge: {
+        const bool accepted = handleReminderConfirmation(
+            ReminderConfirmationSemantic::Acknowledge, ReminderAckSource::Voice);
+        if (m_developerService)
+            m_developerService->recordControllerEvent(
+                accepted ? QStringLiteral("ACKNOWLEDGE accepted")
+                         : QStringLiteral("ACKNOWLEDGE ignored"),
+                accepted ? QStringLiteral("current ReminderAlert acknowledged")
+                         : QStringLiteral("no active ReminderAlert"),
+                accepted ? DiagnosticLevel::Info : DiagnosticLevel::Warning);
+        return accepted;
+    }
+    case KeywordSemantic::Complete: {
+        const bool accepted = handleReminderConfirmation(
+            ReminderConfirmationSemantic::Complete, ReminderAckSource::Voice);
+        if (m_developerService)
+            m_developerService->recordControllerEvent(
+                accepted ? QStringLiteral("COMPLETE accepted")
+                         : QStringLiteral("COMPLETE ignored"),
+                accepted ? QStringLiteral("current ReminderAlert completed")
+                         : QStringLiteral("no active ReminderAlert"),
+                accepted ? DiagnosticLevel::Info : DiagnosticLevel::Warning);
+        return accepted;
+    }
     case KeywordSemantic::Greeting:
-        if (m_emergencyActive || hasActiveReminderAlert())
+        if (m_emergencyActive || hasActiveReminderAlert()) {
+            if (m_developerService)
+                m_developerService->recordControllerEvent(
+                    QStringLiteral("GREETING ignored"),
+                    m_emergencyActive ? QStringLiteral("Emergency active")
+                                      : QStringLiteral("ReminderAlert active"),
+                    DiagnosticLevel::Warning);
             return false;
+        }
         showHome();
+        if (m_developerService)
+            m_developerService->recordControllerEvent(
+                QStringLiteral("GREETING accepted"), QStringLiteral("Home requested"));
         m_window->showToast(keyword.isEmpty()
             ? QStringLiteral("我在呢")
             : QStringLiteral("听到“%1”，我在呢").arg(keyword));
         return true;
     case KeywordSemantic::Emergency:
+        if (m_developerService)
+            m_developerService->recordControllerEvent(
+                QStringLiteral("EMERGENCY accepted"), QStringLiteral("Emergency requested"),
+                DiagnosticLevel::Warning);
         showEmergency(QStringLiteral("听到紧急求助，请确认是否需要联系家人"));
         return true;
     case KeywordSemantic::Stop:
@@ -121,7 +160,8 @@ void AppController::connectUi()
     connect(m_window, &MainWindow::userActivity, this,
             [this](MainWindow::PageId page) {
         if (page != MainWindow::PageId::Companion
-            && page != MainWindow::PageId::ReminderAlert) {
+            && page != MainWindow::PageId::ReminderAlert
+            && page != MainWindow::PageId::Developer) {
             m_controlTimeout.start();
         }
     });
@@ -136,6 +176,8 @@ void AppController::connectUi()
             this, &AppController::showReminders);
     connect(m_window, &MainWindow::settingsRequested,
             this, &AppController::showSettings);
+    connect(m_window, &MainWindow::developerRequested,
+            this, &AppController::showDeveloper);
     connect(m_window, &MainWindow::addReminderRequested, this, [this] {
         ReminderDraft draft;
         draft.timeOfDay = QTime::currentTime().addSecs(3600);
@@ -203,6 +245,46 @@ void AppController::connectUi()
     connect(m_window, &MainWindow::emergencyContactRequested, this, [this] {
         m_window->showToast(QStringLiteral("真实呼叫尚未接入，请立即使用电话或现场求助"));
     });
+    if (m_developerService) {
+        connect(m_window, &MainWindow::kwsEnableRequested,
+                m_developerService, &DeveloperService::setKwsEnabled);
+        connect(m_window, &MainWindow::kwsStartRequested,
+                m_developerService, &DeveloperService::startKws);
+        connect(m_window, &MainWindow::kwsStopRequested,
+                m_developerService, &DeveloperService::stopKws);
+        connect(m_window, &MainWindow::kwsRestartRequested,
+                m_developerService, &DeveloperService::restartKws);
+        connect(m_window, &MainWindow::kwsReconfigureRequested, this,
+                [this](const KeywordSpottingConfig& config) {
+            QString error;
+            if (!m_developerService->reconfigureKws(config, &error))
+                m_window->showToast(error);
+        });
+        connect(m_window, &MainWindow::visionEnableRequested,
+                m_developerService, &DeveloperService::setVisionEnabled);
+        connect(m_window, &MainWindow::visionStartRequested,
+                m_developerService, &DeveloperService::startVision);
+        connect(m_window, &MainWindow::visionStopRequested,
+                m_developerService, &DeveloperService::stopVision);
+        connect(m_window, &MainWindow::visionRestartRequested,
+                m_developerService, &DeveloperService::restartVision);
+        connect(m_window, &MainWindow::visionReconfigureRequested, this,
+                [this](const VisionConfig& config) {
+            QString error;
+            if (!m_developerService->reconfigureVision(config, &error))
+                m_window->showToast(error);
+        });
+        connect(m_window, &MainWindow::developerSimulationRequested, this,
+                [this](DeveloperSimulation simulation) {
+            switch (simulation) {
+            case DeveloperSimulation::Greeting: m_developerService->simulateGreeting(); break;
+            case DeveloperSimulation::Acknowledge: m_developerService->simulateAcknowledge(); break;
+            case DeveloperSimulation::Wave: m_developerService->simulateWave(); break;
+            case DeveloperSimulation::ReminderDue: m_developerService->simulateReminderDue(); break;
+            case DeveloperSimulation::Emergency: m_developerService->simulateEmergency(); break;
+            }
+        });
+    }
 }
 
 void AppController::connectServices()
@@ -234,11 +316,29 @@ void AppController::connectServices()
         });
         connect(m_visionService, &VisionService::waveDetected,
                 this, [this](const VisionDetection&) {
-            if (m_emergencyActive || hasActiveReminderAlert())
+            if (m_emergencyActive || hasActiveReminderAlert()) {
+                if (m_developerService)
+                    m_developerService->recordControllerEvent(
+                        QStringLiteral("Wave ignored"),
+                        m_emergencyActive ? QStringLiteral("Emergency active")
+                                          : QStringLiteral("ReminderAlert active"),
+                        DiagnosticLevel::Warning);
                 return;
+            }
             showHome();
+            if (m_developerService)
+                m_developerService->recordControllerEvent(
+                    QStringLiteral("Wave accepted"), QStringLiteral("Home requested"));
             m_window->showToast(QStringLiteral("看到你挥手啦，我在这里"));
         });
+    }
+    if (m_developerService) {
+        connect(m_developerService, &DeveloperService::snapshotChanged,
+                m_window, &MainWindow::setDeveloperSnapshot);
+        connect(m_developerService, &DeveloperService::diagnosticEventAdded,
+                m_window, &MainWindow::appendDiagnosticEvent);
+        connect(m_developerService, &DeveloperService::audioLevelChanged,
+                m_window, &MainWindow::setDeveloperAudioLevel);
     }
 }
 
@@ -255,7 +355,8 @@ void AppController::showPage(MainWindow::PageId page)
         return;
     m_window->showPage(page);
     if (page == MainWindow::PageId::Companion
-        || page == MainWindow::PageId::ReminderAlert) {
+        || page == MainWindow::PageId::ReminderAlert
+        || page == MainWindow::PageId::Developer) {
         m_controlTimeout.stop();
     } else {
         m_controlTimeout.start();
@@ -279,6 +380,15 @@ void AppController::showSettings()
     refreshSettings();
     m_window->setDeviceSummary(m_systemService->deviceSummary());
     showPage(MainWindow::PageId::Settings);
+}
+
+void AppController::showDeveloper()
+{
+    if (!m_developerService)
+        return;
+    m_window->setDeveloperSnapshot(m_developerService->snapshot());
+    m_window->setDiagnosticEvents(m_developerService->events());
+    showPage(MainWindow::PageId::Developer);
 }
 
 void AppController::editReminder(ReminderId id)
@@ -356,10 +466,19 @@ void AppController::enqueueReminderPresentation(
     const ReminderEventId eventId = presentation.occurrence.id;
     if (eventId == 0 || eventId == currentReminderEventId()
         || m_queuedEventIds.contains(eventId)) {
+        if (m_developerService)
+            m_developerService->recordControllerEvent(
+                QStringLiteral("Reminder presentation ignored"),
+                QStringLiteral("event=%1 duplicate/current").arg(eventId),
+                DiagnosticLevel::Warning);
         return;
     }
     m_pendingPresentations.enqueue(presentation);
     m_queuedEventIds.insert(eventId);
+    if (m_developerService)
+        m_developerService->recordControllerEvent(
+            QStringLiteral("Reminder presentation queued"),
+            QStringLiteral("event=%1").arg(eventId));
     if (!hasActiveReminderAlert())
         showNextReminderPresentation();
 }
@@ -381,6 +500,12 @@ void AppController::showNextReminderPresentation()
     showPage(MainWindow::PageId::ReminderAlert);
     m_alertPresentationTimeout.start();
     emit reminderVoicePlaybackRequested(m_currentPresentation.reminder);
+    if (m_developerService)
+        m_developerService->recordControllerEvent(
+            QStringLiteral("ReminderAlert shown"),
+            QStringLiteral("event=%1 count=%2")
+                .arg(m_currentPresentation.occurrence.id)
+                .arg(m_currentPresentation.occurrence.presentationCount));
 }
 
 void AppController::finishCurrentReminderPresentation()
@@ -392,8 +517,11 @@ void AppController::finishCurrentReminderPresentation()
     refreshCare();
     if (!m_pendingPresentations.isEmpty())
         showNextReminderPresentation();
-    else
+    else {
         restorePageAfterReminder();
+        if (!m_emergencyActive)
+            m_reminderService->resumeScheduling();
+    }
 }
 
 void AppController::expireCurrentReminderPresentation()
@@ -404,8 +532,11 @@ void AppController::expireCurrentReminderPresentation()
     m_window->clearReminderPresentation();
     if (!m_pendingPresentations.isEmpty())
         showNextReminderPresentation();
-    else
+    else {
         restorePageAfterReminder();
+        if (!m_emergencyActive)
+            m_reminderService->resumeScheduling();
+    }
 }
 
 void AppController::restorePageAfterReminder()
@@ -427,6 +558,11 @@ void AppController::showEmergency(const QString& detail)
     if (m_pageBeforeEmergency == MainWindow::PageId::Emergency)
         m_pageBeforeEmergency = MainWindow::PageId::Companion;
     m_emergencyActive = true;
+    m_reminderService->suspendScheduling();
+    if (m_developerService)
+        m_developerService->recordControllerEvent(
+            QStringLiteral("Emergency page entered"), detail,
+            DiagnosticLevel::Warning);
     m_controlTimeout.stop();
     if (hasActiveReminderAlert())
         m_alertPresentationTimeout.stop();
@@ -453,8 +589,12 @@ void AppController::dismissEmergency()
     m_window->showPage(target);
     if (!m_pendingPresentations.isEmpty())
         showNextReminderPresentation();
-    else if (target != MainWindow::PageId::Companion)
-        m_controlTimeout.start();
+    else {
+        m_reminderService->resumeScheduling();
+        if (!hasActiveReminderAlert()
+            && target != MainWindow::PageId::Companion)
+            m_controlTimeout.start();
+    }
 }
 
 void AppController::refreshReminders()

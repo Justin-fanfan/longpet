@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     LongPet
-    VERSION 0.2.0
+    VERSION 0.2.1
     LANGUAGES CXX
 )
 
@@ -39,6 +39,7 @@ set(
     src/model/ReminderModels.h
     src/model/KeywordSpottingModels.h
     src/model/VisionModels.h
+    src/model/DiagnosticsModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
     src/platform/NetworkStatusAdapter.cpp
@@ -49,6 +50,10 @@ set(
     src/platform/VisionAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
+    src/platform/AudioDeviceAdapter.cpp
+    src/platform/AudioDeviceAdapter.h
+    src/platform/CameraDeviceAdapter.cpp
+    src/platform/CameraDeviceAdapter.h
     src/platform/BacklightAdapter.cpp
     src/platform/BacklightAdapter.h
     src/platform/PowerStatusAdapter.cpp
@@ -73,6 +78,10 @@ set(
     src/services/SettingsService.h
     src/services/SystemService.cpp
     src/services/SystemService.h
+    src/services/DiagnosticsService.cpp
+    src/services/DiagnosticsService.h
+    src/services/DeveloperService.cpp
+    src/services/DeveloperService.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp
@@ -89,6 +98,8 @@ set(
     src/pages/ReminderEditPage.h
     src/pages/SettingsPage.cpp
     src/pages/SettingsPage.h
+    src/pages/DeveloperPage.cpp
+    src/pages/DeveloperPage.h
     src/pages/EmergencyPage.cpp
     src/pages/EmergencyPage.h
     src/pages/SleepPage.cpp

@@ -100,9 +100,23 @@ SettingsPage::SettingsPage(QWidget* parent)
         QStringLiteral("宠物风格"), QStringLiteral("本地用户设置"),
         m_petStyleButton, this);
 
+    auto* aboutControl = new QWidget(this);
+    aboutControl->setFixedWidth(180);
+    auto* aboutLayout = new QHBoxLayout(aboutControl);
+    aboutLayout->setContentsMargins(0, 0, 0, 0);
+    aboutLayout->setSpacing(6);
+    m_versionSummary = makeLabel({}, "assist", aboutControl);
+    m_versionSummary->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_developerButton = new QPushButton(QStringLiteral("诊断"), aboutControl);
+    m_developerButton->setObjectName(QStringLiteral("developerEntryButton"));
+    m_developerButton->setProperty("role", "secondaryCompact");
+    m_developerButton->setFixedSize(72, 48);
+    m_developerButton->hide();
+    aboutLayout->addWidget(m_versionSummary, 1);
+    aboutLayout->addWidget(m_developerButton);
     auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"),
         QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
-        summaryControl(&m_versionSummary, this), this);
+        aboutControl, this);
     auto* keywordSpotting = new SettingRow(QStringLiteral(":/icons/activity.svg"),
         QStringLiteral("本地感知"), QStringLiteral("离线语音与视觉"),
         summaryControl(&m_keywordSpottingSummary, this), this);
@@ -156,9 +170,16 @@ SettingsPage::SettingsPage(QWidget* parent)
     });
     connect(familyButton, &QPushButton::clicked,
             this, &SettingsPage::pairFamilyRequested);
+    connect(m_developerButton, &QPushButton::clicked,
+            this, &SettingsPage::developerRequested);
 
     setSettings({});
     setDeviceSummary({});
+}
+
+void SettingsPage::setDeveloperMode(bool enabled)
+{
+    m_developerButton->setVisible(enabled);
 }
 
 void SettingsPage::setSettings(const UserSettings& settings)

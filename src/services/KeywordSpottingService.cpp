@@ -25,6 +25,10 @@ KeywordSpottingService::KeywordSpottingService(KeywordSpottingAdapter* adapter,
             this, &KeywordSpottingService::handleDetection);
     connect(m_adapter, &KeywordSpottingAdapter::statusChanged,
             this, &KeywordSpottingService::handleRuntimeStatus);
+    connect(m_adapter, &KeywordSpottingAdapter::diagnosticMessage,
+            this, &KeywordSpottingService::adapterDiagnostic);
+    connect(m_adapter, &KeywordSpottingAdapter::recoveryScheduled,
+            this, &KeywordSpottingService::recoveryScheduled);
 }
 
 KeywordSpottingStatus KeywordSpottingService::status() const
@@ -57,6 +61,71 @@ KeywordSemantic KeywordSpottingService::semanticFor(
 int KeywordSpottingService::defaultCooldownMs()
 {
     return SemanticCooldownMs;
+}
+
+KeywordSpottingConfig KeywordSpottingService::config() const
+{
+    KeywordSpottingConfig config;
+    if (!m_adapter)
+        return config;
+    const auto options = m_adapter->options();
+    config.enabled = options.enabled;
+    config.audioDevice = options.audioDevice;
+    config.captureSampleRate = options.captureSampleRate;
+    config.captureChannels = options.captureChannels;
+    config.microphoneChannel = options.microphoneChannel;
+    config.threshold = options.threshold;
+    config.score = options.score;
+    return config;
+}
+
+bool KeywordSpottingService::setEnabled(bool enabled)
+{
+    return m_adapter && m_adapter->setEnabled(enabled);
+}
+
+bool KeywordSpottingService::start()
+{
+    return m_adapter && m_adapter->start();
+}
+
+void KeywordSpottingService::stop()
+{
+    if (m_adapter)
+        m_adapter->stop();
+}
+
+bool KeywordSpottingService::restart()
+{
+    return m_adapter && m_adapter->restart();
+}
+
+bool KeywordSpottingService::reconfigure(const KeywordSpottingConfig& config,
+                                         QString* error)
+{
+    if (!m_adapter) {
+        if (error)
+            *error = QStringLiteral("KWS Adapter 未配置");
+        return false;
+    }
+    auto options = m_adapter->options();
+    options.enabled = config.enabled;
+    options.audioDevice = config.audioDevice;
+    options.captureSampleRate = config.captureSampleRate;
+    options.captureChannels = config.captureChannels;
+    options.microphoneChannel = config.microphoneChannel;
+    options.threshold = config.threshold;
+    options.score = config.score;
+    return m_adapter->reconfigure(options, error);
+}
+
+void KeywordSpottingService::injectDiagnosticSemantic(
+    KeywordSemantic semantic, const QString& keyword)
+{
+    if (semantic == KeywordSemantic::Unknown)
+        return;
+    emit diagnosticInjectionRequested(semantic, keyword);
+    emit semanticDetected(semantic, keyword);
 }
 
 void KeywordSpottingService::handleDetection(const KeywordDetection& detection)

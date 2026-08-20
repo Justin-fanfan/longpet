@@ -19,6 +19,7 @@ except Exception as error:  # pragma: no cover - target degradation path
                 "available": False,
                 "monitoring": False,
                 "detail": f"视觉依赖加载失败：{error}",
+                "recoverable": False,
             },
             ensure_ascii=False,
         ),
@@ -194,6 +195,7 @@ def main() -> int:
                 "camera_available": False,
                 "monitoring": False,
                 "detail": f"摄像头 /dev/video{args.camera} 不可用",
+                "recoverable": True,
                 "camera_index": args.camera,
             }
         )

@@ -211,17 +211,62 @@ int ReminderService::presentationDurationMs() const
 
 void ReminderService::start()
 {
+    m_started = true;
+    if (m_schedulingSuspended)
+        return;
     checkDueReminders();
 }
 
 void ReminderService::stop()
 {
+    m_started = false;
     m_scheduler.stop();
 }
 
 void ReminderService::checkNow()
 {
+    if (m_schedulingSuspended)
+        return;
     checkDueReminders();
+}
+
+void ReminderService::suspendScheduling()
+{
+    m_schedulingSuspended = true;
+    m_scheduler.stop();
+}
+
+void ReminderService::resumeScheduling()
+{
+    if (!m_schedulingSuspended)
+        return;
+    m_schedulingSuspended = false;
+    if (m_started)
+        checkDueReminders();
+}
+
+bool ReminderService::isSchedulingSuspended() const
+{
+    return m_schedulingSuspended;
+}
+
+void ReminderService::requestDiagnosticPresentation()
+{
+    static ReminderEventId nextDiagnosticId = -1;
+    ReminderPresentation presentation;
+    presentation.diagnostic = true;
+    presentation.reminder.id = nextDiagnosticId;
+    presentation.reminder.uuid = QStringLiteral("developer-simulation");
+    presentation.reminder.type = ReminderType::Other;
+    presentation.reminder.title = QStringLiteral("开发者模拟提醒");
+    presentation.reminder.iconKey = QStringLiteral("reminder");
+    presentation.occurrence.id = nextDiagnosticId--;
+    presentation.occurrence.reminderId = presentation.reminder.id;
+    presentation.occurrence.scheduledAt = now();
+    presentation.occurrence.status = ReminderOccurrenceStatus::Presented;
+    presentation.occurrence.presentationCount = 1;
+    presentation.occurrence.lastPresentedAt = now();
+    emit reminderPresentationRequested(presentation);
 }
 
 bool ReminderService::appliesOnDate(const Reminder& reminder, const QDate& date) const
@@ -261,6 +306,8 @@ QDateTime ReminderService::now() const
 void ReminderService::scheduleNext()
 {
     m_scheduler.stop();
+    if (!m_started || m_schedulingSuspended)
+        return;
     QString error;
     const QList<Reminder> all = m_repository->all(&error);
     if (!error.isEmpty()) {
@@ -289,6 +336,8 @@ void ReminderService::scheduleNext()
 
 void ReminderService::checkDueReminders()
 {
+    if (!m_started || m_schedulingSuspended)
+        return;
     QString error;
     const QList<Reminder> all = m_repository->all(&error);
     if (!error.isEmpty()) {

@@ -34,6 +34,10 @@ public:
     void start();
     void stop();
     void checkNow();
+    void suspendScheduling();
+    void resumeScheduling();
+    bool isSchedulingSuspended() const;
+    void requestDiagnosticPresentation();
 
 signals:
     void remindersChanged();
@@ -55,4 +59,6 @@ private:
     ReminderRepository* m_repository = nullptr;
     Clock m_clock;
     QTimer m_scheduler;
+    bool m_started = false;
+    bool m_schedulingSuspended = false;
 };

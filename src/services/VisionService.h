@@ -22,6 +22,14 @@ public:
     static bool isDetectionValid(const VisionDetection& detection,
                                  QString* reason = nullptr);
     static int defaultCooldownMs(VisionEventType type);
+    VisionConfig config() const;
+    bool setEnabled(bool enabled);
+    bool start();
+    void stop();
+    bool restart();
+    bool reconfigure(const VisionConfig& config, QString* error = nullptr);
+    void injectDiagnosticDetection(VisionEventType type,
+                                   double confidence = 1.0);
 
 public slots:
     void handleDetection(const VisionDetection& detection);
@@ -36,6 +44,9 @@ signals:
     void fallCandidateDetected(const VisionDetection& detection);
     void fallConfirmed(const VisionDetection& detection);
     void waveDetected(const VisionDetection& detection);
+    void diagnosticInjectionRequested(const VisionDetection& detection);
+    void adapterDiagnostic(const QString& message);
+    void recoveryScheduled(int attempt, int delayMs);
 
 private:
     VisionAdapter* m_adapter = nullptr;

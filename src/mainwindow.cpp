@@ -3,6 +3,7 @@
 #include "pages/CarePage.h"
 #include "pages/CompanionPage.h"
 #include "pages/EmergencyPage.h"
+#include "pages/DeveloperPage.h"
 #include "pages/HomePage.h"
 #include "pages/ReminderEditPage.h"
 #include "pages/ReminderAlertPage.h"
@@ -16,7 +17,7 @@
 #include <QStackedWidget>
 #include <QVBoxLayout>
 
-MainWindow::MainWindow(QWidget* parent)
+MainWindow::MainWindow(bool developerMode, QWidget* parent)
     : QWidget(parent)
 {
     setObjectName(QStringLiteral("mainWindow"));
@@ -40,6 +41,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_settingsPage = new SettingsPage(m_stack);
     m_reminderAlertPage = new ReminderAlertPage(m_stack);
     m_emergencyPage = new EmergencyPage(m_stack);
+    m_developerPage = new DeveloperPage(m_stack);
     for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
                           static_cast<QWidget*>(m_homePage),
                           static_cast<QWidget*>(m_carePage),
@@ -47,7 +49,8 @@ MainWindow::MainWindow(QWidget* parent)
                           static_cast<QWidget*>(m_reminderEditPage),
                           static_cast<QWidget*>(m_settingsPage),
                           static_cast<QWidget*>(m_reminderAlertPage),
-                          static_cast<QWidget*>(m_emergencyPage)}) {
+                          static_cast<QWidget*>(m_emergencyPage),
+                          static_cast<QWidget*>(m_developerPage)}) {
         m_stack->addWidget(page);
     }
     root->addWidget(m_stack);
@@ -101,10 +104,37 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::petStyleChangeRequested);
     connect(m_settingsPage, &SettingsPage::pairFamilyRequested,
             this, &MainWindow::pairFamilyRequested);
+    m_settingsPage->setDeveloperMode(developerMode);
+    connect(m_settingsPage, &SettingsPage::developerRequested,
+            this, &MainWindow::developerRequested);
     connect(m_emergencyPage, &EmergencyPage::dismissRequested,
             this, &MainWindow::emergencyDismissRequested);
     connect(m_emergencyPage, &EmergencyPage::contactRequested,
             this, &MainWindow::emergencyContactRequested);
+    connect(m_developerPage, &DeveloperPage::backRequested,
+            this, &MainWindow::settingsRequested);
+    connect(m_developerPage, &DeveloperPage::kwsEnableRequested,
+            this, &MainWindow::kwsEnableRequested);
+    connect(m_developerPage, &DeveloperPage::kwsStartRequested,
+            this, &MainWindow::kwsStartRequested);
+    connect(m_developerPage, &DeveloperPage::kwsStopRequested,
+            this, &MainWindow::kwsStopRequested);
+    connect(m_developerPage, &DeveloperPage::kwsRestartRequested,
+            this, &MainWindow::kwsRestartRequested);
+    connect(m_developerPage, &DeveloperPage::kwsReconfigureRequested,
+            this, &MainWindow::kwsReconfigureRequested);
+    connect(m_developerPage, &DeveloperPage::visionEnableRequested,
+            this, &MainWindow::visionEnableRequested);
+    connect(m_developerPage, &DeveloperPage::visionStartRequested,
+            this, &MainWindow::visionStartRequested);
+    connect(m_developerPage, &DeveloperPage::visionStopRequested,
+            this, &MainWindow::visionStopRequested);
+    connect(m_developerPage, &DeveloperPage::visionRestartRequested,
+            this, &MainWindow::visionRestartRequested);
+    connect(m_developerPage, &DeveloperPage::visionReconfigureRequested,
+            this, &MainWindow::visionReconfigureRequested);
+    connect(m_developerPage, &DeveloperPage::simulationRequested,
+            this, &MainWindow::developerSimulationRequested);
     qApp->installEventFilter(this);
     showPage(PageId::Companion);
 }
@@ -182,6 +212,26 @@ void MainWindow::setEmergencyDetail(const QString& detail)
     m_emergencyPage->setDetail(detail);
 }
 
+void MainWindow::setDeveloperSnapshot(const DeveloperSnapshot& snapshot)
+{
+    m_developerPage->setSnapshot(snapshot);
+}
+
+void MainWindow::setDiagnosticEvents(const QList<DiagnosticEvent>& events)
+{
+    m_developerPage->setEvents(events);
+}
+
+void MainWindow::appendDiagnosticEvent(const DiagnosticEvent& event)
+{
+    m_developerPage->appendEvent(event);
+}
+
+void MainWindow::setDeveloperAudioLevel(double rms, double peak)
+{
+    m_developerPage->setAudioLevel(rms, peak);
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
     const auto* watchedWidget = qobject_cast<QWidget*>(watched);
@@ -189,7 +239,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
     const bool belongsToCurrent = watched == current
         || (watchedWidget && current && current->isAncestorOf(watchedWidget));
     if (belongsToCurrent && m_currentPage != PageId::Companion
-        && m_currentPage != PageId::ReminderAlert) {
+        && m_currentPage != PageId::ReminderAlert
+        && m_currentPage != PageId::Developer) {
         switch (event->type()) {
         case QEvent::MouseButtonPress:
         case QEvent::TouchBegin:
@@ -214,6 +265,7 @@ QWidget* MainWindow::pageWidget(PageId page) const
     case PageId::Settings: return m_settingsPage;
     case PageId::ReminderAlert: return m_reminderAlertPage;
     case PageId::Emergency: return m_emergencyPage;
+    case PageId::Developer: return m_developerPage;
     }
     return nullptr;
 }

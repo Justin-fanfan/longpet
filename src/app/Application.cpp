@@ -7,12 +7,16 @@
 #include "data/SettingsRepository.h"
 #include "mainwindow.h"
 #include "platform/AudioVolumeAdapter.h"
+#include "platform/AudioDeviceAdapter.h"
 #include "platform/BacklightAdapter.h"
+#include "platform/CameraDeviceAdapter.h"
 #include "platform/KeywordSpottingAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/PowerStatusAdapter.h"
 #include "platform/VisionAdapter.h"
 #include "services/CareService.h"
+#include "services/DeveloperService.h"
+#include "services/DiagnosticsService.h"
 #include "services/KeywordSpottingService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
@@ -62,6 +66,17 @@ bool Application::initialize(QString* error)
         m_keywordSpottingAdapter.get());
     m_visionAdapter = std::make_unique<VisionAdapter>();
     m_visionService = std::make_unique<VisionService>(m_visionAdapter.get());
+    m_diagnosticsService = std::make_unique<DiagnosticsService>(200);
+    m_audioDeviceAdapter = std::make_unique<AudioDeviceAdapter>();
+    m_cameraDeviceAdapter = std::make_unique<CameraDeviceAdapter>();
+    m_developerService = std::make_unique<DeveloperService>(
+        m_keywordSpottingService.get(), m_visionService.get(),
+        m_reminderService.get(), m_systemService.get(),
+        m_audioDeviceAdapter.get(), m_cameraDeviceAdapter.get(),
+        m_diagnosticsService.get(),
+        [this] { return m_database && m_database->isOpen(); },
+        [this] { return m_database ? m_database->schemaVersion() : 0; },
+        [this] { return m_database ? m_database->databasePath() : QString(); });
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
     m_audioVolumeAdapter = std::make_unique<AudioVolumeAdapter>();
     m_backlightAdapter = std::make_unique<BacklightAdapter>();
@@ -102,11 +117,13 @@ bool Application::initialize(QString* error)
     const UserSettings currentSettings = m_settingsService->settings();
     m_audioVolumeAdapter->applyVolume(currentSettings.volume);
     m_backlightAdapter->applyBrightness(currentSettings.brightness);
-    m_window = std::make_unique<MainWindow>();
+    const bool developerMode = qEnvironmentVariableIntValue(
+        "LONGPET_DEVELOPER_MODE") == 1;
+    m_window = std::make_unique<MainWindow>(developerMode);
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
         m_systemService.get(), 15'000, m_keywordSpottingService.get(),
-        m_visionService.get());
+        m_visionService.get(), m_developerService.get());
     m_controller->initialize();
     const KeywordSpottingStatus keywordStatus = m_keywordSpottingService->status();
     m_systemService->setKeywordSpottingState(
@@ -162,6 +179,10 @@ void Application::shutdown()
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
+    m_developerService.reset();
+    m_cameraDeviceAdapter.reset();
+    m_audioDeviceAdapter.reset();
+    m_diagnosticsService.reset();
     m_visionService.reset();
     m_visionAdapter.reset();
     m_keywordSpottingService.reset();

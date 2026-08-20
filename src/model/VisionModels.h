@@ -30,9 +30,21 @@ struct VisionDetection {
     QJsonObject metadata;
 };
 
+struct VisionConfig {
+    bool enabled = false;
+    int cameraIndex = 0;
+    int frameWidth = 320;
+    int frameHeight = 240;
+    int targetFps = 5;
+    bool waveEnabled = true;
+    bool fallCandidateEnabled = false;
+};
+
 struct VisionStatus {
     VisionRuntimeState state = VisionRuntimeState::Disabled;
+    bool enabled = false;
     bool available = false;
+    bool running = false;
     bool cameraAvailable = false;
     bool monitoring = false;
     QString summary = QStringLiteral("视觉感知未启动");
@@ -41,9 +53,19 @@ struct VisionStatus {
     int cameraIndex = -1;
     VisionEventType lastEventType = VisionEventType::Unknown;
     QDateTime lastEventAt;
+    double lastConfidence = 0.0;
+    qint64 workerPid = 0;
+    QDateTime startedAt;
+    QString errorDetail;
+    int frameWidth = 320;
+    int frameHeight = 240;
+    int targetFps = 5;
+    bool waveEnabled = true;
+    bool fallCandidateEnabled = false;
 };
 
 Q_DECLARE_METATYPE(VisionDetection)
+Q_DECLARE_METATYPE(VisionConfig)
 Q_DECLARE_METATYPE(VisionEventType)
 Q_DECLARE_METATYPE(VisionRuntimeState)
 Q_DECLARE_METATYPE(VisionStatus)

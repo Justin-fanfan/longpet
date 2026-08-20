@@ -109,6 +109,7 @@ struct ReminderOccurrence {
 struct ReminderPresentation {
     Reminder reminder;
     ReminderOccurrence occurrence;
+    bool diagnostic = false;
 };
 
 struct ServiceResult {

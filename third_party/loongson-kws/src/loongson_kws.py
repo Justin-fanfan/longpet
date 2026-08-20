@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import ctypes
 import json
 import multiprocessing as mp
 import os
@@ -15,7 +16,22 @@ from collections import deque
 from datetime import datetime
 from pathlib import Path
 
-import numpy as np
+try:
+    import numpy as np
+except ModuleNotFoundError as error:
+    print(
+        json.dumps(
+            {
+                "event": "runtime_status",
+                "state": "error",
+                "detail": f"关键词识别依赖缺失：{error}",
+                "recoverable": False,
+            },
+            ensure_ascii=False,
+        ),
+        flush=True,
+    )
+    raise SystemExit(2)
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -27,15 +43,10 @@ MODEL_DIR = (
 KEYWORDS_FILE = PROJECT_ROOT / "config" / "keywords.txt"
 
 MODEL_SAMPLE_RATE = 16_000
-CAPTURE_SAMPLE_RATE = 44_100
-CAPTURE_CHANNELS = 2
-MIC_CHANNEL = 0
 DEFAULT_DEVICE_ID = 0
-ALSA_DEVICE = "hw:0,0"
 
-# 50 ms is short enough for VAD and is accepted reliably by ES8388.
+# 100 ms is short enough for VAD and is accepted reliably by ES8388.
 FRAME_SECONDS = 0.10
-CAPTURE_FRAMES = int(CAPTURE_SAMPLE_RATE * FRAME_SECONDS)
 
 CALIBRATION_SECONDS = 1.5
 PRE_ROLL_SECONDS = 0.45
@@ -76,11 +87,12 @@ def emit_signal(keyword, source="microphone"):
     return event
 
 
-def emit_runtime_status(state, detail=""):
+def emit_runtime_status(state, detail="", recoverable=True):
     event = {
         "event": "runtime_status",
         "state": state,
         "detail": detail,
+        "recoverable": recoverable,
         "timestamp": datetime.now().astimezone().isoformat(timespec="milliseconds"),
     }
     print(json.dumps(event, ensure_ascii=False), flush=True)
@@ -91,6 +103,19 @@ def request_shutdown(signum, frame):
     del signum, frame
     global SHUTDOWN_REQUESTED
     SHUTDOWN_REQUESTED = True
+
+
+def arm_parent_death_signal():
+    """Terminate descendants if their direct parent disappears (Linux)."""
+    if not sys.platform.startswith("linux"):
+        return
+    try:
+        libc = ctypes.CDLL(None, use_errno=True)
+        libc.prctl(1, signal.SIGTERM)
+        if os.getppid() == 1:
+            os.kill(os.getpid(), signal.SIGTERM)
+    except (AttributeError, OSError):
+        pass
 
 
 def model_path(component, int8=True):
@@ -184,20 +209,20 @@ def put_latest(target_queue, value):
         return True
 
 
-def start_arecord():
+def start_arecord(audio_device, sample_rate, channels):
     command = [
         "arecord",
         "-M",
         "-D",
-        ALSA_DEVICE,
+        audio_device,
         "-t",
         "raw",
         "-f",
         "S16_LE",
         "-c",
-        str(CAPTURE_CHANNELS),
+        str(channels),
         "-r",
-        str(CAPTURE_SAMPLE_RATE),
+        str(sample_rate),
         "-q",
     ]
     recorder = subprocess.Popen(
@@ -205,6 +230,7 @@ def start_arecord():
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         bufsize=0,
+        preexec_fn=arm_parent_death_signal if sys.platform.startswith("linux") else None,
     )
     if recorder.stdout is None:
         recorder.terminate()
@@ -241,14 +267,16 @@ def read_arecord_frame(recorder, frame_bytes, timeout=1.5):
     return bytes(data)
 
 
-def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
+def capture_worker(
+    audio_device, sample_rate, channels, microphone_channel,
+    utterance_queue, status_queue, stop_event, debug
+):
+    arm_parent_death_signal()
     # The recorder must remain schedulable while ONNX saturates the only CPU core.
     try:
         os.nice(-5)
     except (AttributeError, OSError):
         pass
-
-    del device_id
 
     calibration_frames = max(1, round(CALIBRATION_SECONDS / FRAME_SECONDS))
     pre_roll_frames = max(1, round(PRE_ROLL_SECONDS / FRAME_SECONDS))
@@ -269,11 +297,13 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
     frame_count = 0
     restarts = 0
     recorder = None
+    speech_started_at = 0.0
 
     try:
-        recorder = start_arecord()
-        safe_status(status_queue, ("stream_started", ALSA_DEVICE))
-        frame_bytes = CAPTURE_FRAMES * CAPTURE_CHANNELS * 2
+        recorder = start_arecord(audio_device, sample_rate, channels)
+        safe_status(status_queue, ("stream_started", audio_device))
+        capture_frames = int(sample_rate * FRAME_SECONDS)
+        frame_bytes = capture_frames * channels * 2
 
         while not stop_event.is_set():
                 raw = read_arecord_frame(recorder, frame_bytes)
@@ -287,15 +317,15 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
                     if stop_event.is_set():
                         break
                     time.sleep(0.2)
-                    recorder = start_arecord()
+                    recorder = start_arecord(audio_device, sample_rate, channels)
                     restarts += 1
                     if restarts > 5:
                         raise RuntimeError("arecord 连续 5 次停止输出")
                     continue
 
-                pcm = np.frombuffer(raw, dtype="<i2").reshape(-1, CAPTURE_CHANNELS)
+                pcm = np.frombuffer(raw, dtype="<i2").reshape(-1, channels)
                 samples = np.asarray(
-                    pcm[:, MIC_CHANNEL], dtype=np.float32
+                    pcm[:, microphone_channel], dtype=np.float32
                 ) / 32768.0
                 # ES8388 may carry a small DC offset; KWS and VAD need AC speech.
                 samples -= float(np.mean(samples))
@@ -334,6 +364,7 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
 
                     if onset_frames >= 2:
                         in_speech = True
+                        speech_started_at = time.monotonic()
                         utterance = list(pre_roll)
                         silence_frames = 0
                         onset_frames = 0
@@ -354,7 +385,13 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
                             complete = np.ascontiguousarray(
                                 np.concatenate(utterance), dtype=np.float32
                             )
-                            if put_latest(utterance_queue, complete):
+                            packet = (
+                                complete,
+                                speech_started_at,
+                                time.monotonic(),
+                                dropped_utterances,
+                            )
+                            if put_latest(utterance_queue, packet):
                                 dropped_utterances += 1
                             sent += 1
                             safe_status(
@@ -362,7 +399,7 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
                                 (
                                     "utterance",
                                     sent,
-                                    len(complete) / CAPTURE_SAMPLE_RATE,
+                                    len(complete) / sample_rate,
                                     float(np.max(np.abs(complete))),
                                     dropped_utterances,
                                 ),
@@ -373,7 +410,7 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
                         pre_roll.clear()
 
                 now = time.monotonic()
-                if debug and now - last_level >= 1.0:
+                if now - last_level >= 0.2:
                     last_level = now
                     safe_status(
                         status_queue,
@@ -385,11 +422,14 @@ def capture_worker(device_id, utterance_queue, status_queue, stop_event, debug):
                             start_rms,
                             frame_count,
                             restarts,
-                            0,
+                            dropped_utterances,
                         ),
                     )
     except BaseException as exc:
-        safe_status(status_queue, ("capture_error", repr(exc)))
+        safe_status(
+            status_queue,
+            ("capture_error", repr(exc), isinstance(exc, FileNotFoundError)),
+        )
         stop_event.set()
     finally:
         if recorder is not None:
@@ -472,13 +512,26 @@ def drain_status(status_queue, debug=False):
                 f"[VAD] 语句 #{message[1]}：{message[2]:.2f}s "
                 f"peak={message[3]:.4f} 丢弃旧语句={message[4]}"
             )
-        elif kind == "level" and debug:
-            log(
-                f"[AUDIO] rms={message[1]:.5f} peak={message[2]:.5f} "
-                f"noise={message[3]:.5f} trigger={message[4]:.5f} "
-                f"callbacks={message[5]} callback_dropped={message[6]} "
-                f"status={message[7]}"
+        elif kind == "level":
+            print(
+                json.dumps(
+                    {
+                        "event": "audio_level",
+                        "rms": round(message[1], 6),
+                        "peak": round(message[2], 6),
+                        "noise_floor": round(message[3], 6),
+                        "dropped_utterances": message[7],
+                    },
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                ),
+                flush=True,
             )
+            if debug:
+                log(
+                    f"[AUDIO] rms={message[1]:.5f} peak={message[2]:.5f} "
+                    f"noise={message[3]:.5f} trigger={message[4]:.5f}"
+                )
         elif kind == "audio_status":
             log(f"[AUDIO] PortAudio 状态：{message[1]}")
         elif kind == "recorder_restart":
@@ -487,6 +540,8 @@ def drain_status(status_queue, debug=False):
                 f"第 {message[1]} 次，退出码={message[2]}"
             )
         elif kind == "capture_error":
+            if len(message) > 2 and message[2]:
+                raise FileNotFoundError(f"录音依赖缺失：{message[1]}")
             raise RuntimeError(f"录音进程异常：{message[1]}")
         elif kind == "capture_stopped" and debug:
             log(
@@ -523,7 +578,10 @@ def listen(args):
     recorder = context.Process(
         target=capture_worker,
         args=(
-            args.device,
+            args.alsa_device,
+            args.sample_rate,
+            args.channels,
+            args.mic_channel,
             utterance_queue,
             status_queue,
             stop_event,
@@ -539,7 +597,10 @@ def listen(args):
     log("========================================")
     log("关键词识别已启动")
     log(f"关键词：{names}")
-    log(f"录音：arecord {ALSA_DEVICE} / 44100 Hz / 2 ch / channel 0")
+    log(
+        f"录音：arecord {args.alsa_device} / {args.sample_rate} Hz / "
+        f"{args.channels} ch / channel {args.mic_channel}"
+    )
     log("采集与推理已分离；推理期间麦克风仍持续工作。")
     log("按 Ctrl+C 退出。")
     log("========================================")
@@ -556,7 +617,9 @@ def listen(args):
                 drain_status(status_queue, args.debug)
                 raise RuntimeError(f"录音进程意外退出，exitcode={recorder.exitcode}")
             try:
-                utterance = utterance_queue.get(timeout=0.2)
+                utterance, speech_started_at, captured_at, dropped_utterances = (
+                    utterance_queue.get(timeout=0.2)
+                )
             except queue.Empty:
                 continue
 
@@ -564,11 +627,11 @@ def listen(args):
             prepared, gain, raw_peak = prepare_microphone_samples(utterance)
             log(
                 f"[KWS] 开始处理语句 #{processed}："
-                f"{len(prepared) / CAPTURE_SAMPLE_RATE:.2f}s "
+                f"{len(prepared) / args.sample_rate:.2f}s "
                 f"raw_peak={raw_peak:.4f} gain=x{gain:.2f}"
             )
             result, decodes, elapsed, duration = decode_samples(
-                kws, CAPTURE_SAMPLE_RATE, prepared
+                kws, args.sample_rate, prepared
             )
             log(
                 f"[KWS] 完成语句 #{processed}：decodes={decodes} "
@@ -577,6 +640,25 @@ def listen(args):
             )
             if result:
                 emit_signal(result)
+            keyword_latency_ms = (
+                (time.monotonic() - speech_started_at) * 1000.0 if result else 0.0
+            )
+            print(
+                json.dumps(
+                    {
+                        "event": "decode_metrics",
+                        "elapsed_ms": round(elapsed * 1000.0, 2),
+                        "rtf": round(elapsed / max(duration, 1e-6), 3),
+                        "keyword_latency_ms": round(keyword_latency_ms, 2),
+                        "capture_to_decode_ms": round(
+                            max(0.0, time.monotonic() - captured_at) * 1000.0, 2
+                        ),
+                        "dropped_utterances": dropped_utterances,
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
             drain_status(status_queue, args.debug)
     finally:
         stop_event.set()
@@ -600,6 +682,10 @@ def parse_args():
         description="Loongson 2K0300 + ES8388 关键词识别"
     )
     parser.add_argument("--device", type=int, default=DEFAULT_DEVICE_ID)
+    parser.add_argument("--alsa-device", default="hw:0,0")
+    parser.add_argument("--sample-rate", type=int, default=44_100)
+    parser.add_argument("--channels", type=int, default=2)
+    parser.add_argument("--mic-channel", type=int, default=0)
     parser.add_argument("--keywords", type=Path, default=KEYWORDS_FILE)
     parser.add_argument("--threshold", type=float, default=0.20)
     parser.add_argument("--score", type=float, default=1.5)
@@ -616,6 +702,12 @@ def main():
     signal.signal(signal.SIGTERM, request_shutdown)
     signal.signal(signal.SIGINT, request_shutdown)
     args = parse_args()
+    if not 8_000 <= args.sample_rate <= 192_000:
+        raise SystemExit("--sample-rate must be between 8000 and 192000")
+    if not 1 <= args.channels <= 8:
+        raise SystemExit("--channels must be between 1 and 8")
+    if not 0 <= args.mic_channel < args.channels:
+        raise SystemExit("--mic-channel must select an existing channel")
     args.keywords = args.keywords.resolve()
     emit_runtime_status("starting", "关键词模型加载中")
     try:
@@ -637,7 +729,10 @@ def main():
         return 130
     except Exception as exc:
         log(f"程序异常：{exc}")
-        emit_runtime_status("error", f"关键词识别不可用：{exc}")
+        nonrecoverable = isinstance(exc, (FileNotFoundError, ModuleNotFoundError))
+        emit_runtime_status(
+            "error", f"关键词识别不可用：{exc}", recoverable=not nonrecoverable
+        )
         return 1
 
 

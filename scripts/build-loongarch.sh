@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 
 set -euo pipefail
-PROJECT_DIR="/mnt/d/code_qt/longpet"
-BUILD_DIR="$HOME/build/LongPet-loongarch64-release"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+BUILD_DIR="${BUILD_DIR:-$HOME/build/LongPet-loongarch64-release}"
 BUILD_JOBS="${LONGPET_BUILD_JOBS:-$(nproc)}"
 
 cmake \
