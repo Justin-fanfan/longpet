@@ -38,12 +38,15 @@ set(
     src/model/ReminderModels.cpp
     src/model/ReminderModels.h
     src/model/KeywordSpottingModels.h
+    src/model/VisionModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
     src/platform/KeywordSpottingAdapter.cpp
     src/platform/KeywordSpottingAdapter.h
+    src/platform/VisionAdapter.cpp
+    src/platform/VisionAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
     src/platform/BacklightAdapter.cpp
@@ -62,6 +65,8 @@ set(
     src/services/ReminderService.h
     src/services/KeywordSpottingService.cpp
     src/services/KeywordSpottingService.h
+    src/services/VisionService.cpp
+    src/services/VisionService.h
     src/services/CareService.cpp
     src/services/CareService.h
     src/services/SettingsService.cpp
@@ -160,6 +165,13 @@ install(
     PATTERN ".git" EXCLUDE
     PATTERN ".artifacts" EXCLUDE
     PATTERN "__pycache__" EXCLUDE
+)
+
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/third_party/longpet-vision/
+    DESTINATION share/longpet/vision
+    PATTERN "__pycache__" EXCLUDE
+    PATTERN "*.pyc" EXCLUDE
 )
 
 option(LONGPET_BUILD_TESTS "Build LongPet V0.2 tests" OFF)

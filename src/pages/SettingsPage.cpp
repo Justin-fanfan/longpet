@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -102,8 +103,8 @@ SettingsPage::SettingsPage(QWidget* parent)
     auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"),
         QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
         summaryControl(&m_versionSummary, this), this);
-    auto* keywordSpotting = new SettingRow(QStringLiteral(":/icons/microphone.svg"),
-        QStringLiteral("语音关键词"), QStringLiteral("本地离线识别"),
+    auto* keywordSpotting = new SettingRow(QStringLiteral(":/icons/activity.svg"),
+        QStringLiteral("本地感知"), QStringLiteral("离线语音与视觉"),
         summaryControl(&m_keywordSpottingSummary, this), this);
     m_keywordSpottingSummary->setObjectName(QStringLiteral("keywordSpottingSummary"));
     auto* power = new SettingRow(QStringLiteral(":/icons/battery.svg"),
@@ -192,11 +193,33 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
     m_versionSummary->setText(summary.softwareVersion.isEmpty()
         ? QStringLiteral("LongPet V0.2")
         : QStringLiteral("LongPet V%1").arg(summary.softwareVersion));
-    QString keywordSummary = summary.keywordSpottingSummary.isEmpty()
-        ? QStringLiteral("关键词识别未启动") : summary.keywordSpottingSummary;
+    const QString keywordLine = summary.keywordSpottingListening
+        ? QStringLiteral("语音：监听中")
+        : (summary.keywordSpottingAvailable
+            ? QStringLiteral("语音：已就绪")
+            : QStringLiteral("语音：未启动"));
+    QString visionLine;
+    if (summary.visionMonitoring && summary.visionFps > 0.0) {
+        visionLine = QStringLiteral("视觉：%1 FPS")
+            .arg(summary.visionFps, 0, 'f', 1);
+    } else if (summary.visionMonitoring) {
+        visionLine = QStringLiteral("视觉：监护中");
+    } else if (summary.visionAvailable) {
+        visionLine = QStringLiteral("视觉：已就绪");
+    } else {
+        visionLine = QStringLiteral("视觉：未启动");
+    }
+    m_keywordSpottingSummary->setText(
+        keywordLine + QLatin1Char('\n') + visionLine);
+    QStringList perceptionDetails;
+    if (!summary.keywordSpottingSummary.isEmpty())
+        perceptionDetails.append(summary.keywordSpottingSummary);
     if (!summary.lastKeyword.isEmpty())
-        keywordSummary += QStringLiteral("\n最近：%1").arg(summary.lastKeyword);
-    m_keywordSpottingSummary->setText(keywordSummary);
+        perceptionDetails.append(QStringLiteral("最近关键词：%1").arg(summary.lastKeyword));
+    if (!summary.visionSummary.isEmpty())
+        perceptionDetails.append(summary.visionSummary);
+    m_keywordSpottingSummary->setToolTip(
+        perceptionDetails.join(QLatin1Char('\n')));
     m_powerSummary->setText(summary.powerSummary.isEmpty()
         ? QStringLiteral("电源状态未知") : summary.powerSummary);
 }

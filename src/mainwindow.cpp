@@ -177,6 +177,11 @@ void MainWindow::setDeviceSummary(const DeviceSummary& summary)
     m_settingsPage->setDeviceSummary(summary);
 }
 
+void MainWindow::setEmergencyDetail(const QString& detail)
+{
+    m_emergencyPage->setDetail(detail);
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
     const auto* watchedWidget = qobject_cast<QWidget*>(watched);

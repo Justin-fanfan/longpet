@@ -6,6 +6,7 @@
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
+#include "services/VisionService.h"
 
 AppController::AppController(MainWindow* window,
                              ReminderService* reminderService,
@@ -14,6 +15,7 @@ AppController::AppController(MainWindow* window,
                              SystemService* systemService,
                              int controlTimeoutMs,
                              KeywordSpottingService* keywordSpottingService,
+                             VisionService* visionService,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
@@ -21,7 +23,8 @@ AppController::AppController(MainWindow* window,
       m_careService(careService),
       m_settingsService(settingsService),
       m_systemService(systemService),
-      m_keywordSpottingService(keywordSpottingService)
+      m_keywordSpottingService(keywordSpottingService),
+      m_visionService(visionService)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -99,7 +102,7 @@ bool AppController::handleKeywordSemantic(KeywordSemantic semantic,
             : QStringLiteral("听到“%1”，我在呢").arg(keyword));
         return true;
     case KeywordSemantic::Emergency:
-        showEmergency();
+        showEmergency(QStringLiteral("听到紧急求助，请确认是否需要联系家人"));
         return true;
     case KeywordSemantic::Stop:
         emit stopVoicePlaybackRequested();
@@ -223,6 +226,19 @@ void AppController::connectServices()
     if (m_keywordSpottingService) {
         connect(m_keywordSpottingService, &KeywordSpottingService::semanticDetected,
                 this, &AppController::handleKeywordSemantic);
+    }
+    if (m_visionService) {
+        connect(m_visionService, &VisionService::fallConfirmed,
+                this, [this](const VisionDetection&) {
+            showEmergency(QStringLiteral("视觉监护检测到可能跌倒"));
+        });
+        connect(m_visionService, &VisionService::waveDetected,
+                this, [this](const VisionDetection&) {
+            if (m_emergencyActive || hasActiveReminderAlert())
+                return;
+            showHome();
+            m_window->showToast(QStringLiteral("看到你挥手啦，我在这里"));
+        });
     }
 }
 
@@ -400,10 +416,13 @@ void AppController::restorePageAfterReminder()
     showPage(target);
 }
 
-void AppController::showEmergency()
+void AppController::showEmergency(const QString& detail)
 {
-    if (m_emergencyActive)
+    if (m_emergencyActive) {
+        if (!detail.simplified().isEmpty())
+            m_window->setEmergencyDetail(detail);
         return;
+    }
     m_pageBeforeEmergency = m_window->currentPage();
     if (m_pageBeforeEmergency == MainWindow::PageId::Emergency)
         m_pageBeforeEmergency = MainWindow::PageId::Companion;
@@ -411,6 +430,7 @@ void AppController::showEmergency()
     m_controlTimeout.stop();
     if (hasActiveReminderAlert())
         m_alertPresentationTimeout.stop();
+    m_window->setEmergencyDetail(detail);
     m_window->showPage(MainWindow::PageId::Emergency);
 }
 

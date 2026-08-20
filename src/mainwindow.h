@@ -47,6 +47,7 @@ public:
     void setSettings(const UserSettings& settings);
     void setSystemStatus(const SystemStatus& status);
     void setDeviceSummary(const DeviceSummary& summary);
+    void setEmergencyDetail(const QString& detail);
 
 signals:
     void controlRequested();

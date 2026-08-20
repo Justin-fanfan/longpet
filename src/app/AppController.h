@@ -14,6 +14,7 @@ class KeywordSpottingService;
 class ReminderService;
 class SettingsService;
 class SystemService;
+class VisionService;
 
 class AppController final : public QObject {
     Q_OBJECT
@@ -26,6 +27,7 @@ public:
                   SystemService* systemService,
                   int controlTimeoutMs = 15'000,
                   KeywordSpottingService* keywordSpottingService = nullptr,
+                  VisionService* visionService = nullptr,
                   QObject* parent = nullptr);
 
     void initialize();
@@ -58,7 +60,7 @@ private:
     void finishCurrentReminderPresentation();
     void expireCurrentReminderPresentation();
     void restorePageAfterReminder();
-    void showEmergency();
+    void showEmergency(const QString& detail = {});
     void dismissEmergency();
     void refreshReminders();
     void refreshCare();
@@ -71,6 +73,7 @@ private:
     SettingsService* m_settingsService = nullptr;
     SystemService* m_systemService = nullptr;
     KeywordSpottingService* m_keywordSpottingService = nullptr;
+    VisionService* m_visionService = nullptr;
     QTimer m_controlTimeout;
     QTimer m_alertPresentationTimeout;
     QQueue<ReminderPresentation> m_pendingPresentations;

@@ -23,6 +23,8 @@ public:
     void setKeywordSpottingState(bool available, bool listening,
                                  const QString& summary,
                                  const QString& lastKeyword = {});
+    void setVisionState(bool available, bool monitoring,
+                        const QString& summary, double effectiveFps = 0.0);
 
 signals:
     void statusChanged(const SystemStatus& status);

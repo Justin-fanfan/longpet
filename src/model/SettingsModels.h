@@ -22,4 +22,8 @@ struct DeviceSummary {
     bool keywordSpottingListening = false;
     QString keywordSpottingSummary;
     QString lastKeyword;
+    bool visionAvailable = false;
+    bool visionMonitoring = false;
+    QString visionSummary;
+    double visionFps = 0.0;
 };

@@ -17,11 +17,13 @@
 #include "platform\KeywordSpottingAdapter.h"
 #include "platform\NetworkStatusAdapter.h"
 #include "platform\PowerStatusAdapter.h"
+#include "platform\VisionAdapter.h"
 #include "services\CareService.h"
 #include "services\KeywordSpottingService.h"
 #include "services\ReminderService.h"
 #include "services\SettingsService.h"
 #include "services\SystemService.h"
+#include "services\VisionService.h"
 #include "widgets\PetFaceWidget.h"
 #include "widgets\VisualComponents.h"
 #include "widgets\VisualTokens.h"
@@ -57,6 +59,7 @@ private slots:
     void hardwareAdaptersMapAndDegrade();
     void keywordSpottingProtocolMapsAndDegrades();
     void keywordSemanticsAreContextualAndDebounced();
+    void visionProtocolServiceAndControllerAreSafe();
     void reminderCrudPersistsAndRejectsStaleRevision();
     void acknowledgementStopsRepeatsAndIsNotCompletion();
     void unconfirmedReminderRepeatsUpToMaximum();
@@ -166,6 +169,10 @@ void V02Test::initTestCase()
     qRegisterMetaType<KeywordDetection>();
     qRegisterMetaType<KeywordSemantic>();
     qRegisterMetaType<KeywordSpottingStatus>();
+    qRegisterMetaType<VisionDetection>();
+    qRegisterMetaType<VisionEventType>();
+    qRegisterMetaType<VisionRuntimeState>();
+    qRegisterMetaType<VisionStatus>();
     QFile styleFile(QStringLiteral(":/styles/app.qss"));
     QVERIFY(styleFile.open(QIODevice::ReadOnly | QIODevice::Text));
     qApp->setStyleSheet(QString::fromUtf8(styleFile.readAll()));
@@ -549,6 +556,103 @@ void V02Test::keywordSemanticsAreContextualAndDebounced()
     fixture.reminderService->stop();
 }
 
+void V02Test::visionProtocolServiceAndControllerAreSafe()
+{
+    VisionAdapter::Options disabledOptions;
+    disabledOptions.enabled = false;
+    VisionAdapter disabled(disabledOptions);
+    QSignalSpy statusSpy(&disabled, &VisionAdapter::statusChanged);
+    QVERIFY(!disabled.start());
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(disabled.status().state, VisionRuntimeState::Disabled);
+    QVERIFY(!disabled.status().available);
+
+    VisionDetection parsed;
+    QVERIFY(VisionAdapter::parseDetectionEvent(QByteArrayLiteral(
+        "{\"event\":\"vision_detected\",\"type\":\"wave\","
+        "\"confidence\":0.84,\"timestamp\":\"2026-08-20T10:00:00.000+08:00\","
+        "\"source\":\"opencv_mog2_trajectory\",\"metadata\":{\"reversals\":3}}"),
+        &parsed));
+    QCOMPARE(parsed.type, VisionEventType::Wave);
+    QCOMPARE(parsed.confidence, 0.84);
+    QCOMPARE(parsed.source, QStringLiteral("opencv_mog2_trajectory"));
+    QCOMPARE(parsed.metadata.value(QStringLiteral("reversals")).toInt(), 3);
+    QVERIFY(!VisionAdapter::parseDetectionEvent(QByteArrayLiteral(
+        "{\"event\":\"vision_detected\",\"type\":\"wave\",\"confidence\":1.2}"),
+        &parsed));
+
+    VisionStatus parsedStatus;
+    QVERIFY(VisionAdapter::parseRuntimeStatusEvent(QByteArrayLiteral(
+        "{\"event\":\"runtime_status\",\"state\":\"monitoring\","
+        "\"available\":true,\"camera_available\":true,\"monitoring\":true,"
+        "\"detail\":\"本地视觉：挥手\",\"fps\":7.9,\"frame_ms\":35.8,"
+        "\"camera_index\":0}"), &parsedStatus));
+    QCOMPARE(parsedStatus.state, VisionRuntimeState::Running);
+    QVERIFY(parsedStatus.available);
+    QVERIFY(parsedStatus.cameraAvailable);
+    QVERIFY(parsedStatus.monitoring);
+    QCOMPARE(parsedStatus.effectiveFps, 7.9);
+    QCOMPARE(parsedStatus.frameTimeMs, 35.8);
+
+    QDateTime current(QDate(2026, 8, 20), QTime(10, 0));
+    VisionService service(nullptr, [&current] { return current; });
+    QSignalSpy waveSpy(&service, &VisionService::waveDetected);
+    QSignalSpy candidateSpy(&service, &VisionService::fallCandidateDetected);
+    QSignalSpy confirmedSpy(&service, &VisionService::fallConfirmed);
+    QSignalSpy suppressedSpy(&service, &VisionService::detectionSuppressed);
+    VisionDetection event;
+    event.type = VisionEventType::Wave;
+    event.confidence = 0.84;
+    service.handleDetection(event);
+    QCOMPARE(waveSpy.count(), 1);
+    service.handleDetection(event);
+    QCOMPARE(waveSpy.count(), 1);
+    QCOMPARE(suppressedSpy.count(), 1);
+    current = current.addMSecs(VisionService::defaultCooldownMs(
+        VisionEventType::Wave));
+    service.handleDetection(event);
+    QCOMPARE(waveSpy.count(), 2);
+
+    event.type = VisionEventType::FallCandidate;
+    event.confidence = 0.70;
+    service.handleDetection(event);
+    QCOMPARE(candidateSpy.count(), 1);
+    QCOMPARE(confirmedSpy.count(), 0);
+
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error), qPrintable(error));
+    MainWindow window;
+    SystemService systemService;
+    VisionService controllerVision(nullptr, [&current] { return current; });
+    AppController controller(&window, fixture.reminderService.get(),
+                             fixture.careService.get(), fixture.settingsService.get(),
+                             &systemService, 15'000, nullptr, &controllerVision);
+    controller.initialize();
+    window.showPage(MainWindow::PageId::Settings);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+
+    controllerVision.handleDetection(event);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+    event.type = VisionEventType::FallConfirmed;
+    event.confidence = 0.91;
+    controllerVision.handleDetection(event);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Emergency);
+    auto* emergency = window.findChild<EmergencyPage*>();
+    QVERIFY(emergency);
+    QVERIFY(emergency->detail().contains(QStringLiteral("跌倒")));
+    emergency->okayButton()->click();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+
+    current = current.addMSecs(VisionService::defaultCooldownMs(
+        VisionEventType::Wave));
+    event.type = VisionEventType::Wave;
+    event.confidence = 0.86;
+    controllerVision.handleDetection(event);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    fixture.reminderService->stop();
+}
+
 void V02Test::reminderCrudPersistsAndRejectsStaleRevision()
 {
     ServiceFixture fixture;
@@ -865,12 +969,18 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     keywordSummary.keywordSpottingListening = true;
     keywordSummary.keywordSpottingSummary = QStringLiteral("离线关键词 · 正在监听");
     keywordSummary.lastKeyword = QStringLiteral("你好");
+    keywordSummary.visionAvailable = true;
+    keywordSummary.visionMonitoring = true;
+    keywordSummary.visionSummary = QStringLiteral("本地视觉：挥手");
+    keywordSummary.visionFps = 7.9;
     settingsPage.setDeviceSummary(keywordSummary);
     const auto* keywordLabel = settingsPage.findChild<QLabel*>(
         QStringLiteral("keywordSpottingSummary"));
     QVERIFY(keywordLabel);
-    QVERIFY(keywordLabel->text().contains(QStringLiteral("正在监听")));
-    QVERIFY(keywordLabel->text().contains(QStringLiteral("你好")));
+    QVERIFY(keywordLabel->text().contains(QStringLiteral("监听中")));
+    QVERIFY(keywordLabel->text().contains(QStringLiteral("7.9 FPS")));
+    QVERIFY(keywordLabel->toolTip().contains(QStringLiteral("你好")));
+    QVERIFY(keywordLabel->toolTip().contains(QStringLiteral("本地视觉：挥手")));
 }
 
 void V02Test::applicationControllerOwnsNavigation()
@@ -1011,6 +1121,10 @@ void V02Test::renderV02Pages()
     device.keywordSpottingAvailable = true;
     device.keywordSpottingListening = true;
     device.keywordSpottingSummary = QStringLiteral("离线关键词 · 正在监听");
+    device.visionAvailable = true;
+    device.visionMonitoring = true;
+    device.visionSummary = QStringLiteral("本地视觉：挥手");
+    device.visionFps = 8.0;
     window.setDeviceSummary(device);
     SystemStatus systemStatus;
     systemStatus.currentDateTime = QDateTime::currentDateTime();

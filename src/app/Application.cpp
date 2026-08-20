@@ -11,11 +11,13 @@
 #include "platform/KeywordSpottingAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/PowerStatusAdapter.h"
+#include "platform/VisionAdapter.h"
 #include "services/CareService.h"
 #include "services/KeywordSpottingService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
+#include "services/VisionService.h"
 #include "widgets/VisualTokens.h"
 
 #include <QCoreApplication>
@@ -25,6 +27,10 @@
 
 namespace {
 constexpr int KeywordSpottingStartupDelayMs = 1'500;
+// The board KWS runtime needs roughly 25 seconds to load its model. Starting
+// OpenCV during that cold-start peak increases both latency and memory
+// pressure, so vision is intentionally staggered behind it.
+constexpr int VisionStartupDelayMs = 30'000;
 }
 
 Application::Application(QObject* parent)
@@ -54,6 +60,8 @@ bool Application::initialize(QString* error)
     m_keywordSpottingAdapter = std::make_unique<KeywordSpottingAdapter>();
     m_keywordSpottingService = std::make_unique<KeywordSpottingService>(
         m_keywordSpottingAdapter.get());
+    m_visionAdapter = std::make_unique<VisionAdapter>();
+    m_visionService = std::make_unique<VisionService>(m_visionAdapter.get());
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
     m_audioVolumeAdapter = std::make_unique<AudioVolumeAdapter>();
     m_backlightAdapter = std::make_unique<BacklightAdapter>();
@@ -74,6 +82,12 @@ bool Application::initialize(QString* error)
             status.available, status.listening, status.summary,
             status.lastKeyword);
     });
+    connect(m_visionService.get(), &VisionService::statusChanged,
+            this, [this](const VisionStatus& status) {
+        m_systemService->setVisionState(
+            status.available, status.monitoring, status.summary,
+            status.effectiveFps);
+    });
     connect(m_settingsService.get(), &SettingsService::settingApplyRequested,
             this, [this](const QString& key, const QVariant& value) {
         if (key == QStringLiteral("volume"))
@@ -91,15 +105,24 @@ bool Application::initialize(QString* error)
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
-        m_systemService.get(), 15'000, m_keywordSpottingService.get());
+        m_systemService.get(), 15'000, m_keywordSpottingService.get(),
+        m_visionService.get());
     m_controller->initialize();
     const KeywordSpottingStatus keywordStatus = m_keywordSpottingService->status();
     m_systemService->setKeywordSpottingState(
         keywordStatus.available, keywordStatus.listening,
         keywordStatus.summary, keywordStatus.lastKeyword);
+    const VisionStatus visionStatus = m_visionService->status();
+    m_systemService->setVisionState(
+        visionStatus.available, visionStatus.monitoring,
+        visionStatus.summary, visionStatus.effectiveFps);
     QTimer::singleShot(KeywordSpottingStartupDelayMs, this, [this] {
         if (m_keywordSpottingAdapter)
             m_keywordSpottingAdapter->start();
+    });
+    QTimer::singleShot(VisionStartupDelayMs, this, [this] {
+        if (m_visionAdapter)
+            m_visionAdapter->start();
     });
     return true;
 }
@@ -119,6 +142,8 @@ void Application::show()
 
 void Application::shutdown()
 {
+    if (m_visionAdapter)
+        m_visionAdapter->stop();
     if (m_keywordSpottingAdapter)
         m_keywordSpottingAdapter->stop();
     if (m_reminderService)
@@ -137,6 +162,8 @@ void Application::shutdown()
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
+    m_visionService.reset();
+    m_visionAdapter.reset();
     m_keywordSpottingService.reset();
     m_keywordSpottingAdapter.reset();
     m_systemService.reset();
