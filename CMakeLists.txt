@@ -82,6 +82,11 @@ set(
     src/services/DiagnosticsService.h
     src/services/DeveloperService.cpp
     src/services/DeveloperService.h
+    #新加的
+    src/services/WeatherService.cpp
+    src/services/WeatherService.h
+    src/services/CityService.h
+    #
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp

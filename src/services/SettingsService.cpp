@@ -56,6 +56,23 @@ bool SettingsService::setPetStyle(const QString& style, QString* error)
     return true;
 }
 
+// 温度单位
+bool SettingsService::setTemperatureUnit(const QString& unit, QString* error)
+{
+    if (!SUPPORTED_TEMPERATURE_UNITS.contains(unit)) {
+        if (error)
+            *error = QStringLiteral("不支持的温度单位，请使用 'celsius' 或 'fahrenheit'");
+        return false;
+    }
+    if (!m_repository->setValue(KEY_TEMPERATURE_UNIT, unit, error))
+        return false;
+
+    emitCurrentSettings();
+    emit settingApplyRequested(KEY_TEMPERATURE_UNIT, unit);
+    return true;
+}
+//
+
 bool SettingsService::setInteger(const QString& key, int value, QString* error)
 {
     if (value < 0 || value > 100) {

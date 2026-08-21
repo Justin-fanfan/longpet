@@ -6,6 +6,9 @@ struct UserSettings {
     int volume = 60;
     int brightness = 72;
     QString petStyle = QStringLiteral("温和陪伴");
+    //新加的
+    QString temperatureUnit = QStringLiteral("celsius");
+    //
 };
 
 struct DeviceSummary {
