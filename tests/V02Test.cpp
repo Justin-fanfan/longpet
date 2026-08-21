@@ -1,40 +1,57 @@
-#include "app\AppController.h"
-#include "app\Application.h"
-#include "data\CareEventRepository.h"
-#include "data\DatabaseManager.h"
-#include "data\ReminderRepository.h"
-#include "data\SettingsRepository.h"
+#include "app/AppController.h"
+#include "app/Application.h"
+#include "data/CareEventRepository.h"
+#include "data/DatabaseManager.h"
+#include "data/ReminderRepository.h"
+#include "data/SettingsRepository.h"
 #include "mainwindow.h"
-#include "pages\CarePage.h"
-#include "pages\HomePage.h"
-#include "pages\ReminderEditPage.h"
-#include "pages\ReminderPage.h"
-#include "pages\SettingsPage.h"
-#include "platform\AudioVolumeAdapter.h"
-#include "platform\BacklightAdapter.h"
-#include "platform\NetworkStatusAdapter.h"
-#include "platform\PowerStatusAdapter.h"
-#include "services\CareService.h"
-#include "services\ReminderService.h"
-#include "services\SettingsService.h"
-#include "services\SystemService.h"
-#include "widgets\PetFaceWidget.h"
-#include "widgets\VisualComponents.h"
-#include "widgets\VisualTokens.h"
+#include "pages/CarePage.h"
+#include "pages/EmergencyPage.h"
+#include "pages/HomePage.h"
+#include "pages/ReminderEditPage.h"
+#include "pages/ReminderAlertPage.h"
+#include "pages/ReminderPage.h"
+#include "pages/SettingsPage.h"
+#include "pages/DeveloperPage.h"
+#include "platform/AudioDeviceAdapter.h"
+#include "platform/AudioVolumeAdapter.h"
+#include "platform/BacklightAdapter.h"
+#include "platform/KeywordSpottingAdapter.h"
+#include "platform/NetworkStatusAdapter.h"
+#include "platform/PowerStatusAdapter.h"
+#include "platform/VisionAdapter.h"
+#include "platform/CameraDeviceAdapter.h"
+#include "services/CareService.h"
+#include "services/KeywordSpottingService.h"
+#include "services/ReminderService.h"
+#include "services/SettingsService.h"
+#include "services/SystemService.h"
+#include "services/VisionService.h"
+#include "services/DeveloperService.h"
+#include "services/DiagnosticsService.h"
+#include "widgets/PetFaceWidget.h"
+#include "widgets/VisualComponents.h"
+#include "widgets/VisualTokens.h"
 
 #include <QApplication>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QLabel>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
+#include <QSqlError>
 #include <QSqlQuery>
 #include <QStandardPaths>
 #include <QSvgRenderer>
 #include <QTemporaryDir>
 #include <QTest>
 #include <QTimer>
+#include <QTabWidget>
+#include <QUuid>
+
+#include <utility>
 
 class V02Test final : public QObject {
     Q_OBJECT
@@ -43,11 +60,22 @@ private slots:
     void initTestCase();
     void resourcesAreEmbedded();
     void databaseCreatesVersionedSchema();
+    void databaseMigratesV1WithoutLosingReminders();
     void applicationCompositionRootInitializes();
     void networkStatusAdapterMapsAndDegrades();
     void hardwareAdaptersMapAndDegrade();
+    void keywordSpottingProtocolMapsAndDegrades();
+    void keywordSemanticsAreContextualAndDebounced();
+    void visionProtocolServiceAndControllerAreSafe();
+    void emergencySuspendsReminderPresentationCount();
+    void workerLifecycleRetriesAreFiniteAndOutputIsBounded();
+    void diagnosticsAndDeveloperFacadeAreBoundedAndSafe();
+    void developerSimulationUsesBusinessChain();
     void reminderCrudPersistsAndRejectsStaleRevision();
-    void reminderSchedulerDoesNotRedeliverToday();
+    void acknowledgementStopsRepeatsAndIsNotCompletion();
+    void unconfirmedReminderRepeatsUpToMaximum();
+    void controllerQueuesAlertsAndRestoresPreviousPage();
+    void reminderAlertPageRendersAndFallsBackIcon();
     void careAndSettingsArePersistentServices();
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
@@ -67,7 +95,7 @@ struct ServiceFixture {
     std::unique_ptr<CareService> careService;
     std::unique_ptr<SettingsService> settingsService;
 
-    bool open(QString* error = nullptr)
+    bool open(QString* error = nullptr, ReminderService::Clock clock = {})
     {
         if (!directory.isValid())
             return false;
@@ -76,7 +104,9 @@ struct ServiceFixture {
         reminders = std::make_unique<ReminderRepository>(database.database());
         careEvents = std::make_unique<CareEventRepository>(database.database());
         settingsRepository = std::make_unique<SettingsRepository>(database.database());
-        reminderService = std::make_unique<ReminderService>(reminders.get());
+        reminderService = clock
+            ? std::make_unique<ReminderService>(reminders.get(), std::move(clock))
+            : std::make_unique<ReminderService>(reminders.get());
         careService = std::make_unique<CareService>(careEvents.get(), reminderService.get());
         settingsService = std::make_unique<SettingsService>(settingsRepository.get());
         return true;
@@ -92,11 +122,104 @@ ReminderDraft medicineDraft()
     draft.repeatRule = ReminderRepeatRule::Daily;
     return draft;
 }
+
+bool writeTextFile(const QString& path, const QByteArray& content)
+{
+    QDir().mkpath(QFileInfo(path).absolutePath());
+    QFile file(path);
+    return file.open(QIODevice::WriteOnly | QIODevice::Truncate)
+        && file.write(content) == content.size();
+}
+
+QString pythonExecutable()
+{
+    QString executable = QStandardPaths::findExecutable(QStringLiteral("python"));
+    if (executable.isEmpty())
+        executable = QStandardPaths::findExecutable(QStringLiteral("python3"));
+    return executable;
+}
+
+bool createFakeKwsRuntime(const QString& root, const QByteArray& script)
+{
+    const QString model = QStringLiteral(
+        "models/sherpa-onnx-kws-zipformer-wenetspeech-3.3M-2024-01-01/");
+    const QStringList files {
+        QStringLiteral("config/keywords.txt"),
+        model + QStringLiteral("encoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"),
+        model + QStringLiteral("decoder-epoch-12-avg-2-chunk-16-left-64.int8.onnx"),
+        model + QStringLiteral("joiner-epoch-12-avg-2-chunk-16-left-64.int8.onnx"),
+        model + QStringLiteral("tokens.txt")
+    };
+    if (!writeTextFile(QDir(root).filePath(QStringLiteral("src/loongson_kws.py")), script))
+        return false;
+    for (const QString& relative : files) {
+        if (!writeTextFile(QDir(root).filePath(relative), QByteArrayLiteral("test")))
+            return false;
+    }
+    return true;
+}
+
+bool createLegacyV1Database(const QString& path, QString* error)
+{
+    const QString connectionName = QStringLiteral("legacy-v1-%1")
+        .arg(QUuid::createUuid().toString(QUuid::WithoutBraces));
+    bool success = false;
+    {
+        QSqlDatabase database = QSqlDatabase::addDatabase(
+            QStringLiteral("QSQLITE"), connectionName);
+        database.setDatabaseName(path);
+        if (!database.open()) {
+            if (error)
+                *error = database.lastError().text();
+        } else {
+            QSqlQuery query(database);
+            const QStringList statements {
+                QStringLiteral("CREATE TABLE schema_meta (version INTEGER NOT NULL)"),
+                QStringLiteral("INSERT INTO schema_meta(version) VALUES(1)"),
+                QStringLiteral(
+                    "CREATE TABLE reminders (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "type TEXT NOT NULL,title TEXT NOT NULL,time_of_day TEXT NOT NULL,"
+                    "scheduled_date TEXT,repeat_rule TEXT NOT NULL,enabled INTEGER NOT NULL,"
+                    "revision INTEGER NOT NULL DEFAULT 1,created_at TEXT NOT NULL,updated_at TEXT NOT NULL)"),
+                QStringLiteral(
+                    "CREATE TABLE reminder_events (id INTEGER PRIMARY KEY AUTOINCREMENT,"
+                    "reminder_id INTEGER NOT NULL,scheduled_at TEXT NOT NULL,status TEXT NOT NULL,"
+                    "completed_at TEXT,FOREIGN KEY(reminder_id) REFERENCES reminders(id) ON DELETE CASCADE)"),
+                QStringLiteral(
+                    "INSERT INTO reminders(type,title,time_of_day,scheduled_date,repeat_rule,enabled,revision,created_at,updated_at) "
+                    "VALUES('medicine','旧版晚饭后吃药','20:00','2026-08-20','daily',1,3,"
+                    "'2026-08-01T00:00:00Z','2026-08-02T00:00:00Z')"),
+                QStringLiteral(
+                    "INSERT INTO reminder_events(reminder_id,scheduled_at,status,completed_at) "
+                    "VALUES(1,'2026-08-20T12:00:00Z','completed','2026-08-20T12:05:00Z')")
+            };
+            success = true;
+            for (const QString& sql : statements) {
+                if (!query.exec(sql)) {
+                    success = false;
+                    if (error)
+                        *error = query.lastError().text();
+                    break;
+                }
+            }
+            database.close();
+        }
+    }
+    QSqlDatabase::removeDatabase(connectionName);
+    return success;
+}
 }
 
 void V02Test::initTestCase()
 {
     QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
+    qRegisterMetaType<KeywordDetection>();
+    qRegisterMetaType<KeywordSemantic>();
+    qRegisterMetaType<KeywordSpottingStatus>();
+    qRegisterMetaType<VisionDetection>();
+    qRegisterMetaType<VisionEventType>();
+    qRegisterMetaType<VisionRuntimeState>();
+    qRegisterMetaType<VisionStatus>();
     QFile styleFile(QStringLiteral(":/styles/app.qss"));
     QVERIFY(styleFile.open(QIODevice::ReadOnly | QIODevice::Text));
     qApp->setStyleSheet(QString::fromUtf8(styleFile.readAll()));
@@ -107,6 +230,7 @@ void V02Test::resourcesAreEmbedded()
     const QStringList resources {
         QStringLiteral(":/styles/app.qss"), QStringLiteral(":/icons/back.svg"),
         QStringLiteral(":/icons/microphone-dark.svg"), QStringLiteral(":/icons/care.svg"),
+        QStringLiteral(":/icons/microphone.svg"),
         QStringLiteral(":/icons/reminder.svg"), QStringLiteral(":/icons/settings.svg"),
         QStringLiteral(":/icons/weather-sunny.svg"), QStringLiteral(":/icons/wifi.svg"),
         QStringLiteral(":/icons/battery.svg"), QStringLiteral(":/icons/pill.svg"),
@@ -131,7 +255,7 @@ void V02Test::databaseCreatesVersionedSchema()
     ServiceFixture fixture;
     QString error;
     QVERIFY2(fixture.open(&error), qPrintable(error));
-    QCOMPARE(fixture.database.schemaVersion(), 1);
+    QCOMPARE(fixture.database.schemaVersion(), 2);
 
     const QStringList expected {
         QStringLiteral("schema_meta"), QStringLiteral("reminders"),
@@ -145,6 +269,49 @@ void V02Test::databaseCreatesVersionedSchema()
         names.append(query.value(0).toString());
     for (const QString& table : expected)
         QVERIFY2(names.contains(table), qPrintable(table));
+}
+
+void V02Test::databaseMigratesV1WithoutLosingReminders()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    const QString path = QDir(directory.path()).filePath(QStringLiteral("legacy.db"));
+    QString error;
+    QVERIFY2(createLegacyV1Database(path, &error), qPrintable(error));
+
+    DatabaseManager database;
+    QVERIFY2(database.open(path, &error), qPrintable(error));
+    QCOMPARE(database.schemaVersion(), 2);
+    ReminderRepository repository(database.database());
+    bool found = false;
+    const Reminder reminder = repository.find(1, &found, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(found);
+    QCOMPARE(reminder.title, QStringLiteral("旧版晚饭后吃药"));
+    QCOMPARE(reminder.revision, 3);
+    QVERIFY(!reminder.uuid.isEmpty());
+    QCOMPARE(reminder.iconKey, QStringLiteral("medicine"));
+    QCOMPARE(reminder.voiceType, ReminderVoiceType::None);
+    QCOMPARE(reminder.voiceText, reminder.title);
+    QCOMPARE(reminder.repeatIntervalMinutes,
+             ReminderDefaults::RepeatIntervalMinutes);
+    QCOMPARE(reminder.maxPresentationCount,
+             ReminderDefaults::MaxPresentationCount);
+    QCOMPARE(repository.statusForDate(1, QDate(2026, 8, 20), &error),
+             ReminderOccurrenceStatus::Completed);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    QSqlQuery columns(database.database());
+    QVERIFY(columns.exec(QStringLiteral("PRAGMA table_info(reminder_events)")));
+    QStringList names;
+    while (columns.next())
+        names.append(columns.value(QStringLiteral("name")).toString());
+    for (const QString& required : {QStringLiteral("presentation_count"),
+                                    QStringLiteral("last_presented_at"),
+                                    QStringLiteral("acknowledged_at"),
+                                    QStringLiteral("ack_source")}) {
+        QVERIFY2(names.contains(required), qPrintable(required));
+    }
 }
 
 void V02Test::applicationCompositionRootInitializes()
@@ -304,6 +471,452 @@ void V02Test::hardwareAdaptersMapAndDegrade()
     QCOMPARE(unavailableBatterySpy.takeFirst().at(0).toInt(), -1);
 }
 
+void V02Test::keywordSpottingProtocolMapsAndDegrades()
+{
+    KeywordSpottingAdapter::Options disabledOptions;
+    disabledOptions.enabled = false;
+    KeywordSpottingAdapter disabled(disabledOptions);
+    QSignalSpy statusSpy(&disabled, &KeywordSpottingAdapter::statusChanged);
+    QVERIFY(!disabled.start());
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(disabled.status().state, KeywordSpottingRuntimeState::Disabled);
+    QVERIFY(!disabled.status().available);
+    QVERIFY(!disabled.status().listening);
+
+    const QByteArray detectionJson = QByteArrayLiteral(
+        "{\"event\":\"keyword_detected\",\"keyword\":\"知道了\","
+        "\"signal\":\"ACKNOWLEDGE\",\"code\":4,\"source\":\"microphone\","
+        "\"timestamp\":\"2026-08-20T10:00:00.000+08:00\"}");
+    KeywordDetection detection;
+    QVERIFY(KeywordSpottingAdapter::parseKeywordEvent(detectionJson, &detection));
+    QCOMPARE(detection.keyword, QStringLiteral("知道了"));
+    QCOMPARE(detection.signal, QStringLiteral("ACKNOWLEDGE"));
+    QCOMPARE(detection.code, 4);
+    QCOMPARE(detection.source, QStringLiteral("microphone"));
+    QVERIFY(detection.timestamp.isValid());
+    QVERIFY(!KeywordSpottingAdapter::parseKeywordEvent(
+        QByteArrayLiteral("not-json"), &detection));
+
+    KeywordSpottingStatus runtimeStatus;
+    QVERIFY(KeywordSpottingAdapter::parseRuntimeStatusEvent(
+        QByteArrayLiteral("{\"event\":\"runtime_status\",\"state\":\"listening\","
+                          "\"detail\":\"离线关键词 · 正在监听\"}"),
+        &runtimeStatus));
+    QCOMPARE(runtimeStatus.state, KeywordSpottingRuntimeState::Listening);
+    QVERIFY(runtimeStatus.available);
+    QVERIFY(runtimeStatus.listening);
+}
+
+void V02Test::keywordSemanticsAreContextualAndDebounced()
+{
+    QDateTime current(QDate(2026, 8, 20), QTime(10, 0));
+    KeywordSpottingService keywordService(nullptr, [&current] { return current; });
+    QSignalSpy semanticSpy(&keywordService,
+                           &KeywordSpottingService::semanticDetected);
+    KeywordDetection detection;
+    detection.keyword = QStringLiteral("知道了");
+    detection.signal = QStringLiteral("ACKNOWLEDGE");
+    detection.timestamp = current;
+    keywordService.handleDetection(detection);
+    QCOMPARE(semanticSpy.count(), 1);
+    QCOMPARE(qvariant_cast<KeywordSemantic>(semanticSpy.first().at(0)),
+             KeywordSemantic::Acknowledge);
+    keywordService.handleDetection(detection);
+    QCOMPARE(semanticSpy.count(), 1);
+    current = current.addMSecs(KeywordSpottingService::defaultCooldownMs());
+    keywordService.handleDetection(detection);
+    QCOMPARE(semanticSpy.count(), 2);
+
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error, [&current] { return current; }), qPrintable(error));
+    ReminderDraft first = medicineDraft();
+    first.timeOfDay = current.time();
+    QVERIFY(fixture.reminderService->save(first).success);
+    MainWindow window;
+    SystemService systemService;
+    KeywordSpottingService controllerKeywordService(
+        nullptr, [&current] { return current; });
+    AppController controller(&window, fixture.reminderService.get(),
+                             fixture.careService.get(), fixture.settingsService.get(),
+                             &systemService, 15'000, &controllerKeywordService);
+    controller.initialize();
+    QVERIFY(controller.hasActiveReminderAlert());
+    const ReminderEventId firstEventId = controller.currentReminderEventId();
+    KeywordDetection controllerDetection;
+    controllerDetection.keyword = QStringLiteral("知道了");
+    controllerDetection.signal = QStringLiteral("ACKNOWLEDGE");
+    controllerDetection.timestamp = current;
+    controllerKeywordService.handleDetection(controllerDetection);
+    QVERIFY(!controller.hasActiveReminderAlert());
+    bool found = false;
+    ReminderOccurrence firstOccurrence = fixture.reminders->occurrence(
+        firstEventId, &found, &error);
+    QVERIFY(found);
+    QCOMPARE(firstOccurrence.status, ReminderOccurrenceStatus::Acknowledged);
+    QCOMPARE(firstOccurrence.ackSource, ReminderAckSource::Voice);
+    QVERIFY(!firstOccurrence.completedAt.isValid());
+    QVERIFY(!controller.handleKeywordSemantic(KeywordSemantic::Acknowledge,
+                                              QStringLiteral("好的")));
+
+    controllerDetection.keyword = QStringLiteral("你好");
+    controllerDetection.signal = QStringLiteral("GREETING");
+    controllerKeywordService.handleDetection(controllerDetection);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    controllerDetection.keyword = QStringLiteral("救命");
+    controllerDetection.signal = QStringLiteral("EMERGENCY");
+    controllerKeywordService.handleDetection(controllerDetection);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Emergency);
+    window.findChild<QPushButton*>(
+        QStringLiteral("emergencyDismissButton"))->click();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+
+    ReminderDraft second = first;
+    second.title = QStringLiteral("第二次吃药");
+    const ServiceResult secondSaved = fixture.reminderService->save(second);
+    QVERIFY2(secondSaved.success, qPrintable(secondSaved.error));
+    fixture.reminderService->checkNow();
+    QVERIFY(controller.hasActiveReminderAlert());
+    const ReminderEventId secondEventId = controller.currentReminderEventId();
+    QVERIFY(controller.handleKeywordSemantic(KeywordSemantic::Emergency,
+                                             QStringLiteral("救命")));
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Emergency);
+    window.findChild<QPushButton*>(
+        QStringLiteral("emergencyDismissButton"))->click();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::ReminderAlert);
+    controllerDetection.keyword = QStringLiteral("吃过了");
+    controllerDetection.signal = QStringLiteral("COMPLETE");
+    controllerKeywordService.handleDetection(controllerDetection);
+    QVERIFY(!controller.hasActiveReminderAlert());
+    const ReminderOccurrence secondOccurrence = fixture.reminders->occurrence(
+        secondEventId, &found, &error);
+    QVERIFY(found);
+    QCOMPARE(secondOccurrence.status, ReminderOccurrenceStatus::Completed);
+    QCOMPARE(secondOccurrence.ackSource, ReminderAckSource::Voice);
+    QVERIFY(secondOccurrence.completedAt.isValid());
+
+    QSignalSpy stopSpy(&controller, &AppController::stopVoicePlaybackRequested);
+    controllerDetection.keyword = QStringLiteral("停止");
+    controllerDetection.signal = QStringLiteral("STOP");
+    controllerKeywordService.handleDetection(controllerDetection);
+    QCOMPARE(stopSpy.count(), 1);
+    fixture.reminderService->stop();
+}
+
+void V02Test::visionProtocolServiceAndControllerAreSafe()
+{
+    VisionAdapter::Options disabledOptions;
+    disabledOptions.enabled = false;
+    VisionAdapter disabled(disabledOptions);
+    QSignalSpy statusSpy(&disabled, &VisionAdapter::statusChanged);
+    QVERIFY(!disabled.start());
+    QCOMPARE(statusSpy.count(), 1);
+    QCOMPARE(disabled.status().state, VisionRuntimeState::Disabled);
+    QVERIFY(!disabled.status().available);
+
+    VisionDetection parsed;
+    QVERIFY(VisionAdapter::parseDetectionEvent(QByteArrayLiteral(
+        "{\"event\":\"vision_detected\",\"type\":\"wave\","
+        "\"confidence\":0.84,\"timestamp\":\"2026-08-20T10:00:00.000+08:00\","
+        "\"source\":\"opencv_mog2_trajectory\",\"metadata\":{\"reversals\":3}}"),
+        &parsed));
+    QCOMPARE(parsed.type, VisionEventType::Wave);
+    QCOMPARE(parsed.confidence, 0.84);
+    QCOMPARE(parsed.source, QStringLiteral("opencv_mog2_trajectory"));
+    QCOMPARE(parsed.metadata.value(QStringLiteral("reversals")).toInt(), 3);
+    QVERIFY(!VisionAdapter::parseDetectionEvent(QByteArrayLiteral(
+        "{\"event\":\"vision_detected\",\"type\":\"wave\",\"confidence\":1.2}"),
+        &parsed));
+
+    VisionStatus parsedStatus;
+    QVERIFY(VisionAdapter::parseRuntimeStatusEvent(QByteArrayLiteral(
+        "{\"event\":\"runtime_status\",\"state\":\"monitoring\","
+        "\"available\":true,\"camera_available\":true,\"monitoring\":true,"
+        "\"detail\":\"本地视觉：挥手\",\"fps\":7.9,\"frame_ms\":35.8,"
+        "\"camera_index\":0}"), &parsedStatus));
+    QCOMPARE(parsedStatus.state, VisionRuntimeState::Running);
+    QVERIFY(parsedStatus.available);
+    QVERIFY(parsedStatus.cameraAvailable);
+    QVERIFY(parsedStatus.monitoring);
+    QCOMPARE(parsedStatus.effectiveFps, 7.9);
+    QCOMPARE(parsedStatus.frameTimeMs, 35.8);
+
+    QDateTime current(QDate(2026, 8, 20), QTime(10, 0));
+    VisionService service(nullptr, [&current] { return current; });
+    QSignalSpy waveSpy(&service, &VisionService::waveDetected);
+    QSignalSpy candidateSpy(&service, &VisionService::fallCandidateDetected);
+    QSignalSpy confirmedSpy(&service, &VisionService::fallConfirmed);
+    QSignalSpy suppressedSpy(&service, &VisionService::detectionSuppressed);
+    VisionDetection event;
+    event.type = VisionEventType::Wave;
+    event.confidence = 0.84;
+    service.handleDetection(event);
+    QCOMPARE(waveSpy.count(), 1);
+    service.handleDetection(event);
+    QCOMPARE(waveSpy.count(), 1);
+    QCOMPARE(suppressedSpy.count(), 1);
+    current = current.addMSecs(VisionService::defaultCooldownMs(
+        VisionEventType::Wave));
+    service.handleDetection(event);
+    QCOMPARE(waveSpy.count(), 2);
+
+    event.type = VisionEventType::FallCandidate;
+    event.confidence = 0.70;
+    service.handleDetection(event);
+    QCOMPARE(candidateSpy.count(), 1);
+    QCOMPARE(confirmedSpy.count(), 0);
+
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error), qPrintable(error));
+    MainWindow window;
+    SystemService systemService;
+    VisionService controllerVision(nullptr, [&current] { return current; });
+    AppController controller(&window, fixture.reminderService.get(),
+                             fixture.careService.get(), fixture.settingsService.get(),
+                             &systemService, 15'000, nullptr, &controllerVision);
+    controller.initialize();
+    window.showPage(MainWindow::PageId::Settings);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+
+    controllerVision.handleDetection(event);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+    event.type = VisionEventType::FallConfirmed;
+    event.confidence = 0.91;
+    controllerVision.handleDetection(event);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Emergency);
+    auto* emergency = window.findChild<EmergencyPage*>();
+    QVERIFY(emergency);
+    QVERIFY(emergency->detail().contains(QStringLiteral("跌倒")));
+    emergency->okayButton()->click();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+
+    current = current.addMSecs(VisionService::defaultCooldownMs(
+        VisionEventType::Wave));
+    event.type = VisionEventType::Wave;
+    event.confidence = 0.86;
+    controllerVision.handleDetection(event);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    fixture.reminderService->stop();
+}
+
+void V02Test::emergencySuspendsReminderPresentationCount()
+{
+    QDateTime current(QDate(2026, 8, 20), QTime(9, 0));
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error, [&current] { return current; }), qPrintable(error));
+    ReminderDraft draft = medicineDraft();
+    draft.timeOfDay = current.time();
+    draft.repeatIntervalMinutes = 1;
+    draft.maxPresentationCount = 3;
+    QVERIFY(fixture.reminderService->save(draft).success);
+
+    MainWindow window;
+    SystemService system;
+    AppController controller(&window, fixture.reminderService.get(),
+                             fixture.careService.get(), fixture.settingsService.get(),
+                             &system);
+    controller.initialize();
+    QVERIFY(controller.hasActiveReminderAlert());
+    const ReminderEventId eventId = controller.currentReminderEventId();
+    bool found = false;
+    QCOMPARE(fixture.reminders->occurrence(eventId, &found, &error).presentationCount, 1);
+    QVERIFY(controller.handleKeywordSemantic(KeywordSemantic::Emergency,
+                                             QStringLiteral("救命")));
+    QVERIFY(fixture.reminderService->isSchedulingSuspended());
+    current = current.addSecs(3 * 60);
+    fixture.reminderService->checkNow();
+    QCOMPARE(fixture.reminders->occurrence(eventId, &found, &error).presentationCount, 1);
+
+    window.findChild<QPushButton*>(QStringLiteral("emergencyDismissButton"))->click();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::ReminderAlert);
+    QVERIFY(fixture.reminderService->isSchedulingSuspended());
+    QVERIFY(controller.handleReminderConfirmation(ReminderConfirmationSemantic::Acknowledge,
+                                                  ReminderAckSource::Touch));
+    QVERIFY(!fixture.reminderService->isSchedulingSuspended());
+
+    ReminderDraft later = draft;
+    later.title = QStringLiteral("恢复调度验证");
+    QVERIFY(fixture.reminderService->save(later).success);
+    fixture.reminderService->checkNow();
+    QVERIFY(controller.hasActiveReminderAlert());
+    fixture.reminderService->stop();
+}
+
+void V02Test::workerLifecycleRetriesAreFiniteAndOutputIsBounded()
+{
+    const QString python = pythonExecutable();
+    if (python.isEmpty())
+        QSKIP("Python executable is unavailable for fake worker lifecycle tests");
+
+    QTemporaryDir visionDirectory;
+    QVERIFY(visionDirectory.isValid());
+    const QString visionScript = QDir(visionDirectory.path()).filePath(
+        QStringLiteral("src/worker.py"));
+    QVERIFY(writeTextFile(visionScript,
+        QByteArrayLiteral("import sys\nsys.exit(7)\n")));
+    VisionAdapter::Options visionOptions;
+    visionOptions.enabled = true;
+    visionOptions.runtimeRoot = visionDirectory.path();
+    visionOptions.workerScript = QStringLiteral("src/worker.py");
+    visionOptions.pythonExecutable = python;
+    visionOptions.startupTimeoutMs = 500;
+    visionOptions.killFallbackMs = 30;
+    visionOptions.retryDelaysMs = {10, 10, 10};
+    VisionAdapter vision(visionOptions);
+    QSignalSpy retrySpy(&vision, &VisionAdapter::recoveryScheduled);
+    QVERIFY(vision.start());
+    QTRY_COMPARE_WITH_TIMEOUT(retrySpy.count(), 3, 2'000);
+    QTRY_VERIFY_WITH_TIMEOUT(
+        vision.status().summary.contains(QStringLiteral("用尽")), 2'000);
+    QVERIFY(!vision.isRunning());
+    QCOMPARE(vision.status().state, VisionRuntimeState::Degraded);
+
+    QTemporaryDir timeoutDirectory;
+    QVERIFY(timeoutDirectory.isValid());
+    const QString timeoutScript = QDir(timeoutDirectory.path()).filePath(
+        QStringLiteral("src/worker.py"));
+    QVERIFY(writeTextFile(timeoutScript,
+        QByteArrayLiteral("import signal,time\n"
+                          "signal.signal(signal.SIGTERM, lambda *args: None)\n"
+                          "time.sleep(10)\n")));
+    VisionAdapter::Options timeoutOptions = visionOptions;
+    timeoutOptions.runtimeRoot = timeoutDirectory.path();
+    timeoutOptions.startupTimeoutMs = 20;
+    timeoutOptions.killFallbackMs = 30;
+    timeoutOptions.retryDelaysMs.clear();
+    VisionAdapter timeout(timeoutOptions);
+    QSignalSpy killSpy(&timeout, &VisionAdapter::forceKillInvoked);
+    QVERIFY(timeout.start());
+    QTRY_VERIFY_WITH_TIMEOUT(!timeout.isRunning(), 2'000);
+#ifdef Q_OS_UNIX
+    QCOMPARE(killSpy.count(), 1);
+#else
+    QVERIFY(killSpy.count() <= 1);
+#endif
+
+    QTemporaryDir kwsDirectory;
+    QVERIFY(kwsDirectory.isValid());
+    QVERIFY(createFakeKwsRuntime(kwsDirectory.path(), QByteArrayLiteral(
+        "import sys,time\n"
+        "sys.stdout.write('x' * 300000)\n"
+        "sys.stdout.flush()\n"
+        "time.sleep(0.1)\n")));
+    KeywordSpottingAdapter::Options kwsOptions;
+    kwsOptions.enabled = true;
+    kwsOptions.runtimeRoot = kwsDirectory.path();
+    kwsOptions.pythonExecutable = python;
+    kwsOptions.startupTimeoutMs = 1'000;
+    kwsOptions.retryDelaysMs.clear();
+    KeywordSpottingAdapter kws(kwsOptions);
+    QSignalSpy diagnosticSpy(&kws, &KeywordSpottingAdapter::diagnosticMessage);
+    QVERIFY(kws.start());
+    QTRY_VERIFY_WITH_TIMEOUT(diagnosticSpy.count() > 0, 2'000);
+    bool boundedWarning = false;
+    QStringList diagnosticMessages;
+    for (const QList<QVariant>& arguments : diagnosticSpy) {
+        diagnosticMessages.append(arguments.first().toString());
+        boundedWarning = boundedWarning
+            || arguments.first().toString().contains(QStringLiteral("256 KiB"));
+    }
+    QVERIFY2(boundedWarning, qPrintable(diagnosticMessages.join(QLatin1Char('\n'))));
+    kws.stop();
+}
+
+void V02Test::diagnosticsAndDeveloperFacadeAreBoundedAndSafe()
+{
+    DiagnosticsService diagnostics(3);
+    diagnostics.record(DiagnosticSource::System, DiagnosticLevel::Info,
+                       QStringLiteral("one"));
+    diagnostics.record(DiagnosticSource::System, DiagnosticLevel::Info,
+                       QStringLiteral("two"));
+    diagnostics.record(DiagnosticSource::System, DiagnosticLevel::Info,
+                       QStringLiteral("three"));
+    diagnostics.record(DiagnosticSource::System, DiagnosticLevel::Info,
+                       QStringLiteral("four"));
+    QCOMPARE(diagnostics.size(), 3);
+    QCOMPARE(diagnostics.events().first().event, QStringLiteral("two"));
+    QCOMPARE(diagnostics.events().last().event, QStringLiteral("four"));
+
+    AudioDeviceAdapter audio([] {
+        return QList<AudioInputDevice>{{QStringLiteral("hw:0,0"),
+                                        QStringLiteral("Fake ES8388"), true}};
+    });
+    QTemporaryDir cameraRoot;
+    QVERIFY(cameraRoot.isValid());
+    QVERIFY(writeTextFile(QDir(cameraRoot.path()).filePath(QStringLiteral("video0")), {}));
+    CameraDeviceAdapter camera(cameraRoot.path());
+    KeywordSpottingAdapter::Options kwsOptions;
+    kwsOptions.enabled = false;
+    KeywordSpottingAdapter kwsAdapter(kwsOptions);
+    KeywordSpottingService kws(&kwsAdapter);
+    VisionAdapter::Options visionOptions;
+    visionOptions.enabled = false;
+    VisionAdapter visionAdapter(visionOptions);
+    VisionService vision(&visionAdapter);
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error), qPrintable(error));
+    SystemService system;
+    DeveloperService developer(&kws, &vision, fixture.reminderService.get(),
+                               &system, &audio, &camera, &diagnostics,
+                               [] { return true; }, [] { return 2; },
+                               [] { return QStringLiteral("test.db"); });
+    const DeveloperSnapshot snapshot = developer.snapshot();
+    QCOMPARE(snapshot.audioInputs.size(), 1);
+    QCOMPARE(snapshot.cameras.size(), 1);
+    QVERIFY(snapshot.sqliteAvailable);
+    QCOMPARE(snapshot.sqliteSchemaVersion, 2);
+    QVERIFY(developer.setKwsEnabled(false));
+    KeywordSpottingConfig invalid = kws.config();
+    invalid.audioDevice = QStringLiteral("missing-device");
+    QVERIFY(!developer.reconfigureKws(invalid, &error));
+    QVERIFY(error.contains(QStringLiteral("不可用")));
+    KeywordSpottingConfig valid = kws.config();
+    valid.enabled = false;
+    valid.audioDevice = QStringLiteral("hw:0,0");
+    QVERIFY(developer.reconfigureKws(valid, &error));
+    VisionConfig visionConfig = vision.config();
+    visionConfig.enabled = false;
+    visionConfig.cameraIndex = 0;
+    QVERIFY(developer.reconfigureVision(visionConfig, &error));
+    QVERIFY(!developer.restartVision());
+}
+
+void V02Test::developerSimulationUsesBusinessChain()
+{
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error), qPrintable(error));
+    KeywordSpottingService kws(nullptr);
+    VisionService vision(nullptr);
+    DiagnosticsService diagnostics(200);
+    AudioDeviceAdapter audio;
+    CameraDeviceAdapter camera;
+    SystemService system;
+    DeveloperService developer(&kws, &vision, fixture.reminderService.get(),
+                               &system, &audio, &camera, &diagnostics);
+    MainWindow window(true);
+    AppController controller(&window, fixture.reminderService.get(),
+                             fixture.careService.get(), fixture.settingsService.get(),
+                             &system, 15'000, &kws, &vision, &developer);
+    controller.initialize();
+    developer.simulateGreeting();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    window.showPage(MainWindow::PageId::Settings);
+    developer.simulateWave();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    developer.simulateReminderDue();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::ReminderAlert);
+    developer.simulateAcknowledge();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    developer.simulateEmergency();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Emergency);
+    QVERIFY(diagnostics.size() > 0);
+    fixture.reminderService->stop();
+}
+
 void V02Test::reminderCrudPersistsAndRejectsStaleRevision()
 {
     ServiceFixture fixture;
@@ -320,6 +933,9 @@ void V02Test::reminderCrudPersistsAndRejectsStaleRevision()
     QVERIFY(found);
     QCOMPARE(stored.title, draft.title);
     QCOMPARE(stored.revision, 1);
+    QVERIFY(!stored.uuid.isEmpty());
+    QCOMPARE(stored.iconKey, QStringLiteral("medicine"));
+    QCOMPARE(stored.voiceText, stored.title);
 
     draft.id = stored.id;
     draft.expectedRevision = stored.revision;
@@ -340,27 +956,192 @@ void V02Test::reminderCrudPersistsAndRejectsStaleRevision()
     QVERIFY(fixture.reminderService->reminders().isEmpty());
 }
 
-void V02Test::reminderSchedulerDoesNotRedeliverToday()
+void V02Test::acknowledgementStopsRepeatsAndIsNotCompletion()
 {
+    QDateTime current(QDate(2026, 8, 20), QTime(8, 0));
     ServiceFixture fixture;
     QString error;
-    QVERIFY2(fixture.open(&error), qPrintable(error));
+    QVERIFY2(fixture.open(&error, [&current] { return current; }), qPrintable(error));
     ReminderDraft draft = medicineDraft();
-    draft.timeOfDay = QTime::currentTime();
+    draft.timeOfDay = current.time();
+    draft.repeatIntervalMinutes = 5;
+    draft.maxPresentationCount = 3;
+    const ServiceResult saved = fixture.reminderService->save(draft);
+    QVERIFY2(saved.success, qPrintable(saved.error));
+
+    QSignalSpy presentationSpy(fixture.reminderService.get(),
+        &ReminderService::reminderPresentationRequested);
+    fixture.reminderService->start();
+    QCOMPARE(presentationSpy.count(), 1);
+    const ReminderPresentation presentation = qvariant_cast<ReminderPresentation>(
+        presentationSpy.first().first());
+    QCOMPARE(presentation.occurrence.status,
+             ReminderOccurrenceStatus::Presented);
+    QCOMPARE(presentation.occurrence.presentationCount, 1);
+
+    const ServiceResult acknowledged = fixture.reminderService->acknowledgeOccurrence(
+        presentation.occurrence.id, ReminderAckSource::Touch);
+    QVERIFY2(acknowledged.success, qPrintable(acknowledged.error));
+    bool found = false;
+    const ReminderOccurrence occurrence = fixture.reminders->occurrence(
+        presentation.occurrence.id, &found, &error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(found);
+    QCOMPARE(occurrence.status, ReminderOccurrenceStatus::Acknowledged);
+    QCOMPARE(occurrence.ackSource, ReminderAckSource::Touch);
+    QVERIFY(occurrence.acknowledgedAt.isValid());
+    QVERIFY(!occurrence.completedAt.isValid());
+
+    const CareSummary summary = fixture.careService->todaySummary(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(summary.medicineTotal, 1);
+    QCOMPARE(summary.medicineCompleted, 0);
+
+    current = current.addSecs(10 * 60);
+    fixture.reminderService->checkNow();
+    QCOMPARE(presentationSpy.count(), 1);
+    QCOMPARE(fixture.reminders->occurrence(
+                 presentation.occurrence.id, &found).presentationCount, 1);
+    fixture.reminderService->stop();
+}
+
+void V02Test::unconfirmedReminderRepeatsUpToMaximum()
+{
+    QDateTime current(QDate(2026, 8, 20), QTime(10, 0));
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error, [&current] { return current; }), qPrintable(error));
+    ReminderDraft draft = medicineDraft();
+    draft.timeOfDay = current.time();
+    draft.repeatIntervalMinutes = 1;
+    draft.maxPresentationCount = 3;
     QVERIFY(fixture.reminderService->save(draft).success);
 
-    QSignalSpy triggerSpy(fixture.reminderService.get(),
-                          &ReminderService::reminderTriggered);
+    QSignalSpy presentationSpy(fixture.reminderService.get(),
+        &ReminderService::reminderPresentationRequested);
     fixture.reminderService->start();
-    QCOMPARE(triggerSpy.count(), 1);
-    QCOMPARE(fixture.reminderService->reminders().first().status,
-             ReminderOccurrenceStatus::Pending);
-    fixture.reminderService->stop();
-    fixture.reminderService->start();
-    QCOMPARE(triggerSpy.count(), 1);
-    QVERIFY(fixture.reminders->hasEventForDate(
-        fixture.reminderService->reminders().first().id, QDate::currentDate(), &error));
+    QCOMPARE(presentationSpy.count(), 1);
+    const ReminderEventId eventId = qvariant_cast<ReminderPresentation>(
+        presentationSpy.first().first()).occurrence.id;
+
+    current = current.addSecs(60);
+    fixture.reminderService->checkNow();
+    QCOMPARE(presentationSpy.count(), 2);
+    current = current.addSecs(60);
+    fixture.reminderService->checkNow();
+    QCOMPARE(presentationSpy.count(), 3);
+    bool found = false;
+    QCOMPARE(fixture.reminders->occurrence(eventId, &found, &error).presentationCount, 3);
+    QVERIFY(found);
     QVERIFY2(error.isEmpty(), qPrintable(error));
+
+    current = current.addSecs(60);
+    fixture.reminderService->checkNow();
+    QCOMPARE(presentationSpy.count(), 3);
+    const ReminderOccurrence missed = fixture.reminders->occurrence(eventId, &found, &error);
+    QCOMPARE(missed.status, ReminderOccurrenceStatus::Missed);
+    QCOMPARE(missed.presentationCount, 3);
+    fixture.reminderService->stop();
+}
+
+void V02Test::controllerQueuesAlertsAndRestoresPreviousPage()
+{
+    QDateTime current(QDate(2026, 8, 20), QTime(8, 0));
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error, [&current] { return current; }), qPrintable(error));
+
+    ReminderDraft medicine = medicineDraft();
+    medicine.timeOfDay = QTime(9, 0);
+    QVERIFY(fixture.reminderService->save(medicine).success);
+    ReminderDraft water = medicine;
+    water.type = ReminderType::Water;
+    water.title = QStringLiteral("喝一杯水");
+    water.iconKey = QStringLiteral("water");
+    QVERIFY(fixture.reminderService->save(water).success);
+
+    MainWindow window;
+    window.setFixedSize(1024, 600);
+    window.show();
+    QTest::qWait(10);
+    SystemService systemService;
+    AppController controller(&window, fixture.reminderService.get(),
+                             fixture.careService.get(), fixture.settingsService.get(),
+                             &systemService, 15'000);
+    controller.initialize();
+    window.showPage(MainWindow::PageId::Settings);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+
+    current = QDateTime(current.date(), QTime(9, 0));
+    fixture.reminderService->checkNow();
+    QCOMPARE(window.currentPage(), MainWindow::PageId::ReminderAlert);
+    QVERIFY(window.currentPage() != MainWindow::PageId::Reminder);
+    QVERIFY(controller.hasActiveReminderAlert());
+    const ReminderEventId firstEvent = controller.currentReminderEventId();
+    QVERIFY(firstEvent != 0);
+
+    auto* acknowledge = window.findChild<QPushButton*>(
+        QStringLiteral("acknowledgeAlertButton"));
+    QVERIFY(acknowledge);
+    QTest::mouseClick(acknowledge, Qt::LeftButton);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::ReminderAlert);
+    QVERIFY(controller.hasActiveReminderAlert());
+    const ReminderEventId secondEvent = controller.currentReminderEventId();
+    QVERIFY(secondEvent != 0);
+    QVERIFY(secondEvent != firstEvent);
+
+    bool found = false;
+    ReminderOccurrence first = fixture.reminders->occurrence(
+        firstEvent, &found, &error);
+    QVERIFY(found);
+    QCOMPARE(first.status, ReminderOccurrenceStatus::Acknowledged);
+    QVERIFY(!first.completedAt.isValid());
+
+    QTest::mouseClick(acknowledge, Qt::LeftButton);
+    QVERIFY(!controller.hasActiveReminderAlert());
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Settings);
+    const ReminderOccurrence second = fixture.reminders->occurrence(
+        secondEvent, &found, &error);
+    QVERIFY(found);
+    QCOMPARE(second.status, ReminderOccurrenceStatus::Acknowledged);
+    QVERIFY(!controller.handleReminderConfirmation(
+        ReminderConfirmationSemantic::Acknowledge, ReminderAckSource::Voice));
+    fixture.reminderService->stop();
+}
+
+void V02Test::reminderAlertPageRendersAndFallsBackIcon()
+{
+    QCOMPARE(reminderIconResourcePath(QStringLiteral("invalid-icon-key")),
+             QStringLiteral(":/icons/reminder.svg"));
+    QCOMPARE(reminderIconResourcePath(QStringLiteral("water")),
+             QStringLiteral(":/icons/water.svg"));
+
+    ReminderPresentation presentation;
+    presentation.reminder.id = 1;
+    presentation.reminder.title = QStringLiteral("该吃药了");
+    presentation.reminder.iconKey = QStringLiteral("invalid-icon-key");
+    presentation.occurrence.id = 7;
+    presentation.occurrence.scheduledAt = QDateTime(
+        QDate(2026, 8, 20), QTime(12, 0));
+    presentation.occurrence.status = ReminderOccurrenceStatus::Presented;
+    presentation.occurrence.presentationCount = 1;
+
+    ReminderAlertPage page;
+    page.setFixedSize(1024, 600);
+    page.setPresentation(presentation);
+    QSignalSpy acknowledgeSpy(&page, &ReminderAlertPage::acknowledgeRequested);
+    page.show();
+    QTest::qWait(10);
+    QCOMPARE(page.size(), QSize(1024, 600));
+    QCOMPARE(page.findChild<QLabel*>(QStringLiteral("reminderAlertText"))->text(),
+             presentation.reminder.title);
+    const QPixmap rendered = page.grab();
+    QCOMPARE(rendered.deviceIndependentSize(), QSizeF(1024, 600));
+    QVERIFY(!rendered.isNull());
+    QTest::mouseClick(page.findChild<QPushButton*>(
+        QStringLiteral("acknowledgeAlertButton")), Qt::LeftButton);
+    QCOMPARE(acknowledgeSpy.count(), 1);
+    QCOMPARE(acknowledgeSpy.first().first().toLongLong(), 7);
 }
 
 void V02Test::careAndSettingsArePersistentServices()
@@ -447,6 +1228,23 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     QCOMPARE(brightnessSlider->minimum(), 0);
     QCOMPARE(brightnessSlider->maximum(), 1);
     QCOMPARE(brightnessSlider->value(), 1);
+    DeviceSummary keywordSummary = binaryBacklight;
+    keywordSummary.keywordSpottingAvailable = true;
+    keywordSummary.keywordSpottingListening = true;
+    keywordSummary.keywordSpottingSummary = QStringLiteral("离线关键词 · 正在监听");
+    keywordSummary.lastKeyword = QStringLiteral("你好");
+    keywordSummary.visionAvailable = true;
+    keywordSummary.visionMonitoring = true;
+    keywordSummary.visionSummary = QStringLiteral("本地视觉：挥手");
+    keywordSummary.visionFps = 7.9;
+    settingsPage.setDeviceSummary(keywordSummary);
+    const auto* keywordLabel = settingsPage.findChild<QLabel*>(
+        QStringLiteral("keywordSpottingSummary"));
+    QVERIFY(keywordLabel);
+    QVERIFY(keywordLabel->text().contains(QStringLiteral("监听中")));
+    QVERIFY(keywordLabel->text().contains(QStringLiteral("7.9 FPS")));
+    QVERIFY(keywordLabel->toolTip().contains(QStringLiteral("你好")));
+    QVERIFY(keywordLabel->toolTip().contains(QStringLiteral("本地视觉：挥手")));
 }
 
 void V02Test::applicationControllerOwnsNavigation()
@@ -504,7 +1302,7 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
 
     MainWindow window;
     window.setSystemStatus(input);
-    QCOMPARE(window.findChildren<StatusBarWidget*>().size(), 5);
+    QCOMPARE(window.findChildren<StatusBarWidget*>().size(), 6);
     for (StatusBarWidget* pageStatus : window.findChildren<StatusBarWidget*>()) {
         bool pageHasSummary = false;
         for (QLabel* label : pageStatus->findChildren<QLabel*>())
@@ -513,6 +1311,15 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
                     && label->text().contains(QStringLiteral("电量 87%")));
         QVERIFY(pageHasSummary);
     }
+    auto* hiddenEntry = window.findChild<QPushButton*>(
+        QStringLiteral("developerEntryButton"));
+    QVERIFY(hiddenEntry);
+    QVERIFY(hiddenEntry->isHidden());
+    MainWindow developerWindow(true);
+    auto* visibleEntry = developerWindow.findChild<QPushButton*>(
+        QStringLiteral("developerEntryButton"));
+    QVERIFY(visibleEntry);
+    QVERIFY(!visibleEntry->isHidden());
 }
 
 void V02Test::controlTimeoutWorksAcrossBusinessPages()
@@ -520,7 +1327,7 @@ void V02Test::controlTimeoutWorksAcrossBusinessPages()
     ServiceFixture fixture;
     QString error;
     QVERIFY2(fixture.open(&error), qPrintable(error));
-    MainWindow window;
+    MainWindow window(true);
     SystemService systemService;
     AppController controller(&window, fixture.reminderService.get(), fixture.careService.get(),
                              fixture.settingsService.get(), &systemService, 80);
@@ -558,6 +1365,16 @@ void V02Test::renderV02Pages()
     water.status = ReminderOccurrenceStatus::Pending;
     reminders.append(water);
     window.setReminders(reminders);
+    ReminderPresentation alert;
+    alert.reminder = medicine;
+    alert.reminder.title = QStringLiteral("早餐后吃药");
+    alert.reminder.iconKey = QStringLiteral("medicine");
+    alert.occurrence.id = 99;
+    alert.occurrence.reminderId = medicine.id;
+    alert.occurrence.scheduledAt = QDateTime::currentDateTime();
+    alert.occurrence.status = ReminderOccurrenceStatus::Presented;
+    alert.occurrence.presentationCount = 1;
+    window.setReminderPresentation(alert);
     CareSummary care;
     care.waterCompleted = 3;
     care.medicineCompleted = 1;
@@ -574,6 +1391,13 @@ void V02Test::renderV02Pages()
     device.brightnessControlAvailable = true;
     device.brightnessLevels = 2;
     device.brightnessSummary = QStringLiteral("GPIO 背光 · 仅开/关");
+    device.keywordSpottingAvailable = true;
+    device.keywordSpottingListening = true;
+    device.keywordSpottingSummary = QStringLiteral("离线关键词 · 正在监听");
+    device.visionAvailable = true;
+    device.visionMonitoring = true;
+    device.visionSummary = QStringLiteral("本地视觉：挥手");
+    device.visionFps = 8.0;
     window.setDeviceSummary(device);
     SystemStatus systemStatus;
     systemStatus.currentDateTime = QDateTime::currentDateTime();
@@ -581,6 +1405,27 @@ void V02Test::renderV02Pages()
     systemStatus.networkAvailable = true;
     systemStatus.networkSummary = QStringLiteral("Wi-Fi · 已联网");
     window.setSystemStatus(systemStatus);
+    DeveloperSnapshot developerSnapshot;
+    developerSnapshot.kws.enabled = true;
+    developerSnapshot.kws.available = true;
+    developerSnapshot.kws.running = true;
+    developerSnapshot.kws.state = KeywordSpottingRuntimeState::Listening;
+    developerSnapshot.kws.workerPid = 1374;
+    developerSnapshot.kws.audioDevice = QStringLiteral("hw:0,0");
+    developerSnapshot.kws.inputRms = 0.031;
+    developerSnapshot.kws.inputPeak = 0.12;
+    developerSnapshot.vision.enabled = true;
+    developerSnapshot.vision.available = true;
+    developerSnapshot.vision.running = true;
+    developerSnapshot.vision.state = VisionRuntimeState::Running;
+    developerSnapshot.vision.effectiveFps = 5.02;
+    developerSnapshot.audioInputs.append(
+        {QStringLiteral("hw:0,0"), QStringLiteral("ES8388"), true});
+    developerSnapshot.cameras.append(
+        {QStringLiteral("/dev/video0"), 0, QStringLiteral("UVC Camera"), true});
+    developerSnapshot.sqliteAvailable = true;
+    developerSnapshot.sqliteSchemaVersion = 2;
+    window.setDeveloperSnapshot(developerSnapshot);
     window.show();
 
     const QList<QPair<MainWindow::PageId, QString>> pages {
@@ -589,7 +1434,10 @@ void V02Test::renderV02Pages()
         {MainWindow::PageId::Care, QStringLiteral("care")},
         {MainWindow::PageId::Reminder, QStringLiteral("reminder")},
         {MainWindow::PageId::ReminderEdit, QStringLiteral("reminder-edit")},
-        {MainWindow::PageId::Settings, QStringLiteral("settings")}
+        {MainWindow::PageId::Settings, QStringLiteral("settings")},
+        {MainWindow::PageId::ReminderAlert, QStringLiteral("reminder-alert")}
+        ,{MainWindow::PageId::Emergency, QStringLiteral("emergency")},
+        {MainWindow::PageId::Developer, QStringLiteral("developer")}
     };
     for (const auto& page : pages) {
         window.showPage(page.first);
@@ -597,6 +1445,24 @@ void V02Test::renderV02Pages()
         const QPixmap rendered = window.grab();
         QCOMPARE(rendered.deviceIndependentSize(), QSizeF(1024, 600));
         QVERIFY(rendered.save(QDir(capturePath).filePath(page.second + QStringLiteral(".png"))));
+    }
+    window.showPage(MainWindow::PageId::Developer);
+    auto* developerTabs = window.findChild<QTabWidget*>(
+        QStringLiteral("developerTabs"));
+    QVERIFY(developerTabs);
+    const QStringList developerTabNames {
+        QStringLiteral("overview"), QStringLiteral("kws"),
+        QStringLiteral("vision"), QStringLiteral("devices"),
+        QStringLiteral("events")
+    };
+    QCOMPARE(developerTabs->count(), developerTabNames.size());
+    for (int index = 0; index < developerTabs->count(); ++index) {
+        developerTabs->setCurrentIndex(index);
+        QTest::qWait(20);
+        const QPixmap rendered = window.grab();
+        QCOMPARE(rendered.deviceIndependentSize(), QSizeF(1024, 600));
+        QVERIFY(rendered.save(QDir(capturePath).filePath(
+            QStringLiteral("developer-%1.png").arg(developerTabNames.at(index)))));
     }
 }
 

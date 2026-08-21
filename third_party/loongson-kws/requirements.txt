@@ -1,0 +1,6 @@
+# Board-verified inference version; a LoongArch-compatible wheel may be required.
+sherpa-onnx==1.12.15
+numpy>=1.24
+
+# Used by --list-devices and the tools/ audio diagnostics.
+sounddevice>=0.4.6

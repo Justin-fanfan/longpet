@@ -1,5 +1,7 @@
 # LongPet V0.2 工作报告
 
+> V0.2.1 已补充 Reminder/Emergency 生命周期整改、KWS/Vision 有限恢复和 Developer / Diagnostics 控制台。最新实现与验收结果见 [LongPet V0.2.1 Developer / Diagnostics 工作报告](LongPet-V0.2.1-Developer-Diagnostics-Work-Report.md)；本文件保留为 V0.2 基线历史记录。
+
 - 完成日期：2026-08-14
 - 最近更新：2026-08-15（真实网络状态 Adapter）
 - 工程目录：`D:\code_qt\longpet`

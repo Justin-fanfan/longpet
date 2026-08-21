@@ -11,6 +11,8 @@ SystemService::SystemService(QObject* parent)
     m_deviceSummary.audioSummary = QStringLiteral("未检测到音量控制");
     m_deviceSummary.brightnessSummary = QStringLiteral("未检测到背光控制");
     m_deviceSummary.powerSummary = QStringLiteral("电源状态未知");
+    m_deviceSummary.keywordSpottingSummary = QStringLiteral("关键词识别未启动");
+    m_deviceSummary.visionSummary = QStringLiteral("视觉监护未启动");
     m_clockTimer.setInterval(30'000);
     m_clockTimer.setTimerType(Qt::VeryCoarseTimer);
     connect(&m_clockTimer, &QTimer::timeout,
@@ -86,6 +88,33 @@ void SystemService::setPowerSummary(const QString& summary)
 {
     m_deviceSummary.powerSummary = summary.simplified().isEmpty()
         ? QStringLiteral("电源状态未知") : summary.simplified();
+    emit deviceSummaryChanged(deviceSummary());
+}
+
+void SystemService::setKeywordSpottingState(bool available, bool listening,
+                                            const QString& summary,
+                                            const QString& lastKeyword)
+{
+    m_deviceSummary.keywordSpottingAvailable = available;
+    m_deviceSummary.keywordSpottingListening = available && listening;
+    m_deviceSummary.keywordSpottingSummary = summary.simplified().isEmpty()
+        ? (listening ? QStringLiteral("离线关键词 · 正在监听")
+                     : QStringLiteral("关键词识别不可用"))
+        : summary.simplified();
+    m_deviceSummary.lastKeyword = lastKeyword.simplified();
+    emit deviceSummaryChanged(deviceSummary());
+}
+
+void SystemService::setVisionState(bool available, bool monitoring,
+                                   const QString& summary, double effectiveFps)
+{
+    m_deviceSummary.visionAvailable = available;
+    m_deviceSummary.visionMonitoring = available && monitoring;
+    m_deviceSummary.visionSummary = summary.simplified().isEmpty()
+        ? (monitoring ? QStringLiteral("视觉监护运行中")
+                      : QStringLiteral("视觉监护不可用"))
+        : summary.simplified();
+    m_deviceSummary.visionFps = qMax(0.0, effectiveFps);
     emit deviceSummaryChanged(deviceSummary());
 }
 

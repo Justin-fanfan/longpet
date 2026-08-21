@@ -7,7 +7,7 @@
 #include <QUuid>
 
 namespace {
-constexpr int CurrentSchemaVersion = 1;
+constexpr int CurrentSchemaVersion = 2;
 
 bool execute(QSqlQuery& query, const QString& sql, QString* error)
 {
@@ -136,8 +136,13 @@ bool DatabaseManager::migrate(QString* error)
                          .arg(version).arg(CurrentSchemaVersion);
         return false;
     }
-    if (version == 0)
-        return createSchemaVersion1(error);
+    if (version == 0) {
+        if (!createSchemaVersion1(error))
+            return false;
+        version = 1;
+    }
+    if (version == 1)
+        return migrateVersion1To2(error);
     return true;
 }
 
@@ -175,6 +180,92 @@ bool DatabaseManager::createSchemaVersion1(QString* error)
     };
 
     for (const QString& sql : statements) {
+        if (!execute(query, sql, error)) {
+            db.rollback();
+            return false;
+        }
+    }
+    if (!db.commit()) {
+        if (error)
+            *error = db.lastError().text();
+        return false;
+    }
+    return true;
+}
+
+bool DatabaseManager::migrateVersion1To2(QString* error)
+{
+    QSqlDatabase db = database();
+    if (!db.transaction()) {
+        if (error)
+            *error = db.lastError().text();
+        return false;
+    }
+
+    QSqlQuery query(db);
+    const QStringList alterStatements {
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN uuid TEXT"),
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN icon_key TEXT"),
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN voice_type TEXT NOT NULL DEFAULT 'none'"),
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN voice_text TEXT NOT NULL DEFAULT ''"),
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN voice_asset_id TEXT NOT NULL DEFAULT ''"),
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN repeat_interval_minutes INTEGER NOT NULL DEFAULT 5"),
+        QStringLiteral("ALTER TABLE reminders ADD COLUMN max_repeat_count INTEGER NOT NULL DEFAULT 3"),
+        QStringLiteral("ALTER TABLE reminder_events ADD COLUMN presentation_count INTEGER NOT NULL DEFAULT 0"),
+        QStringLiteral("ALTER TABLE reminder_events ADD COLUMN last_presented_at TEXT"),
+        QStringLiteral("ALTER TABLE reminder_events ADD COLUMN acknowledged_at TEXT"),
+        QStringLiteral("ALTER TABLE reminder_events ADD COLUMN ack_source TEXT NOT NULL DEFAULT 'none'")
+    };
+    for (const QString& sql : alterStatements) {
+        if (!execute(query, sql, error)) {
+            db.rollback();
+            return false;
+        }
+    }
+
+    struct LegacyReminder {
+        qint64 id = 0;
+        QString type;
+        QString title;
+    };
+    QList<LegacyReminder> legacyReminders;
+    if (!query.exec(QStringLiteral("SELECT id,type,title FROM reminders"))) {
+        if (error)
+            *error = query.lastError().text();
+        db.rollback();
+        return false;
+    }
+    while (query.next()) {
+        legacyReminders.append({query.value(0).toLongLong(),
+                                query.value(1).toString(),
+                                query.value(2).toString()});
+    }
+
+    for (const LegacyReminder& reminder : legacyReminders) {
+        const QString iconKey = reminder.type == QStringLiteral("medicine")
+            ? QStringLiteral("medicine")
+            : reminder.type == QStringLiteral("water")
+                ? QStringLiteral("water") : QStringLiteral("reminder");
+        query.prepare(QStringLiteral(
+            "UPDATE reminders SET uuid=?,icon_key=?,voice_text=? WHERE id=?"));
+        query.addBindValue(QUuid::createUuid().toString(QUuid::WithoutBraces));
+        query.addBindValue(iconKey);
+        query.addBindValue(reminder.title);
+        query.addBindValue(reminder.id);
+        if (!query.exec()) {
+            if (error)
+                *error = query.lastError().text();
+            db.rollback();
+            return false;
+        }
+    }
+
+    const QStringList finishStatements {
+        QStringLiteral("CREATE UNIQUE INDEX idx_reminders_uuid ON reminders(uuid)"),
+        QStringLiteral("CREATE INDEX idx_reminder_events_status ON reminder_events(status, last_presented_at)"),
+        QStringLiteral("UPDATE schema_meta SET version = 2")
+    };
+    for (const QString& sql : finishStatements) {
         if (!execute(query, sql, error)) {
             db.rollback();
             return false;

@@ -7,10 +7,16 @@
 
 class AppController;
 class AudioVolumeAdapter;
+class AudioDeviceAdapter;
 class BacklightAdapter;
 class CareEventRepository;
 class CareService;
+class CameraDeviceAdapter;
 class DatabaseManager;
+class DeveloperService;
+class DiagnosticsService;
+class KeywordSpottingAdapter;
+class KeywordSpottingService;
 class MainWindow;
 class NetworkStatusAdapter;
 class PowerStatusAdapter;
@@ -19,6 +25,8 @@ class ReminderService;
 class SettingsRepository;
 class SettingsService;
 class SystemService;
+class VisionAdapter;
+class VisionService;
 
 class Application final : public QObject {
     Q_OBJECT
@@ -45,6 +53,14 @@ private:
     std::unique_ptr<CareService> m_careService;
     std::unique_ptr<SettingsService> m_settingsService;
     std::unique_ptr<SystemService> m_systemService;
+    std::unique_ptr<DiagnosticsService> m_diagnosticsService;
+    std::unique_ptr<AudioDeviceAdapter> m_audioDeviceAdapter;
+    std::unique_ptr<CameraDeviceAdapter> m_cameraDeviceAdapter;
+    std::unique_ptr<DeveloperService> m_developerService;
+    std::unique_ptr<KeywordSpottingAdapter> m_keywordSpottingAdapter;
+    std::unique_ptr<KeywordSpottingService> m_keywordSpottingService;
+    std::unique_ptr<VisionAdapter> m_visionAdapter;
+    std::unique_ptr<VisionService> m_visionService;
     std::unique_ptr<NetworkStatusAdapter> m_networkStatusAdapter;
     std::unique_ptr<AudioVolumeAdapter> m_audioVolumeAdapter;
     std::unique_ptr<BacklightAdapter> m_backlightAdapter;

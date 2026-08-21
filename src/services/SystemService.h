@@ -20,6 +20,11 @@ public:
     void setAudioControlState(bool available, const QString& summary);
     void setBacklightControlState(bool available, int levels, const QString& summary);
     void setPowerSummary(const QString& summary);
+    void setKeywordSpottingState(bool available, bool listening,
+                                 const QString& summary,
+                                 const QString& lastKeyword = {});
+    void setVisionState(bool available, bool monitoring,
+                        const QString& summary, double effectiveFps = 0.0);
 
 signals:
     void statusChanged(const SystemStatus& status);

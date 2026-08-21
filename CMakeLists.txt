@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     LongPet
-    VERSION 0.2.0
+    VERSION 0.2.1
     LANGUAGES CXX
 )
 
@@ -35,13 +35,25 @@ set(
     src/app/Application.h
     src/app/AppController.cpp
     src/app/AppController.h
+    src/model/ReminderModels.cpp
     src/model/ReminderModels.h
+    src/model/KeywordSpottingModels.h
+    src/model/VisionModels.h
+    src/model/DiagnosticsModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
+    src/platform/KeywordSpottingAdapter.cpp
+    src/platform/KeywordSpottingAdapter.h
+    src/platform/VisionAdapter.cpp
+    src/platform/VisionAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
+    src/platform/AudioDeviceAdapter.cpp
+    src/platform/AudioDeviceAdapter.h
+    src/platform/CameraDeviceAdapter.cpp
+    src/platform/CameraDeviceAdapter.h
     src/platform/BacklightAdapter.cpp
     src/platform/BacklightAdapter.h
     src/platform/PowerStatusAdapter.cpp
@@ -56,12 +68,25 @@ set(
     src/data/SettingsRepository.h
     src/services/ReminderService.cpp
     src/services/ReminderService.h
+    src/services/KeywordSpottingService.cpp
+    src/services/KeywordSpottingService.h
+    src/services/VisionService.cpp
+    src/services/VisionService.h
     src/services/CareService.cpp
     src/services/CareService.h
     src/services/SettingsService.cpp
     src/services/SettingsService.h
     src/services/SystemService.cpp
     src/services/SystemService.h
+    src/services/DiagnosticsService.cpp
+    src/services/DiagnosticsService.h
+    src/services/DeveloperService.cpp
+    src/services/DeveloperService.h
+    #新加的
+    src/services/WeatherService.cpp
+    src/services/WeatherService.h
+    src/services/CityService.h
+    #
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp
@@ -72,10 +97,14 @@ set(
     src/pages/CarePage.h
     src/pages/ReminderPage.cpp
     src/pages/ReminderPage.h
+    src/pages/ReminderAlertPage.cpp
+    src/pages/ReminderAlertPage.h
     src/pages/ReminderEditPage.cpp
     src/pages/ReminderEditPage.h
     src/pages/SettingsPage.cpp
     src/pages/SettingsPage.h
+    src/pages/DeveloperPage.cpp
+    src/pages/DeveloperPage.h
     src/pages/EmergencyPage.cpp
     src/pages/EmergencyPage.h
     src/pages/SleepPage.cpp
@@ -144,6 +173,21 @@ set_target_properties(LongPet PROPERTIES WIN32_EXECUTABLE TRUE)
 install(
     TARGETS LongPet
     RUNTIME DESTINATION bin
+)
+
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/third_party/loongson-kws/
+    DESTINATION share/longpet/kws
+    PATTERN ".git" EXCLUDE
+    PATTERN ".artifacts" EXCLUDE
+    PATTERN "__pycache__" EXCLUDE
+)
+
+install(
+    DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/third_party/longpet-vision/
+    DESTINATION share/longpet/vision
+    PATTERN "__pycache__" EXCLUDE
+    PATTERN "*.pyc" EXCLUDE
 )
 
 option(LONGPET_BUILD_TESTS "Build LongPet V0.2 tests" OFF)
