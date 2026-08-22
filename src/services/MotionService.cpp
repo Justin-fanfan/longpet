@@ -44,11 +44,10 @@ void MotionService::onPoseDataReceived(const PoseData& pose) {
     // ---- 自定义协议打包 ----
     // 格式：$POSE,<distance>,<dx>,<dy>,<confidence>*<checksum>\n
     // 示例：$POSE,45.6,12.3,-8.7,0.98*5A\n
-    QString msg = QString("$POSE,%1,%2,%3,%4")
-                      .arg(pose.distance, 0, 'f', 2)
-                      .arg(pose.dx, 0, 'f', 2)
-                      .arg(pose.dy, 0, 'f', 2)
-                      .arg(pose.confidence, 0, 'f', 2);
+    QString msg = QString("%1 %2 %3")
+                      .arg(pose.dx, 0, 'f', 0)
+                      .arg(pose.dy, 0, 'f', 0)
+                      .arg(pose.distance, 0, 'f', 0);
 
     // 计算校验和（简单异或）
     quint8 checksum = 0;
