@@ -21,6 +21,15 @@ enum class VisionRuntimeState {
     Error
 };
 
+struct PoseData {
+    double distance = 0.0;   // 两髋距离（像素）
+    double dx = 0.0;         // 中点 X 偏移（相对图像中心）
+    double dy = 0.0;         // 中点 Y 偏移（相对图像中心）
+    int imageWidth = 0;      // 处理分辨率宽度
+    int imageHeight = 0;     // 处理分辨率高度
+    double confidence = 0.0; // 姿态检测置信度
+};
+
 struct VisionDetection {
     VisionEventType type = VisionEventType::Unknown;
     double confidence = 0.0;
@@ -28,6 +37,7 @@ struct VisionDetection {
     QString source;
     QString trackId;
     QJsonObject metadata;
+    PoseData pose;
 };
 
 struct VisionConfig {

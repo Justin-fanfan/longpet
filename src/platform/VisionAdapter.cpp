@@ -1,4 +1,5 @@
 #include "VisionAdapter.h"
+#include "model/VisionModels.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -422,6 +423,21 @@ bool VisionAdapter::parseDetectionEvent(const QByteArray& line,
         parsed.trackId = QString::number(static_cast<qint64>(trackId.toDouble()));
     if (object.value(QStringLiteral("metadata")).isObject())
         parsed.metadata = object.value(QStringLiteral("metadata")).toObject();
+
+    // ----- 新增：解析 pose 字段 -----
+    if (object.contains("pose")) {
+        QJsonObject poseObj = object["pose"].toObject();
+        PoseData pose;
+        pose.distance = poseObj["distance"].toDouble();
+        pose.dx = poseObj["dx"].toDouble();
+        pose.dy = poseObj["dy"].toDouble();
+        pose.imageWidth = poseObj["width"].toInt();
+        pose.imageHeight = poseObj["height"].toInt();
+        pose.confidence = poseObj["confidence"].toDouble();
+        parsed.pose = pose;
+    }
+    // ---------------------------------
+
     if (detection)
         *detection = parsed;
     return true;

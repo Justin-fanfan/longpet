@@ -47,7 +47,7 @@ signals:
     void diagnosticInjectionRequested(const VisionDetection& detection);
     void adapterDiagnostic(const QString& message);
     void recoveryScheduled(int attempt, int delayMs);
-
+    void poseDataAvailable(const PoseData& pose);
 private:
     VisionAdapter* m_adapter = nullptr;
     Clock m_clock;

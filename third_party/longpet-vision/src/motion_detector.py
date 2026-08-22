@@ -5,6 +5,7 @@ from collections import deque
 
 import cv2
 import numpy as np
+import mediapipe as mp  # NEW: 导入 MediaPipe
 
 
 class MotionVisionDetector:
@@ -23,6 +24,7 @@ class MotionVisionDetector:
         *,
         fall_enabled: bool = False,
         wave_enabled: bool = True,
+        pose_enabled: bool = True,           # NEW: 新增姿态估计开关
     ) -> None:
         self.width = width
         self.height = height
@@ -44,6 +46,19 @@ class MotionVisionDetector:
         self.wave_points: deque[tuple[float, float, float]] = deque()
         self.last_wave_seen = -1e9
         self.last_wave_event = -1e9
+
+        # NEW: 姿态估计器初始化
+        self.pose_enabled = pose_enabled
+        if pose_enabled:
+            self.mp_pose = mp.solutions.pose
+            self.pose = self.mp_pose.Pose(
+                static_image_mode=False,
+                model_complexity=1,
+                min_detection_confidence=0.5,
+                min_tracking_confidence=0.5
+            )
+        else:
+            self.pose = None
 
     def process(self, frame: np.ndarray, now: float) -> list[dict]:
         self.frames += 1
@@ -83,6 +98,22 @@ class MotionVisionDetector:
             wave = self._detect_wave(components, now)
             if wave:
                 events.append(wave)
+
+        # NEW: 调用姿态估计，将结果附加到事件或单独生成 pose 事件
+        if self.pose_enabled and self.pose is not None:
+            pose_data = self._extract_pose(frame)
+            if pose_data:
+                if events:
+                    events[0]["pose"] = pose_data
+                else:
+                    events.append({
+                        "type": "pose",
+                        "confidence": pose_data.get("confidence", 1.0),
+                        "timestamp": now,
+                        "source": "mediapipe_pose",
+                        "pose": pose_data,
+                    })
+
         return events
 
     def _detect_fall_candidate(
@@ -234,3 +265,32 @@ class MotionVisionDetector:
                 },
             }
         return None
+
+    # NEW: 新增姿态提取方法（整个方法都是新增的）
+    def _extract_pose(self, frame: np.ndarray) -> dict | None:
+        """提取两髋关键点，返回距离、中点偏移、图像尺寸（算法处理分辨率）"""
+        h, w, _ = frame.shape
+        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        results = self.pose.process(rgb)
+        if not results.pose_landmarks:
+            return None
+        landmarks = results.pose_landmarks.landmark
+        left_hip = landmarks[23]
+        right_hip = landmarks[24]
+        lx = int(left_hip.x * self.width)
+        ly = int(left_hip.y * self.height)
+        rx = int(right_hip.x * self.width)
+        ry = int(right_hip.y * self.height)
+        distance = math.hypot(rx - lx, ry - ly)
+        cx = (lx + rx) / 2.0
+        cy = (ly + ry) / 2.0
+        center_x = self.width / 2.0
+        center_y = self.height / 2.0
+        return {
+            "distance": round(distance, 2),
+            "dx": round(cx - center_x, 2),
+            "dy": round(cy - center_y, 2),
+            "width": self.width,
+            "height": self.height,
+            "confidence": round((left_hip.visibility + right_hip.visibility) / 2.0, 3),
+        }

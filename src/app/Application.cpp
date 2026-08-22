@@ -22,6 +22,7 @@
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
 #include "services/VisionService.h"
+#include "services/MotionService.h"
 #include "widgets/VisualTokens.h"
 
 #include <QCoreApplication>
@@ -120,10 +121,23 @@ bool Application::initialize(QString* error)
     const bool developerMode = qEnvironmentVariableIntValue(
         "LONGPET_DEVELOPER_MODE") == 1;
     m_window = std::make_unique<MainWindow>(developerMode);
+
+    // 创建 MotionService 并打开串口
+    m_motionService = std::make_unique<MotionService>(this);
+
+    // 从环境变量读取串口号，或使用默认值
+    const QString portName = qgetenv("MOTION_SERIAL_PORT");
+    if (!m_motionService->openSerialPort(portName.isEmpty() ? "/dev/ttyS2" : portName)) {
+        qWarning() << "MotionService: Failed to open serial port";
+    } else {
+        qDebug() << "MotionService: Serial port opened successfully";
+    }
+
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
         m_systemService.get(), 15'000, m_keywordSpottingService.get(),
-        m_visionService.get(), m_developerService.get());
+        m_visionService.get(), m_developerService.get(),
+        m_motionService.get());
     m_controller->initialize();
     const KeywordSpottingStatus keywordStatus = m_keywordSpottingService->status();
     m_systemService->setKeywordSpottingState(
@@ -174,6 +188,7 @@ void Application::shutdown()
     if (m_powerStatusAdapter)
         m_powerStatusAdapter->stop();
     m_controller.reset();
+    m_motionService.reset();
     m_window.reset();
     m_powerStatusAdapter.reset();
     m_backlightAdapter.reset();

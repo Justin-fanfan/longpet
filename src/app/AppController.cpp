@@ -18,6 +18,7 @@ AppController::AppController(MainWindow* window,
                              KeywordSpottingService* keywordSpottingService,
                              VisionService* visionService,
                              DeveloperService* developerService,
+                             MotionService* motionService,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
@@ -27,7 +28,8 @@ AppController::AppController(MainWindow* window,
       m_systemService(systemService),
       m_keywordSpottingService(keywordSpottingService),
       m_visionService(visionService),
-      m_developerService(developerService)
+      m_developerService(developerService),
+      m_motionService(motionService)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -314,6 +316,13 @@ void AppController::connectServices()
                 this, [this](const VisionDetection&) {
             showEmergency(QStringLiteral("视觉监护检测到可能跌倒"));
         });
+
+        if (m_motionService) {
+            connect(m_visionService, &VisionService::poseDataAvailable,
+                    m_motionService, &MotionService::onPoseDataReceived);
+            qDebug() << "Connected poseDataAvailable to MotionService";
+        }
+
         connect(m_visionService, &VisionService::waveDetected,
                 this, [this](const VisionDetection&) {
             if (m_emergencyActive || hasActiveReminderAlert()) {

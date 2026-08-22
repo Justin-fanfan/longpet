@@ -23,6 +23,7 @@ find_package(
         Svg
         Sql
         Network
+        SerialPort
 )
 
 if(UNIX AND NOT APPLE)
@@ -83,6 +84,8 @@ set(
     src/services/DeveloperService.cpp
     src/services/DeveloperService.h
     #新加的
+    src/services/MotionService.cpp
+    src/services/MotionService.h
     src/services/WeatherService.cpp
     src/services/WeatherService.h
     src/services/CityService.h
@@ -138,6 +141,7 @@ target_link_libraries(
         Qt6::Svg
         Qt6::Sql
         Qt6::Network
+        Qt6::SerialPort
 )
 
 target_include_directories(

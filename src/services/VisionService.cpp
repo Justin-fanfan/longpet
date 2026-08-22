@@ -185,6 +185,10 @@ void VisionService::handleDetection(const VisionDetection& detection)
     case VisionEventType::Unknown:
         break;
     }
+
+    if (accepted.pose.distance > 0) {
+        emit poseDataAvailable(accepted.pose);
+    }
 }
 
 void VisionService::handleRuntimeStatus(const VisionStatus& status)

@@ -18,6 +18,7 @@ class DiagnosticsService;
 class KeywordSpottingAdapter;
 class KeywordSpottingService;
 class MainWindow;
+class MotionService;
 class NetworkStatusAdapter;
 class PowerStatusAdapter;
 class ReminderRepository;
@@ -67,4 +68,5 @@ private:
     std::unique_ptr<PowerStatusAdapter> m_powerStatusAdapter;
     std::unique_ptr<MainWindow> m_window;
     std::unique_ptr<AppController> m_controller;
+    std::unique_ptr<MotionService> m_motionService;
 };
