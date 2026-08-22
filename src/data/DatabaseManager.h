@@ -18,8 +18,8 @@ public:
 private:
     bool migrate(QString* error);
     bool createSchemaVersion1(QString* error);
+    bool migrateVersion1To2(QString* error);
 
     QString m_connectionName;
     QString m_databasePath;
 };
-

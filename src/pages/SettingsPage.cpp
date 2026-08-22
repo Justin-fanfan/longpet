@@ -8,6 +8,7 @@
 #include <QLabel>
 #include <QPushButton>
 #include <QSlider>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 
@@ -99,9 +100,31 @@ SettingsPage::SettingsPage(QWidget* parent)
         QStringLiteral("宠物风格"), QStringLiteral("本地用户设置"),
         m_petStyleButton, this);
 
+    auto* aboutControl = new QWidget(this);
+    aboutControl->setFixedWidth(180);
+    auto* aboutLayout = new QHBoxLayout(aboutControl);
+    aboutLayout->setContentsMargins(0, 0, 0, 0);
+    aboutLayout->setSpacing(6);
+    m_versionSummary = makeLabel({}, "assist", aboutControl);
+    m_versionSummary->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+    m_developerButton = new QPushButton(QStringLiteral("诊断"), aboutControl);
+    m_developerButton->setObjectName(QStringLiteral("developerEntryButton"));
+    m_developerButton->setProperty("role", "secondaryCompact");
+    m_developerButton->setFixedSize(72, 48);
+    m_developerButton->hide();
+    aboutLayout->addWidget(m_versionSummary, 1);
+    aboutLayout->addWidget(m_developerButton);
     auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"),
         QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
-        summaryControl(&m_versionSummary, this), this);
+        aboutControl, this);
+    auto* keywordSpotting = new SettingRow(QStringLiteral(":/icons/activity.svg"),
+        QStringLiteral("本地感知"), QStringLiteral("离线语音与视觉"),
+        summaryControl(&m_keywordSpottingSummary, this), this);
+    m_keywordSpottingSummary->setObjectName(QStringLiteral("keywordSpottingSummary"));
+    auto* power = new SettingRow(QStringLiteral(":/icons/battery.svg"),
+        QStringLiteral("设备电源"), QStringLiteral("来自设备 Adapter"),
+        summaryControl(&m_powerSummary, this), this);
+    m_powerSummary->setObjectName(QStringLiteral("powerSummary"));
 
     grid->addWidget(m_soundRow, 0, 0);
     grid->addWidget(m_brightnessRow, 0, 1);
@@ -109,7 +132,9 @@ SettingsPage::SettingsPage(QWidget* parent)
     grid->addWidget(m_familyRow, 1, 1);
     grid->addWidget(pet, 2, 0);
     grid->addWidget(about, 2, 1);
-    grid->setRowStretch(3, 1);
+    grid->addWidget(keywordSpotting, 3, 0);
+    grid->addWidget(power, 3, 1);
+    grid->setRowStretch(4, 1);
     root->addLayout(grid, 1);
 
     auto connectSlider = [this](QSlider* slider, QLabel* label, bool isVolume) {
@@ -145,9 +170,16 @@ SettingsPage::SettingsPage(QWidget* parent)
     });
     connect(familyButton, &QPushButton::clicked,
             this, &SettingsPage::pairFamilyRequested);
+    connect(m_developerButton, &QPushButton::clicked,
+            this, &SettingsPage::developerRequested);
 
     setSettings({});
     setDeviceSummary({});
+}
+
+void SettingsPage::setDeveloperMode(bool enabled)
+{
+    m_developerButton->setVisible(enabled);
 }
 
 void SettingsPage::setSettings(const UserSettings& settings)
@@ -182,6 +214,35 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
     m_versionSummary->setText(summary.softwareVersion.isEmpty()
         ? QStringLiteral("LongPet V0.2")
         : QStringLiteral("LongPet V%1").arg(summary.softwareVersion));
+    const QString keywordLine = summary.keywordSpottingListening
+        ? QStringLiteral("语音：监听中")
+        : (summary.keywordSpottingAvailable
+            ? QStringLiteral("语音：已就绪")
+            : QStringLiteral("语音：未启动"));
+    QString visionLine;
+    if (summary.visionMonitoring && summary.visionFps > 0.0) {
+        visionLine = QStringLiteral("视觉：%1 FPS")
+            .arg(summary.visionFps, 0, 'f', 1);
+    } else if (summary.visionMonitoring) {
+        visionLine = QStringLiteral("视觉：监护中");
+    } else if (summary.visionAvailable) {
+        visionLine = QStringLiteral("视觉：已就绪");
+    } else {
+        visionLine = QStringLiteral("视觉：未启动");
+    }
+    m_keywordSpottingSummary->setText(
+        keywordLine + QLatin1Char('\n') + visionLine);
+    QStringList perceptionDetails;
+    if (!summary.keywordSpottingSummary.isEmpty())
+        perceptionDetails.append(summary.keywordSpottingSummary);
+    if (!summary.lastKeyword.isEmpty())
+        perceptionDetails.append(QStringLiteral("最近关键词：%1").arg(summary.lastKeyword));
+    if (!summary.visionSummary.isEmpty())
+        perceptionDetails.append(summary.visionSummary);
+    m_keywordSpottingSummary->setToolTip(
+        perceptionDetails.join(QLatin1Char('\n')));
+    m_powerSummary->setText(summary.powerSummary.isEmpty()
+        ? QStringLiteral("电源状态未知") : summary.powerSummary);
 }
 
 void SettingsPage::updateValueLabel(QLabel* label, int value)

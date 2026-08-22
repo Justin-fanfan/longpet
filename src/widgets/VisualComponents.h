@@ -82,7 +82,14 @@ private:
     QLabel* m_subtitleLabel = nullptr;
 };
 
-enum class ReminderVisualState { Completed, Pending, Missed, Disabled };
+enum class ReminderVisualState {
+    Completed,
+    Acknowledged,
+    Presented,
+    Pending,
+    Missed,
+    Disabled
+};
 
 class ReminderItem final : public QPushButton {
 public:

@@ -143,6 +143,7 @@ ReminderEditPage::ReminderEditPage(QWidget* parent)
 
 void ReminderEditPage::setDraft(const ReminderDraft& draft)
 {
+    m_sourceDraft = draft;
     m_editingId = draft.id;
     m_expectedRevision = draft.expectedRevision;
     m_timeEdit->setTime(draft.timeOfDay.isValid() ? draft.timeOfDay : QTime(8, 0));
@@ -159,17 +160,20 @@ void ReminderEditPage::setDraft(const ReminderDraft& draft)
 
 ReminderDraft ReminderEditPage::currentDraft() const
 {
-    ReminderDraft draft;
+    ReminderDraft draft = m_sourceDraft;
     draft.id = m_editingId;
     draft.expectedRevision = m_expectedRevision;
     draft.type = static_cast<ReminderType>(checkedId(m_typeGroup,
         static_cast<int>(ReminderType::Medicine)));
+    if (draft.iconKey.isEmpty()
+        || draft.iconKey == defaultReminderIconKey(m_sourceDraft.type)) {
+        draft.iconKey = defaultReminderIconKey(draft.type);
+    }
     draft.repeatRule = static_cast<ReminderRepeatRule>(checkedId(m_repeatGroup,
         static_cast<int>(ReminderRepeatRule::Daily)));
     draft.timeOfDay = m_timeEdit->time();
     draft.scheduledDate = m_dateEdit->date();
     draft.title = m_titleEdit->text();
-    draft.enabled = true;
     return draft;
 }
 

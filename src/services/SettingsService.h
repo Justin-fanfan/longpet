@@ -17,6 +17,9 @@ public:
     bool setVolume(int value, QString* error = nullptr);
     bool setBrightness(int value, QString* error = nullptr);
     bool setPetStyle(const QString& style, QString* error = nullptr);
+    //新加的
+    bool setTemperatureUnit(const QString& unit, QString* error = nullptr); 
+    //
 
 signals:
     void settingsChanged(const UserSettings& settings);

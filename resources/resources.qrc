@@ -3,6 +3,7 @@
         <file alias="styles/app.qss">styles/app.qss</file>
         <file alias="icons/back.svg">icons/back.svg</file>
         <file alias="icons/microphone-dark.svg">icons/microphone-dark.svg</file>
+        <file alias="icons/microphone.svg">icons/microphone.svg</file>
         <file alias="icons/care.svg">icons/care.svg</file>
         <file alias="icons/reminder.svg">icons/reminder.svg</file>
         <file alias="icons/weather-sunny.svg">icons/weather-sunny.svg</file>
