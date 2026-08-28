@@ -6,11 +6,11 @@
 
 #ifdef LONGPET_HAS_ALSA
 #include <alsa/asoundlib.h>
-
-#include <cstdlib>
 #endif
 
 namespace {
+constexpr int AudioRetryLimit = 30;
+
 #ifdef LONGPET_HAS_ALSA
 snd_mixer_elem_t* findElement(snd_mixer_t* mixer, const char* name)
 {
@@ -24,6 +24,18 @@ snd_mixer_elem_t* findElement(snd_mixer_t* mixer, const char* name)
 QString alsaError(const QString& context, int code)
 {
     return QStringLiteral("%1：%2").arg(context, QString::fromLocal8Bit(snd_strerror(code)));
+}
+
+QByteArray mixerCardId(const QByteArray& mixerDevice)
+{
+    constexpr char prefix[] = "hw:CARD=";
+    if (!mixerDevice.startsWith(prefix))
+        return {};
+    QByteArray cardId = mixerDevice.mid(sizeof(prefix) - 1);
+    const qsizetype optionSeparator = cardId.indexOf(',');
+    if (optionSeparator >= 0)
+        cardId.truncate(optionSeparator);
+    return cardId;
 }
 
 bool setPlaybackVolume(snd_mixer_t* mixer, const char* name, int percent,
@@ -59,16 +71,20 @@ bool setPlaybackSwitch(snd_mixer_t* mixer, const char* name, bool enabled)
     return snd_mixer_selem_set_playback_switch_all(element, enabled ? 1 : 0) >= 0;
 }
 
-QString cardSummary()
+QByteArray playbackControlName(snd_mixer_t* mixer)
 {
-    char* cardName = nullptr;
-    if (snd_card_get_name(0, &cardName) < 0 || !cardName)
-        return QStringLiteral("ALSA 音量已接入");
-    const QString name = QString::fromLocal8Bit(cardName).simplified();
-    std::free(cardName);
-    return name.isEmpty()
-        ? QStringLiteral("ALSA 音量已接入")
-        : QStringLiteral("%1 · ALSA 音量").arg(name);
+    for (const char* name : {"PCM", "Speaker"}) {
+        if (findElement(mixer, name))
+            return QByteArray(name);
+    }
+    return {};
+}
+
+QString cardSummary(const QByteArray& mixerDevice, const QByteArray& controlName)
+{
+    return QStringLiteral("%1 / %2 · ALSA 音量")
+        .arg(QString::fromLocal8Bit(mixerDevice),
+             QString::fromLatin1(controlName));
 }
 #endif
 }
@@ -76,6 +92,15 @@ QString cardSummary()
 AudioVolumeAdapter::AudioVolumeAdapter(QObject* parent)
     : QObject(parent)
 {
+    m_retryTimer.setSingleShot(true);
+    m_retryTimer.setInterval(1000);
+    connect(&m_retryTimer, &QTimer::timeout, this, [this] {
+        m_retryTimer.stop();
+        if (!start())
+            return;
+        if (m_hasRequestedVolume)
+            applyVolume(m_requestedVolume);
+    });
 }
 
 AudioVolumeAdapter::~AudioVolumeAdapter()
@@ -89,15 +114,24 @@ bool AudioVolumeAdapter::start()
         return true;
 
 #ifdef LONGPET_HAS_ALSA
+    const QByteArray mixerDevice = qEnvironmentVariable(
+        "LONGPET_ALSA_MIXER_DEVICE", QStringLiteral("default")).toLocal8Bit();
+    const QByteArray cardId = mixerCardId(mixerDevice);
+    if (!cardId.isEmpty() && snd_card_get_index(cardId.constData()) < 0) {
+        publishUnavailable(QStringLiteral("等待 ALSA 声卡：%1")
+            .arg(QString::fromLocal8Bit(cardId)));
+        scheduleRetry();
+        return false;
+    }
+
     snd_mixer_t* mixer = nullptr;
     int result = snd_mixer_open(&mixer, 0);
     if (result < 0) {
         publishUnavailable(alsaError(QStringLiteral("打开 ALSA mixer 失败"), result));
+        scheduleRetry();
         return false;
     }
 
-    const QByteArray mixerDevice = qEnvironmentVariable(
-        "LONGPET_ALSA_MIXER_DEVICE", QStringLiteral("default")).toLocal8Bit();
     result = snd_mixer_attach(mixer, mixerDevice.constData());
     if (result >= 0)
         result = snd_mixer_selem_register(mixer, nullptr, nullptr);
@@ -106,17 +140,24 @@ bool AudioVolumeAdapter::start()
     if (result < 0) {
         snd_mixer_close(mixer);
         publishUnavailable(alsaError(QStringLiteral("加载 ALSA mixer 失败"), result));
+        scheduleRetry();
         return false;
     }
-    if (!findElement(mixer, "PCM")) {
+    const QByteArray controlName = playbackControlName(mixer);
+    if (controlName.isEmpty()) {
         snd_mixer_close(mixer);
-        publishUnavailable(QStringLiteral("ALSA mixer 中没有 PCM 音量控件"));
+        publishUnavailable(QStringLiteral("ALSA mixer 中没有 PCM 或 Speaker 音量控件"));
+        scheduleRetry();
         return false;
     }
 
     m_mixerHandle = mixer;
     m_available = true;
-    m_summary = cardSummary();
+    m_playbackControlName = controlName;
+    m_summary = cardSummary(mixerDevice, controlName);
+    m_lastUnavailableDetail.clear();
+    m_retryAttempts = 0;
+    m_retryTimer.stop();
     qInfo() << "Audio volume adapter ready:" << m_summary;
     emit controlStateChanged(true, m_summary);
     return true;
@@ -134,7 +175,12 @@ void AudioVolumeAdapter::stop()
 #endif
     m_mixerHandle = nullptr;
     m_available = false;
+    m_hasRequestedVolume = false;
+    m_retryAttempts = 0;
+    m_playbackControlName.clear();
     m_summary.clear();
+    m_lastUnavailableDetail.clear();
+    m_retryTimer.stop();
 }
 
 bool AudioVolumeAdapter::isAvailable() const
@@ -154,13 +200,17 @@ long AudioVolumeAdapter::scalePercentToRange(int percent, long minimum, long max
 void AudioVolumeAdapter::applyVolume(int percent)
 {
     const int bounded = std::clamp(percent, 0, 100);
-    if (!m_available && !start())
-        return;
+    m_requestedVolume = bounded;
+    m_hasRequestedVolume = true;
+    if (!m_available) {
+        if (m_retryTimer.isActive() || !start())
+            return;
+    }
 
 #ifdef LONGPET_HAS_ALSA
     auto* mixer = static_cast<snd_mixer_t*>(m_mixerHandle);
     QString error;
-    if (!setPlaybackVolume(mixer, "PCM", bounded, true, &error)) {
+    if (!setPlaybackVolume(mixer, m_playbackControlName.constData(), bounded, true, &error)) {
         qWarning() << error;
         emit controlStateChanged(false, error);
         emit errorOccurred(error);
@@ -174,6 +224,7 @@ void AudioVolumeAdapter::applyVolume(int percent)
     setPlaybackVolume(mixer, "Output 1", 75, false, nullptr);
     setPlaybackVolume(mixer, "Output 2", 75, false, nullptr);
     const bool enabled = bounded > 0;
+    setPlaybackSwitch(mixer, m_playbackControlName.constData(), enabled);
     setPlaybackSwitch(mixer, "Left Mixer", enabled);
     setPlaybackSwitch(mixer, "Right Mixer", enabled);
     emit controlStateChanged(true, m_summary);
@@ -185,8 +236,20 @@ void AudioVolumeAdapter::applyVolume(int percent)
 
 void AudioVolumeAdapter::publishUnavailable(const QString& detail)
 {
+    const bool changed = m_available || detail != m_lastUnavailableDetail;
     m_available = false;
     m_summary.clear();
+    if (!changed)
+        return;
+    m_lastUnavailableDetail = detail;
     qWarning() << "Audio volume adapter unavailable:" << detail;
     emit controlStateChanged(false, detail);
+}
+
+void AudioVolumeAdapter::scheduleRetry()
+{
+    if (m_retryTimer.isActive() || m_retryAttempts >= AudioRetryLimit)
+        return;
+    ++m_retryAttempts;
+    m_retryTimer.start();
 }
