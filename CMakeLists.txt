@@ -36,10 +36,13 @@ set(
     src/app/AppController.cpp
     src/app/AppController.h
     src/model/ReminderModels.h
+    src/model/NetworkModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
+    src/platform/NetworkManagerAdapter.cpp
+    src/platform/NetworkManagerAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
     src/platform/BacklightAdapter.cpp
@@ -56,6 +59,8 @@ set(
     src/data/SettingsRepository.h
     src/services/ReminderService.cpp
     src/services/ReminderService.h
+    src/services/NetworkService.cpp
+    src/services/NetworkService.h
     src/services/CareService.cpp
     src/services/CareService.h
     src/services/SettingsService.cpp
@@ -76,6 +81,8 @@ set(
     src/pages/ReminderEditPage.h
     src/pages/SettingsPage.cpp
     src/pages/SettingsPage.h
+    src/pages/NetworkSetupPage.cpp
+    src/pages/NetworkSetupPage.h
     src/pages/EmergencyPage.cpp
     src/pages/EmergencyPage.h
     src/pages/SleepPage.cpp

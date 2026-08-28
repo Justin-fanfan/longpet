@@ -9,9 +9,11 @@
 #include "platform/AudioVolumeAdapter.h"
 #include "platform/BacklightAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
+#include "platform/NetworkManagerAdapter.h"
 #include "platform/PowerStatusAdapter.h"
 #include "services/CareService.h"
 #include "services/ReminderService.h"
+#include "services/NetworkService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
 #include "widgets/VisualTokens.h"
@@ -45,6 +47,8 @@ bool Application::initialize(QString* error)
     m_settingsService = std::make_unique<SettingsService>(m_settingsRepository.get());
     m_systemService = std::make_unique<SystemService>();
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
+    m_networkManagerAdapter = std::make_unique<NetworkManagerAdapter>();
+    m_networkService = std::make_unique<NetworkService>(m_networkManagerAdapter.get());
     m_audioVolumeAdapter = std::make_unique<AudioVolumeAdapter>();
     m_backlightAdapter = std::make_unique<BacklightAdapter>();
     m_powerStatusAdapter = std::make_unique<PowerStatusAdapter>();
@@ -75,7 +79,7 @@ bool Application::initialize(QString* error)
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
-        m_systemService.get(), 15'000);
+        m_systemService.get(), 15'000, m_networkService.get());
     m_controller->initialize();
     return true;
 }
@@ -107,6 +111,8 @@ void Application::shutdown()
         m_powerStatusAdapter->stop();
     m_controller.reset();
     m_window.reset();
+    m_networkService.reset();
+    m_networkManagerAdapter.reset();
     m_powerStatusAdapter.reset();
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();

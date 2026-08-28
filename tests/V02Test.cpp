@@ -7,15 +7,18 @@
 #include "mainwindow.h"
 #include "pages\CarePage.h"
 #include "pages\HomePage.h"
+#include "pages\NetworkSetupPage.h"
 #include "pages\ReminderEditPage.h"
 #include "pages\ReminderPage.h"
 #include "pages\SettingsPage.h"
 #include "platform\AudioVolumeAdapter.h"
 #include "platform\BacklightAdapter.h"
 #include "platform\NetworkStatusAdapter.h"
+#include "platform\NetworkManagerAdapter.h"
 #include "platform\PowerStatusAdapter.h"
 #include "services\CareService.h"
 #include "services\ReminderService.h"
+#include "services\NetworkService.h"
 #include "services\SettingsService.h"
 #include "services\SystemService.h"
 #include "widgets\PetFaceWidget.h"
@@ -26,6 +29,8 @@
 #include <QDir>
 #include <QFile>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -45,6 +50,7 @@ private slots:
     void databaseCreatesVersionedSchema();
     void applicationCompositionRootInitializes();
     void networkStatusAdapterMapsAndDegrades();
+    void networkConfigurationParsesValidatesAndEmits();
     void hardwareAdaptersMapAndDegrade();
     void reminderCrudPersistsAndRejectsStaleRevision();
     void reminderSchedulerDoesNotRedeliverToday();
@@ -97,6 +103,8 @@ ReminderDraft medicineDraft()
 void V02Test::initTestCase()
 {
     QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
+    qRegisterMetaType<WifiNetwork>();
+    qRegisterMetaType<QList<WifiNetwork>>();
     QFile styleFile(QStringLiteral(":/styles/app.qss"));
     QVERIFY(styleFile.open(QIODevice::ReadOnly | QIODevice::Text));
     qApp->setStyleSheet(QString::fromUtf8(styleFile.readAll()));
@@ -230,6 +238,57 @@ void V02Test::networkStatusAdapterMapsAndDegrades()
              QStringLiteral("网络状态未知"));
     QCOMPARE(systemService.deviceSummary().networkSummary,
              QStringLiteral("网络状态未知"));
+}
+
+void V02Test::networkConfigurationParsesValidatesAndEmits()
+{
+    const QByteArray scanOutput = QByteArrayLiteral(
+        "*:Home\\:Main:88:WPA2 WPA3\n"
+        ":Guest:42:--\n"
+        ":Corp:60:WPA2 802.1X\n"
+        ":Home\\:Main:70:WPA2\n");
+    const QList<WifiNetwork> parsed =
+        NetworkManagerAdapter::parseScanOutput(scanOutput);
+    QCOMPARE(parsed.size(), 3);
+    QCOMPARE(parsed.at(0).ssid, QStringLiteral("Home:Main"));
+    QCOMPARE(parsed.at(0).signalStrength, 88);
+    QVERIFY(parsed.at(0).connected);
+    QVERIFY(parsed.at(0).requiresPassword);
+    QCOMPARE(parsed.at(1).ssid, QStringLiteral("Corp"));
+    QVERIFY(!parsed.at(1).supported);
+    QCOMPARE(parsed.at(2).ssid, QStringLiteral("Guest"));
+    QVERIFY(!parsed.at(2).requiresPassword);
+
+    NetworkManagerAdapter adapter(QStringLiteral("missing-nmcli"),
+                                  QStringLiteral("wlan0"));
+    NetworkService service(&adapter);
+    QSignalSpy validationSpy(&service, &NetworkService::connectionFailed);
+    WifiNetwork secured;
+    secured.ssid = QStringLiteral("Test Wi-Fi");
+    secured.security = QStringLiteral("WPA2");
+    secured.requiresPassword = true;
+    service.connectToNetwork(secured, {});
+    QCOMPARE(validationSpy.count(), 1);
+    QCOMPARE(validationSpy.takeFirst().at(1).toString(),
+             QStringLiteral("请输入网络密码"));
+
+    NetworkSetupPage page;
+    QSignalSpy connectSpy(&page, &NetworkSetupPage::connectionRequested);
+    page.setNetworks({secured});
+    auto* list = page.findChild<QListWidget*>(QStringLiteral("wifiNetworkList"));
+    QVERIFY(list);
+    list->setCurrentRow(0);
+    auto* password = page.findChild<QLineEdit*>(QStringLiteral("wifiPasswordEdit"));
+    QVERIFY(password);
+    password->setText(QStringLiteral("secret123"));
+    QTest::mouseClick(page.findChild<QPushButton*>(QStringLiteral("wifiConnectButton")),
+                      Qt::LeftButton);
+    QCOMPARE(connectSpy.count(), 1);
+    const QList<QVariant> request = connectSpy.takeFirst();
+    QCOMPARE(qvariant_cast<WifiNetwork>(request.at(0)).ssid,
+             QStringLiteral("Test Wi-Fi"));
+    QCOMPARE(request.at(1).toString(), QStringLiteral("secret123"));
+    QVERIFY(password->text().isEmpty());
 }
 
 void V02Test::hardwareAdaptersMapAndDegrade()
@@ -430,6 +489,7 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     QVERIFY(carePage.findChild<QPushButton*>(QStringLiteral("recordWaterButton")));
 
     SettingsPage settingsPage;
+    QSignalSpy networkSetupSpy(&settingsPage, &SettingsPage::networkSetupRequested);
     UserSettings settings;
     settings.volume = 41;
     settings.brightness = 63;
@@ -447,6 +507,9 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     QCOMPARE(brightnessSlider->minimum(), 0);
     QCOMPARE(brightnessSlider->maximum(), 1);
     QCOMPARE(brightnessSlider->value(), 1);
+    QTest::mouseClick(settingsPage.findChild<QPushButton*>(
+                          QStringLiteral("networkSetupButton")), Qt::LeftButton);
+    QCOMPARE(networkSetupSpy.count(), 1);
 }
 
 void V02Test::applicationControllerOwnsNavigation()
@@ -504,7 +567,7 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
 
     MainWindow window;
     window.setSystemStatus(input);
-    QCOMPARE(window.findChildren<StatusBarWidget*>().size(), 5);
+    QCOMPARE(window.findChildren<StatusBarWidget*>().size(), 6);
     for (StatusBarWidget* pageStatus : window.findChildren<StatusBarWidget*>()) {
         bool pageHasSummary = false;
         for (QLabel* label : pageStatus->findChildren<QLabel*>())
@@ -581,6 +644,12 @@ void V02Test::renderV02Pages()
     systemStatus.networkAvailable = true;
     systemStatus.networkSummary = QStringLiteral("Wi-Fi · 已联网");
     window.setSystemStatus(systemStatus);
+    WifiNetwork wifi;
+    wifi.ssid = QStringLiteral("LongPet-Test");
+    wifi.signalStrength = 82;
+    wifi.security = QStringLiteral("WPA2");
+    wifi.requiresPassword = true;
+    window.setWifiNetworks({wifi});
     window.show();
 
     const QList<QPair<MainWindow::PageId, QString>> pages {
@@ -589,7 +658,8 @@ void V02Test::renderV02Pages()
         {MainWindow::PageId::Care, QStringLiteral("care")},
         {MainWindow::PageId::Reminder, QStringLiteral("reminder")},
         {MainWindow::PageId::ReminderEdit, QStringLiteral("reminder-edit")},
-        {MainWindow::PageId::Settings, QStringLiteral("settings")}
+        {MainWindow::PageId::Settings, QStringLiteral("settings")},
+        {MainWindow::PageId::NetworkSetup, QStringLiteral("network-setup")}
     };
     for (const auto& page : pages) {
         window.showPage(page.first);

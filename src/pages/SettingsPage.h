@@ -20,6 +20,7 @@ signals:
     void backRequested();
     void volumeChangeRequested(int value);
     void brightnessChangeRequested(int value);
+    void networkSetupRequested();
     void petStyleChangeRequested(const QString& style);
     void pairFamilyRequested();
 
@@ -31,12 +32,13 @@ private:
     QSlider* m_brightnessSlider = nullptr;
     QLabel* m_volumeValue = nullptr;
     QLabel* m_brightnessValue = nullptr;
-    QLabel* m_networkSummary = nullptr;
     SettingRow* m_soundRow = nullptr;
     SettingRow* m_brightnessRow = nullptr;
+    SettingRow* m_networkRow = nullptr;
     SettingRow* m_familyRow = nullptr;
     QLabel* m_versionSummary = nullptr;
     class QPushButton* m_petStyleButton = nullptr;
+    class QPushButton* m_networkButton = nullptr;
     UserSettings m_settings;
     bool m_binaryBrightness = false;
     bool m_updating = false;

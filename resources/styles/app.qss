@@ -270,6 +270,24 @@ QLineEdit {
     selection-color: #17130B;
 }
 
+QListWidget#wifiNetworkList {
+    border: 1px solid #3C3934;
+    border-radius: 16px;
+    background: #191816;
+    color: #F6F1E7;
+    font-size: 19px;
+    padding: 6px;
+}
+QListWidget#wifiNetworkList::item {
+    min-height: 64px;
+    padding: 4px 12px;
+    border-radius: 12px;
+}
+QListWidget#wifiNetworkList::item:selected {
+    background: #F2B84B;
+    color: #17130B;
+}
+
 QTimeEdit, QDateEdit {
     min-height: 64px;
     padding: 0 12px;

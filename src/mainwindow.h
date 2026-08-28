@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ReminderModels.h"
+#include "model/NetworkModels.h"
 #include "model/SettingsModels.h"
 #include "model/SystemModels.h"
 
@@ -9,6 +10,7 @@
 class CarePage;
 class CompanionPage;
 class HomePage;
+class NetworkSetupPage;
 class QEvent;
 class QStackedWidget;
 class ReminderEditPage;
@@ -29,7 +31,8 @@ public:
         Care,
         Reminder,
         ReminderEdit,
-        Settings
+        Settings,
+        NetworkSetup
     };
 
     PageId currentPage() const;
@@ -41,6 +44,12 @@ public:
     void setSettings(const UserSettings& settings);
     void setSystemStatus(const SystemStatus& status);
     void setDeviceSummary(const DeviceSummary& summary);
+    void setWifiScanStarted();
+    void setWifiNetworks(const QList<WifiNetwork>& networks);
+    void setWifiScanFailed(const QString& error);
+    void setWifiConnectionStarted(const QString& ssid);
+    void setWifiConnectionSucceeded(const QString& ssid);
+    void setWifiConnectionFailed(const QString& ssid, const QString& error);
 
 signals:
     void controlRequested();
@@ -59,6 +68,9 @@ signals:
     void recordWaterRequested();
     void volumeChangeRequested(int value);
     void brightnessChangeRequested(int value);
+    void networkSetupRequested();
+    void wifiScanRequested();
+    void wifiConnectRequested(const WifiNetwork& network, const QString& password);
     void petStyleChangeRequested(const QString& style);
     void pairFamilyRequested();
 
@@ -74,6 +86,7 @@ private:
     ReminderPage* m_reminderPage = nullptr;
     ReminderEditPage* m_reminderEditPage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
+    NetworkSetupPage* m_networkSetupPage = nullptr;
     ToastWidget* m_toast = nullptr;
     PageId m_currentPage = PageId::Companion;
 };

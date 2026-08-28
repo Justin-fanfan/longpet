@@ -2,6 +2,7 @@
 
 #include "mainwindow.h"
 #include "services/CareService.h"
+#include "services/NetworkService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
@@ -12,13 +13,15 @@ AppController::AppController(MainWindow* window,
                              SettingsService* settingsService,
                              SystemService* systemService,
                              int controlTimeoutMs,
+                             NetworkService* networkService,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
       m_reminderService(reminderService),
       m_careService(careService),
       m_settingsService(settingsService),
-      m_systemService(systemService)
+      m_systemService(systemService),
+      m_networkService(networkService)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -101,6 +104,17 @@ void AppController::connectUi()
         else
             m_window->showToast(QStringLiteral("背光设置已保存"));
     });
+    connect(m_window, &MainWindow::networkSetupRequested,
+            this, &AppController::showNetworkSetup);
+    connect(m_window, &MainWindow::wifiScanRequested, this, [this] {
+        if (m_networkService)
+            m_networkService->scanNetworks();
+    });
+    connect(m_window, &MainWindow::wifiConnectRequested, this,
+            [this](const WifiNetwork& network, const QString& password) {
+        if (m_networkService)
+            m_networkService->connectToNetwork(network, password);
+    });
     connect(m_window, &MainWindow::petStyleChangeRequested, this, [this](const QString& style) {
         QString error;
         if (!m_settingsService->setPetStyle(style, &error))
@@ -136,6 +150,34 @@ void AppController::connectServices()
             m_window, &MainWindow::setSystemStatus);
     connect(m_systemService, &SystemService::deviceSummaryChanged,
             m_window, &MainWindow::setDeviceSummary);
+    if (m_networkService) {
+        connect(m_networkService, &NetworkService::scanStarted,
+                m_window, &MainWindow::setWifiScanStarted);
+        connect(m_networkService, &NetworkService::networksChanged,
+                m_window, &MainWindow::setWifiNetworks);
+        connect(m_networkService, &NetworkService::scanFailed,
+                m_window, &MainWindow::setWifiScanFailed);
+        connect(m_networkService, &NetworkService::connectionStarted,
+                m_window, &MainWindow::setWifiConnectionStarted);
+        connect(m_networkService, &NetworkService::connectionStarted,
+                this, [this] { m_controlTimeout.stop(); });
+        connect(m_networkService, &NetworkService::connectionSucceeded,
+                m_window, &MainWindow::setWifiConnectionSucceeded);
+        connect(m_networkService, &NetworkService::connectionSucceeded,
+                this, [this](const QString& ssid) {
+            m_window->showToast(QStringLiteral("已连接到 %1").arg(ssid));
+            if (m_window->currentPage() != MainWindow::PageId::Companion)
+                m_controlTimeout.start();
+        });
+        connect(m_networkService, &NetworkService::connectionFailed,
+                m_window, &MainWindow::setWifiConnectionFailed);
+        connect(m_networkService, &NetworkService::connectionFailed,
+                this, [this](const QString&, const QString& error) {
+            m_window->showToast(QStringLiteral("连接 Wi-Fi 失败：%1").arg(error));
+            if (m_window->currentPage() != MainWindow::PageId::Companion)
+                m_controlTimeout.start();
+        });
+    }
 }
 
 void AppController::showHome()
@@ -169,6 +211,16 @@ void AppController::showSettings()
     refreshSettings();
     m_window->setDeviceSummary(m_systemService->deviceSummary());
     showPage(MainWindow::PageId::Settings);
+}
+
+void AppController::showNetworkSetup()
+{
+    if (!m_networkService) {
+        m_window->showToast(QStringLiteral("网络配置服务不可用"));
+        return;
+    }
+    showPage(MainWindow::PageId::NetworkSetup);
+    m_networkService->scanNetworks();
 }
 
 void AppController::editReminder(ReminderId id)

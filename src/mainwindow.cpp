@@ -3,6 +3,7 @@
 #include "pages/CarePage.h"
 #include "pages/CompanionPage.h"
 #include "pages/HomePage.h"
+#include "pages/NetworkSetupPage.h"
 #include "pages/ReminderEditPage.h"
 #include "pages/ReminderPage.h"
 #include "pages/SettingsPage.h"
@@ -36,12 +37,14 @@ MainWindow::MainWindow(QWidget* parent)
     m_reminderPage = new ReminderPage(m_stack);
     m_reminderEditPage = new ReminderEditPage(m_stack);
     m_settingsPage = new SettingsPage(m_stack);
+    m_networkSetupPage = new NetworkSetupPage(m_stack);
     for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
                           static_cast<QWidget*>(m_homePage),
                           static_cast<QWidget*>(m_carePage),
                           static_cast<QWidget*>(m_reminderPage),
                           static_cast<QWidget*>(m_reminderEditPage),
-                          static_cast<QWidget*>(m_settingsPage)}) {
+                          static_cast<QWidget*>(m_settingsPage),
+                          static_cast<QWidget*>(m_networkSetupPage)}) {
         m_stack->addWidget(page);
     }
     root->addWidget(m_stack);
@@ -87,10 +90,18 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::volumeChangeRequested);
     connect(m_settingsPage, &SettingsPage::brightnessChangeRequested,
             this, &MainWindow::brightnessChangeRequested);
+    connect(m_settingsPage, &SettingsPage::networkSetupRequested,
+            this, &MainWindow::networkSetupRequested);
     connect(m_settingsPage, &SettingsPage::petStyleChangeRequested,
             this, &MainWindow::petStyleChangeRequested);
     connect(m_settingsPage, &SettingsPage::pairFamilyRequested,
             this, &MainWindow::pairFamilyRequested);
+    connect(m_networkSetupPage, &NetworkSetupPage::backRequested,
+            this, &MainWindow::settingsRequested);
+    connect(m_networkSetupPage, &NetworkSetupPage::scanRequested,
+            this, &MainWindow::wifiScanRequested);
+    connect(m_networkSetupPage, &NetworkSetupPage::connectionRequested,
+            this, &MainWindow::wifiConnectRequested);
     qApp->installEventFilter(this);
     showPage(PageId::Companion);
 }
@@ -153,6 +164,37 @@ void MainWindow::setDeviceSummary(const DeviceSummary& summary)
     m_settingsPage->setDeviceSummary(summary);
 }
 
+void MainWindow::setWifiScanStarted()
+{
+    m_networkSetupPage->setScanStarted();
+}
+
+void MainWindow::setWifiNetworks(const QList<WifiNetwork>& networks)
+{
+    m_networkSetupPage->setNetworks(networks);
+}
+
+void MainWindow::setWifiScanFailed(const QString& error)
+{
+    m_networkSetupPage->setScanFailed(error);
+}
+
+void MainWindow::setWifiConnectionStarted(const QString& ssid)
+{
+    m_networkSetupPage->setConnectionStarted(ssid);
+}
+
+void MainWindow::setWifiConnectionSucceeded(const QString& ssid)
+{
+    m_networkSetupPage->setConnectionSucceeded(ssid);
+}
+
+void MainWindow::setWifiConnectionFailed(const QString& ssid,
+                                         const QString& error)
+{
+    m_networkSetupPage->setConnectionFailed(ssid, error);
+}
+
 bool MainWindow::eventFilter(QObject* watched, QEvent* event)
 {
     const auto* watchedWidget = qobject_cast<QWidget*>(watched);
@@ -182,6 +224,7 @@ QWidget* MainWindow::pageWidget(PageId page) const
     case PageId::Reminder: return m_reminderPage;
     case PageId::ReminderEdit: return m_reminderEditPage;
     case PageId::Settings: return m_settingsPage;
+    case PageId::NetworkSetup: return m_networkSetupPage;
     }
     return nullptr;
 }

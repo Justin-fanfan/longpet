@@ -79,9 +79,13 @@ SettingsPage::SettingsPage(QWidget* parent)
     m_brightnessRow = new SettingRow(QStringLiteral(":/icons/brightness.svg"),
         QStringLiteral("屏幕亮度"), QStringLiteral("设备背光待接入"),
         brightness.widget, this);
-    auto* network = new SettingRow(QStringLiteral(":/icons/network.svg"),
-        QStringLiteral("网络连接"), QStringLiteral("来自 SystemService"),
-        summaryControl(&m_networkSummary, this), this);
+    m_networkButton = new QPushButton(QStringLiteral("配置网络"), this);
+    m_networkButton->setObjectName(QStringLiteral("networkSetupButton"));
+    m_networkButton->setProperty("role", "secondaryCompact");
+    m_networkButton->setFixedSize(128, 64);
+    m_networkRow = new SettingRow(QStringLiteral(":/icons/network.svg"),
+        QStringLiteral("网络连接"), QStringLiteral("网络状态未知"),
+        m_networkButton, this);
 
     auto* familyButton = new QPushButton(QStringLiteral("开始配对"), this);
     familyButton->setObjectName(QStringLiteral("pairFamilyButton"));
@@ -105,7 +109,7 @@ SettingsPage::SettingsPage(QWidget* parent)
 
     grid->addWidget(m_soundRow, 0, 0);
     grid->addWidget(m_brightnessRow, 0, 1);
-    grid->addWidget(network, 1, 0);
+    grid->addWidget(m_networkRow, 1, 0);
     grid->addWidget(m_familyRow, 1, 1);
     grid->addWidget(pet, 2, 0);
     grid->addWidget(about, 2, 1);
@@ -145,6 +149,8 @@ SettingsPage::SettingsPage(QWidget* parent)
     });
     connect(familyButton, &QPushButton::clicked,
             this, &SettingsPage::pairFamilyRequested);
+    connect(m_networkButton, &QPushButton::clicked,
+            this, &SettingsPage::networkSetupRequested);
 
     setSettings({});
     setDeviceSummary({});
@@ -167,6 +173,8 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
         ? QStringLiteral("未检测到音量控制") : summary.audioSummary);
     m_brightnessRow->setSubtitle(summary.brightnessSummary.isEmpty()
         ? QStringLiteral("未检测到背光控制") : summary.brightnessSummary);
+    m_networkRow->setSubtitle(summary.networkSummary.isEmpty()
+        ? QStringLiteral("网络状态未知") : summary.networkSummary);
     const bool binaryBrightness = summary.brightnessControlAvailable
         && summary.brightnessLevels == 2;
     if (m_binaryBrightness != binaryBrightness) {
@@ -175,8 +183,6 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
         updateBrightnessPresentation();
         m_updating = false;
     }
-    m_networkSummary->setText(summary.networkSummary.isEmpty()
-        ? QStringLiteral("网络状态未知") : summary.networkSummary);
     m_familyRow->setSubtitle(summary.familySummary.isEmpty()
         ? QStringLiteral("尚未配对") : summary.familySummary);
     m_versionSummary->setText(summary.softwareVersion.isEmpty()
