@@ -1,0 +1,14 @@
+[Unit]
+Description=Recover RTL8188FU wlan0 after a failed rtl8xxxu probe
+After=systemd-udev-trigger.service
+ConditionPathExists=!/sys/class/net/wlan0
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/rtl8xxxu-wlan0-recover
+TimeoutStartSec=70s
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

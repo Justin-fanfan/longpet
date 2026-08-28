@@ -1,13 +1,36 @@
 [Unit]
 Description=LongPet touch terminal
-After=NetworkManager.service systemd-timesyncd.service
-Wants=NetworkManager.service systemd-timesyncd.service
+After=NetworkManager.service
+Wants=NetworkManager.service
 
 [Service]
 Type=simple
-WorkingDirectory=/root/mytest/qt
-ExecStart=/root/mytest/qt/run-board.sh
-SuccessExitStatus=1
+
+User=longpet
+Group=longpet
+SupplementaryGroups=video input audio tty
+
+WorkingDirectory=/home/longpet
+ExecStart=/home/longpet/LongPet
+
+RuntimeDirectory=longpet
+RuntimeDirectoryMode=0700
+
+Environment="HOME=/home/longpet"
+Environment="XDG_RUNTIME_DIR=/run/longpet"
+Environment="LONGPET_DATABASE_PATH=/home/longpet/data/longpet.db"
+
+Environment="QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0:tty=/dev/tty1"
+Environment="QT_QPA_GENERIC_PLUGINS=evdevtouch:/dev/input/event0"
+Environment="QT_QPA_EVDEV_TOUCHSCREEN_PARAMETERS=/dev/input/event0"
+Environment="QT_QPA_FB_HIDECURSOR=1"
+Environment="QT_IM_MODULE=qtvirtualkeyboard"
+
+# 暂时明确指向 USB 声卡，避免访问已经拆除的 ES8388。
+# 当前 main 的 AudioVolumeAdapter 只识别 PCM 控件，因此可能提示
+# USB 声卡没有 PCM；这不影响界面启动，下一轮再适配 Speaker 控件。
+Environment="LONGPET_ALSA_MIXER_DEVICE=hw:CARD=Device"
+
 Restart=always
 RestartSec=2
 

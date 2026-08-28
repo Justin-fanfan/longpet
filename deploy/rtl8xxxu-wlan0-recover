@@ -1,0 +1,74 @@
+#!/bin/sh
+
+# Recover an RTL8188FU whose first rtl8xxxu probe did not create wlan0.
+# This helper is intentionally finite and harmless to offline LongPet startup.
+# Installation location: /usr/local/sbin/rtl8xxxu-wlan0-recover
+
+set -u
+
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+
+WLAN_PATH=/sys/class/net/wlan0
+MAX_ATTEMPTS=3
+RESET_DELAY_SECONDS=2
+APPEAR_TIMEOUT_SECONDS=6
+UDEV_SETTLE_TIMEOUT_SECONDS=30
+
+log()
+{
+    printf '%s\n' "rtl8xxxu-wlan0-recover: $*"
+}
+
+if [ -e "$WLAN_PATH" ]; then
+    log "wlan0 already exists; no action needed"
+    exit 0
+fi
+
+if command -v udevadm >/dev/null 2>&1; then
+    log "waiting up to ${UDEV_SETTLE_TIMEOUT_SECONDS}s for initial udev work"
+    if ! udevadm settle --timeout="$UDEV_SETTLE_TIMEOUT_SECONDS"; then
+        log "udev settle timed out; continuing with bounded recovery"
+    fi
+fi
+
+if [ -e "$WLAN_PATH" ]; then
+    log "wlan0 appeared during udev settle; no module reload needed"
+    exit 0
+fi
+
+attempt=1
+while [ "$attempt" -le "$MAX_ATTEMPTS" ]; do
+    if [ -e "$WLAN_PATH" ]; then
+        log "wlan0 appeared before attempt ${attempt}; stopping"
+        exit 0
+    fi
+
+    log "wlan0 is absent; reload attempt ${attempt}/${MAX_ATTEMPTS}"
+
+    if modprobe -r rtl8xxxu; then
+        sleep "$RESET_DELAY_SECONDS"
+    else
+        log "attempt ${attempt}: could not unload rtl8xxxu; trying to load it"
+    fi
+
+    if ! modprobe rtl8xxxu; then
+        log "attempt ${attempt}: modprobe rtl8xxxu failed"
+    fi
+
+    waited=0
+    while [ "$waited" -lt "$APPEAR_TIMEOUT_SECONDS" ]; do
+        if [ -e "$WLAN_PATH" ]; then
+            log "recovered wlan0 on attempt ${attempt}"
+            exit 0
+        fi
+        sleep 1
+        waited=$((waited + 1))
+    done
+
+    log "attempt ${attempt}: wlan0 still absent after ${APPEAR_TIMEOUT_SECONDS}s"
+    attempt=$((attempt + 1))
+done
+
+log "giving up after ${MAX_ATTEMPTS} attempts; leaving LongPet offline startup unaffected"
+exit 0
