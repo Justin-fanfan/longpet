@@ -63,6 +63,47 @@ QString occurrenceStatusName(ReminderOccurrenceStatus status)
     return QStringLiteral("pending");
 }
 
+QString videoCallStateName(VideoCallState state)
+{
+    switch (state) {
+    case VideoCallState::Idle: return QStringLiteral("idle");
+    case VideoCallState::OutgoingRinging: return QStringLiteral("outgoing_ringing");
+    case VideoCallState::NotifyingDevice: return QStringLiteral("notifying_device");
+    case VideoCallState::ConnectingMedia: return QStringLiteral("connecting_media");
+    case VideoCallState::Connected: return QStringLiteral("connected");
+    case VideoCallState::Rejected: return QStringLiteral("rejected");
+    case VideoCallState::Ended: return QStringLiteral("ended");
+    case VideoCallState::Failed: return QStringLiteral("failed");
+    }
+    return QStringLiteral("idle");
+}
+
+QJsonObject videoCallObject(const VideoCallSnapshot& snapshot)
+{
+    return {
+        {QStringLiteral("callId"), snapshot.callId},
+        {QStringLiteral("state"), videoCallStateName(snapshot.state)},
+        {QStringLiteral("mode"), snapshot.mode == VideoCallMode::Video
+            ? QStringLiteral("video") : QStringLiteral("voice")},
+        {QStringLiteral("direction"),
+         snapshot.direction == VideoCallDirection::DeviceToFamily
+            ? QStringLiteral("device_to_family") : QStringLiteral("family_to_device")},
+        {QStringLiteral("remoteName"), snapshot.remoteName},
+        {QStringLiteral("startedAt"), dateTimeValue(snapshot.startedAt)},
+        {QStringLiteral("connectedAt"), dateTimeValue(snapshot.connectedAt)},
+        {QStringLiteral("updatedAt"), dateTimeValue(snapshot.updatedAt)},
+        {QStringLiteral("revision"), snapshot.revision},
+        {QStringLiteral("mediaReady"), snapshot.mediaReady},
+        {QStringLiteral("mediaProtocolVersion"), 1},
+        {QStringLiteral("mediaPort"), snapshot.mediaPort},
+        {QStringLiteral("mediaToken"), snapshot.mediaToken},
+        {QStringLiteral("errorCode"), snapshot.errorCode.isEmpty()
+             ? QJsonValue(QJsonValue::Null) : QJsonValue(snapshot.errorCode)},
+        {QStringLiteral("errorMessage"), snapshot.errorMessage.isEmpty()
+             ? QJsonValue(QJsonValue::Null) : QJsonValue(snapshot.errorMessage)}
+    };
+}
+
 bool reminderTypeFromName(const QString& value, ReminderType* type)
 {
     if (value == QStringLiteral("medicine")) {
@@ -316,6 +357,96 @@ bool reminderIdFromPath(const QString& path, ReminderId* id)
     *id = parsed;
     return true;
 }
+
+bool parseVideoCallAction(const QByteArray& body, VideoCallActionRequest* request,
+                          QString* error)
+{
+    QJsonObject object;
+    if (!parseObjectBody(body, &object, error))
+        return false;
+    const QSet<QString> allowed {
+        QStringLiteral("callId"), QStringLiteral("action"),
+        QStringLiteral("expectedRevision"), QStringLiteral("errorCode"),
+        QStringLiteral("errorMessage")
+    };
+    if (!hasOnlyKeys(object, allowed, error))
+        return false;
+    if (!object.value(QStringLiteral("callId")).isString()
+        || object.value(QStringLiteral("callId")).toString().trimmed().isEmpty()) {
+        if (error)
+            *error = QStringLiteral("callId 必须是非空字符串");
+        return false;
+    }
+    if (!object.value(QStringLiteral("action")).isString()) {
+        if (error)
+            *error = QStringLiteral("action 必须是字符串");
+        return false;
+    }
+    if (!integerField(object, QStringLiteral("expectedRevision"), 0,
+                      std::numeric_limits<int>::max(),
+                      &request->expectedRevision, error)) {
+        return false;
+    }
+    request->callId = object.value(QStringLiteral("callId")).toString().trimmed();
+    const QString action = object.value(QStringLiteral("action")).toString();
+    if (action == QStringLiteral("accept"))
+        request->action = VideoCallAction::Accept;
+    else if (action == QStringLiteral("reject"))
+        request->action = VideoCallAction::Reject;
+    else if (action == QStringLiteral("hangup"))
+        request->action = VideoCallAction::HangUp;
+    else if (action == QStringLiteral("fail"))
+        request->action = VideoCallAction::Fail;
+    else {
+        if (error)
+            *error = QStringLiteral("action 只支持 accept、reject、hangup 或 fail");
+        return false;
+    }
+    if (object.contains(QStringLiteral("errorCode"))) {
+        if (!object.value(QStringLiteral("errorCode")).isString()) {
+            if (error)
+                *error = QStringLiteral("errorCode 必须是字符串");
+            return false;
+        }
+        request->errorCode = object.value(QStringLiteral("errorCode")).toString().left(80);
+    }
+    if (object.contains(QStringLiteral("errorMessage"))) {
+        if (!object.value(QStringLiteral("errorMessage")).isString()) {
+            if (error)
+                *error = QStringLiteral("errorMessage 必须是字符串");
+            return false;
+        }
+        request->errorMessage = object.value(QStringLiteral("errorMessage"))
+                                    .toString().left(300);
+    }
+    return true;
+}
+
+bool parseVideoCallStart(const QByteArray& body, VideoCallMode* mode,
+                         QString* error)
+{
+    QJsonObject object;
+    if (!parseObjectBody(body, &object, error))
+        return false;
+    if (!hasOnlyKeys(object, {QStringLiteral("mode")}, error)
+        || !object.value(QStringLiteral("mode")).isString()) {
+        if (error && error->isEmpty())
+            *error = QStringLiteral("mode 必须是字符串");
+        return false;
+    }
+    const QString value = object.value(QStringLiteral("mode")).toString();
+    if (value == QStringLiteral("voice")) {
+        *mode = VideoCallMode::Voice;
+        return true;
+    }
+    if (value == QStringLiteral("video")) {
+        *mode = VideoCallMode::Video;
+        return true;
+    }
+    if (error)
+        *error = QStringLiteral("mode 只支持 voice 或 video");
+    return false;
+}
 }
 
 FamilyLinkController::FamilyLinkController(FamilyLinkService* service,
@@ -393,6 +524,14 @@ FamilyLinkHttpResponse FamilyLinkController::handleRequest(
             return remindersResponse();
         if (request.method == QByteArrayLiteral("POST"))
             return createReminderResponse(request.body);
+    } else if (path == QStringLiteral("/api/v1/video-call")) {
+        if (request.method == QByteArrayLiteral("GET"))
+            return videoCallResponse();
+        if (request.method == QByteArrayLiteral("POST"))
+            return startVideoCallResponse(request.body);
+    } else if (path == QStringLiteral("/api/v1/video-call/actions")) {
+        if (request.method == QByteArrayLiteral("POST"))
+            return videoCallActionResponse(request.body);
     } else {
         ReminderId id = 0;
         if (!reminderIdFromPath(path, &id)) {
@@ -432,7 +571,8 @@ FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
         {QStringLiteral("settingsRead"), true},
         {QStringLiteral("settingsWrite"), true},
         {QStringLiteral("remindersRead"), true},
-        {QStringLiteral("remindersWrite"), true}
+        {QStringLiteral("remindersWrite"), true},
+        {QStringLiteral("videoCallSignaling"), m_service->videoCallAvailable()}
     };
     const QJsonObject device {
         {QStringLiteral("id"), snapshot.deviceId},
@@ -489,6 +629,86 @@ FamilyLinkHttpResponse FamilyLinkController::settingsResponse() const
     }
 
     return jsonResponse(200, QByteArrayLiteral("OK"), settingsObject(snapshot));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::videoCallResponse() const
+{
+    if (!m_service || !m_service->videoCallAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("视频通话服务尚未就绪"));
+    }
+    VideoCallSnapshot snapshot;
+    QString error;
+    if (!m_service->videoCall(&snapshot, &error)) {
+        qWarning() << "FamilyLink video call read failed:" << error;
+        return errorResponse(500, QByteArrayLiteral("Internal Server Error"),
+                             QStringLiteral("INTERNAL_ERROR"),
+                             QStringLiteral("读取视频通话状态失败"));
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"), videoCallObject(snapshot));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::videoCallActionResponse(
+    const QByteArray& body) const
+{
+    if (!m_service || !m_service->videoCallAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("视频通话服务尚未就绪"));
+    }
+    VideoCallActionRequest request;
+    QString validationError;
+    if (!parseVideoCallAction(body, &request, &validationError)) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"), validationError);
+    }
+    const VideoCallResult result = m_service->applyVideoCallAction(request);
+    if (!result.success) {
+        const QString code = result.code == VideoCallErrorCode::RevisionConflict
+            ? QStringLiteral("REVISION_CONFLICT")
+            : result.code == VideoCallErrorCode::CallMismatch
+            ? QStringLiteral("CALL_MISMATCH")
+            : QStringLiteral("INVALID_CALL_STATE");
+        return errorResponse(409, QByteArrayLiteral("Conflict"), code, result.error,
+                             QJsonObject {{QStringLiteral("currentRevision"),
+                                           result.snapshot.revision},
+                                          {QStringLiteral("currentState"),
+                                           videoCallStateName(result.snapshot.state)}});
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"),
+                        videoCallObject(result.snapshot));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::startVideoCallResponse(
+    const QByteArray& body) const
+{
+    if (!m_service || !m_service->videoCallAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("视频通话服务尚未就绪"));
+    }
+    VideoCallMode mode = VideoCallMode::Video;
+    QString validationError;
+    if (!parseVideoCallStart(body, &mode, &validationError)) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"), validationError);
+    }
+    const VideoCallResult result = m_service->startVideoCall(mode);
+    if (!result.success) {
+        if (result.code == VideoCallErrorCode::Busy) {
+            return errorResponse(409, QByteArrayLiteral("Conflict"),
+                                 QStringLiteral("DEVICE_BUSY"), result.error,
+                                 {{QStringLiteral("currentState"),
+                                   videoCallStateName(result.snapshot.state)}});
+        }
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("MEDIA_INITIALIZATION_FAILED"),
+                             result.error, {{QStringLiteral("call"),
+                                             videoCallObject(result.snapshot)}});
+    }
+    return jsonResponse(201, QByteArrayLiteral("Created"),
+                        videoCallObject(result.snapshot));
 }
 
 FamilyLinkHttpResponse FamilyLinkController::remindersResponse() const

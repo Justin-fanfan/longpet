@@ -4,6 +4,7 @@
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
+#include "services/VideoCallService.h"
 
 #include <QSysInfo>
 
@@ -33,11 +34,13 @@ QString normalizedHostName()
 FamilyLinkService::FamilyLinkService(ReminderService* reminderService,
                                      CareService* careService,
                                      SettingsService* settingsService,
-                                     SystemService* systemService)
+                                     SystemService* systemService,
+                                     VideoCallService* videoCallService)
     : m_reminderService(reminderService),
       m_careService(careService),
       m_settingsService(settingsService),
-      m_systemService(systemService)
+      m_systemService(systemService),
+      m_videoCallService(videoCallService)
 {
 }
 
@@ -162,6 +165,41 @@ ServiceResult FamilyLinkService::removeReminder(ReminderId id,
                 ServiceErrorCode::Storage};
     }
     return m_reminderService->remove(id, expectedRevision);
+}
+
+bool FamilyLinkService::videoCall(VideoCallSnapshot* snapshot, QString* error) const
+{
+    if (!snapshot || !m_videoCallService) {
+        if (error)
+            *error = QStringLiteral("视频通话服务未初始化");
+        return false;
+    }
+    *snapshot = m_videoCallService->snapshot();
+    return true;
+}
+
+VideoCallResult FamilyLinkService::applyVideoCallAction(
+    const VideoCallActionRequest& request) const
+{
+    if (!m_videoCallService) {
+        return {false, QStringLiteral("视频通话服务未初始化"),
+                VideoCallErrorCode::InvalidState, {}};
+    }
+    return m_videoCallService->applyRemoteAction(request);
+}
+
+VideoCallResult FamilyLinkService::startVideoCall(VideoCallMode mode) const
+{
+    if (!m_videoCallService) {
+        return {false, QStringLiteral("视频通话服务未初始化"),
+                VideoCallErrorCode::InvalidState, {}};
+    }
+    return m_videoCallService->startIncomingCall(mode);
+}
+
+bool FamilyLinkService::videoCallAvailable() const
+{
+    return m_videoCallService != nullptr;
 }
 
 QString FamilyLinkService::configuredDeviceId()

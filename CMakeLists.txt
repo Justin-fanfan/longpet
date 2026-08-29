@@ -23,6 +23,7 @@ find_package(
         Svg
         Sql
         Network
+        WebSockets
 )
 
 if(UNIX AND NOT APPLE)
@@ -41,6 +42,9 @@ set(
     src/model/NetworkModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
+    src/model/VideoCallModels.h
+    src/model/MediaFrameProtocol.cpp
+    src/model/MediaFrameProtocol.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
     src/platform/NetworkManagerAdapter.cpp
@@ -53,6 +57,10 @@ set(
     src/platform/PowerStatusAdapter.h
     src/platform/FamilyLinkHttpAdapter.cpp
     src/platform/FamilyLinkHttpAdapter.h
+    src/platform/CallPromptPlayerAdapter.cpp
+    src/platform/CallPromptPlayerAdapter.h
+    src/platform/VideoCallMediaAdapter.cpp
+    src/platform/VideoCallMediaAdapter.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp
@@ -73,6 +81,9 @@ set(
     src/services/SystemService.h
     src/services/FamilyLinkService.cpp
     src/services/FamilyLinkService.h
+    src/services/VideoCallService.cpp
+    src/services/VideoCallService.h
+    src/services/VideoCallPorts.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp
@@ -89,6 +100,8 @@ set(
     src/pages/SettingsPage.h
     src/pages/NetworkSetupPage.cpp
     src/pages/NetworkSetupPage.h
+    src/pages/VideoCallPage.cpp
+    src/pages/VideoCallPage.h
     src/pages/EmergencyPage.cpp
     src/pages/EmergencyPage.h
     src/pages/SleepPage.cpp
@@ -122,6 +135,7 @@ target_link_libraries(
         Qt6::Svg
         Qt6::Sql
         Qt6::Network
+        Qt6::WebSockets
 )
 
 target_include_directories(

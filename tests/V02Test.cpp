@@ -6,12 +6,14 @@
 #include "data\ReminderRepository.h"
 #include "data\SettingsRepository.h"
 #include "mainwindow.h"
+#include "model\MediaFrameProtocol.h"
 #include "pages\CarePage.h"
 #include "pages\HomePage.h"
 #include "pages\NetworkSetupPage.h"
 #include "pages\ReminderEditPage.h"
 #include "pages\ReminderPage.h"
 #include "pages\SettingsPage.h"
+#include "pages\VideoCallPage.h"
 #include "platform\AudioVolumeAdapter.h"
 #include "platform\BacklightAdapter.h"
 #include "platform\FamilyLinkHttpAdapter.h"
@@ -24,6 +26,8 @@
 #include "services\NetworkService.h"
 #include "services\SettingsService.h"
 #include "services\SystemService.h"
+#include "services\VideoCallService.h"
+#include "services\VideoCallPorts.h"
 #include "widgets\PetFaceWidget.h"
 #include "widgets\VisualComponents.h"
 #include "widgets\VisualTokens.h"
@@ -66,6 +70,8 @@ private slots:
     void reminderSchedulerDoesNotRedeliverToday();
     void careAndSettingsArePersistentServices();
     void familyLinkApiReadsAndWritesServiceData();
+    void videoCallStateAndApiTransition();
+    void mediaFrameProtocolAndIncomingCallLifecycle();
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
     void statusBarRemains64AndShowsSystemInput();
@@ -74,6 +80,49 @@ private slots:
 };
 
 namespace {
+class FakeVideoCallMediaPort final : public VideoCallMediaPort {
+public:
+    using VideoCallMediaPort::VideoCallMediaPort;
+
+    quint16 port() const override { return 8'788; }
+    bool prepare(const VideoCallSnapshot& snapshot, bool audioEnabled,
+                 QString*) override
+    {
+        preparedSnapshot = snapshot;
+        prepared = true;
+        audio = audioEnabled;
+        return prepareSucceeds;
+    }
+    void enableAudio() override { audio = true; }
+    void stop() override { ++stopCount; prepared = false; audio = false; }
+    void triggerReady() { emit mediaReady(); }
+
+    VideoCallSnapshot preparedSnapshot;
+    bool prepareSucceeds = true;
+    bool prepared = false;
+    bool audio = false;
+    int stopCount = 0;
+};
+
+class FakeCallPromptPlayer final : public CallPromptPlayerPort {
+public:
+    using CallPromptPlayerPort::CallPromptPlayerPort;
+
+    bool play(VideoCallMode mode, QString*) override
+    {
+        playedMode = mode;
+        playing = playSucceeds;
+        return playSucceeds;
+    }
+    void stop() override { playing = false; ++stopCount; }
+    void complete() { playing = false; emit finished(); }
+
+    VideoCallMode playedMode = VideoCallMode::Video;
+    bool playSucceeds = true;
+    bool playing = false;
+    int stopCount = 0;
+};
+
 struct ServiceFixture {
     QTemporaryDir directory;
     DatabaseManager database;
@@ -161,6 +210,7 @@ void V02Test::initTestCase()
     QCoreApplication::setApplicationVersion(QStringLiteral("0.2.0"));
     qRegisterMetaType<WifiNetwork>();
     qRegisterMetaType<QList<WifiNetwork>>();
+    qRegisterMetaType<VideoCallSnapshot>();
     QFile styleFile(QStringLiteral(":/styles/app.qss"));
     QVERIFY(styleFile.open(QIODevice::ReadOnly | QIODevice::Text));
     qApp->setStyleSheet(QString::fromUtf8(styleFile.readAll()));
@@ -188,6 +238,8 @@ void V02Test::resourcesAreEmbedded()
         QVERIFY2(QFile::exists(path), qPrintable(path));
     for (const QString& path : resources.mid(1))
         QVERIFY2(QSvgRenderer(path).isValid(), qPrintable(path));
+    QVERIFY(QFile::exists(QStringLiteral(":/sounds/zh_video_call.wav")));
+    QVERIFY(QFile::exists(QStringLiteral(":/sounds/zh_voice_call.wav")));
 }
 
 void V02Test::databaseCreatesVersionedSchema()
@@ -525,8 +577,10 @@ void V02Test::familyLinkApiReadsAndWritesServiceData()
     systemService.setBacklightControlState(false, 0, QStringLiteral("未检测到可调背光"));
     systemService.setPowerSummary(QStringLiteral("外接电源"));
 
+    VideoCallService videoCallService;
     FamilyLinkService service(fixture.reminderService.get(), fixture.careService.get(),
-                              fixture.settingsService.get(), &systemService);
+                              fixture.settingsService.get(), &systemService,
+                              &videoCallService);
     FamilyLinkHttpAdapter httpAdapter;
     const QByteArray token = QByteArrayLiteral("test-family-token");
     FamilyLinkController controller(&service, &httpAdapter, token);
@@ -561,6 +615,82 @@ void V02Test::familyLinkApiReadsAndWritesServiceData()
                 .value(QStringLiteral("settingsWrite")).toBool());
     QVERIFY(status.body.value(QStringLiteral("capabilities")).toObject()
                 .value(QStringLiteral("remindersWrite")).toBool());
+    QVERIFY(status.body.value(QStringLiteral("capabilities")).toObject()
+                .value(QStringLiteral("videoCallSignaling")).toBool());
+
+    const VideoCallResult startedCall = videoCallService.startOutgoingCall();
+    QVERIFY(startedCall.success);
+    const HttpTestResult ringingCall = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call")),
+        QByteArrayLiteral("GET"), token);
+    QCOMPARE(ringingCall.statusCode, 200);
+    QCOMPARE(ringingCall.body.value(QStringLiteral("state")).toString(),
+             QStringLiteral("outgoing_ringing"));
+    QCOMPARE(ringingCall.body.value(QStringLiteral("callId")).toString(),
+             startedCall.snapshot.callId);
+
+    const QByteArray acceptBody = QJsonDocument(QJsonObject {
+        {QStringLiteral("callId"), startedCall.snapshot.callId},
+        {QStringLiteral("action"), QStringLiteral("accept")},
+        {QStringLiteral("expectedRevision"), startedCall.snapshot.revision}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult acceptedCall = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call/actions")),
+        QByteArrayLiteral("POST"), token, acceptBody);
+    QCOMPARE(acceptedCall.statusCode, 200);
+    QCOMPARE(acceptedCall.body.value(QStringLiteral("state")).toString(),
+             QStringLiteral("connected"));
+
+    const HttpTestResult staleCallAction = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call/actions")),
+        QByteArrayLiteral("POST"), token, acceptBody);
+    QCOMPARE(staleCallAction.statusCode, 409);
+    QCOMPARE(staleCallAction.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(),
+             QStringLiteral("REVISION_CONFLICT"));
+
+    const QByteArray hangUpBody = QJsonDocument(QJsonObject {
+        {QStringLiteral("callId"), startedCall.snapshot.callId},
+        {QStringLiteral("action"), QStringLiteral("hangup")},
+        {QStringLiteral("expectedRevision"),
+         acceptedCall.body.value(QStringLiteral("revision")).toInt()}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult endedCall = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call/actions")),
+        QByteArrayLiteral("POST"), token, hangUpBody);
+    QCOMPARE(endedCall.statusCode, 200);
+    QCOMPARE(endedCall.body.value(QStringLiteral("state")).toString(),
+             QStringLiteral("ended"));
+
+    const QByteArray startVoiceBody = QJsonDocument(QJsonObject {
+        {QStringLiteral("mode"), QStringLiteral("voice")}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult incomingVoice = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call")),
+        QByteArrayLiteral("POST"), token, startVoiceBody);
+    QCOMPARE(incomingVoice.statusCode, 201);
+    QCOMPARE(incomingVoice.body.value(QStringLiteral("mode")).toString(),
+             QStringLiteral("voice"));
+    QCOMPARE(incomingVoice.body.value(QStringLiteral("direction")).toString(),
+             QStringLiteral("family_to_device"));
+    const HttpTestResult busyCall = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call")),
+        QByteArrayLiteral("POST"), token, startVoiceBody);
+    QCOMPARE(busyCall.statusCode, 409);
+    QCOMPARE(busyCall.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(),
+             QStringLiteral("DEVICE_BUSY"));
+
+    const QByteArray endIncomingBody = QJsonDocument(QJsonObject {
+        {QStringLiteral("callId"), incomingVoice.body.value(QStringLiteral("callId"))},
+        {QStringLiteral("action"), QStringLiteral("hangup")},
+        {QStringLiteral("expectedRevision"),
+         incomingVoice.body.value(QStringLiteral("revision"))}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult endedIncoming = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("video-call/actions")),
+        QByteArrayLiteral("POST"), token, endIncomingBody);
+    QCOMPARE(endedIncoming.statusCode, 200);
 
     const HttpTestResult settings = requestJson(
         &manager, QUrl(baseUrl + QStringLiteral("settings")), QByteArrayLiteral("GET"), token);
@@ -668,8 +798,93 @@ void V02Test::familyLinkApiReadsAndWritesServiceData()
     controller.stop();
 }
 
+void V02Test::videoCallStateAndApiTransition()
+{
+    VideoCallService service;
+    QSignalSpy changedSpy(&service, &VideoCallService::snapshotChanged);
+
+    const VideoCallResult started = service.startOutgoingCall();
+    QVERIFY(started.success);
+    QCOMPARE(started.snapshot.state, VideoCallState::OutgoingRinging);
+    QVERIFY(!started.snapshot.callId.isEmpty());
+    QCOMPARE(changedSpy.count(), 1);
+
+    VideoCallActionRequest accept;
+    accept.callId = started.snapshot.callId;
+    accept.action = VideoCallAction::Accept;
+    accept.expectedRevision = started.snapshot.revision;
+    const VideoCallResult connected = service.applyRemoteAction(accept);
+    QVERIFY(connected.success);
+    QCOMPARE(connected.snapshot.state, VideoCallState::Connected);
+
+    const VideoCallResult stale = service.applyRemoteAction(accept);
+    QVERIFY(!stale.success);
+    QCOMPARE(stale.code, VideoCallErrorCode::RevisionConflict);
+
+    const VideoCallResult ended = service.hangUpFromDevice();
+    QVERIFY(ended.success);
+    QCOMPARE(ended.snapshot.state, VideoCallState::Ended);
+    QCOMPARE(changedSpy.count(), 4);
+}
+
+void V02Test::mediaFrameProtocolAndIncomingCallLifecycle()
+{
+    const QByteArray payload = QByteArrayLiteral("pcm-test");
+    const QByteArray encoded = MediaFrameProtocol::encode(
+        MediaStreamType::FamilyAudio, 42, 123'456, payload, 7);
+    QCOMPARE(encoded.size(), MediaFrameProtocol::HeaderSize + payload.size());
+    MediaFrame decoded;
+    QString error;
+    QVERIFY2(MediaFrameProtocol::decode(encoded, &decoded, &error), qPrintable(error));
+    QCOMPARE(decoded.version, MediaFrameProtocol::Version);
+    QCOMPARE(decoded.streamType, MediaStreamType::FamilyAudio);
+    QCOMPARE(decoded.sequence, 42U);
+    QCOMPARE(decoded.timestampUsec, 123'456ULL);
+    QCOMPARE(decoded.flags, 7U);
+    QCOMPARE(decoded.payload, payload);
+    QByteArray malformed = encoded;
+    malformed[0] = 'X';
+    QVERIFY(!MediaFrameProtocol::decode(malformed, &decoded, &error));
+
+    FakeVideoCallMediaPort media;
+    FakeCallPromptPlayer prompt;
+    VideoCallService service(&media, &prompt);
+    QSignalSpy activitySpy(&service, &VideoCallService::callActivityChanged);
+
+    const VideoCallResult incoming = service.startIncomingCall(VideoCallMode::Voice);
+    QVERIFY(incoming.success);
+    QCOMPARE(incoming.snapshot.state, VideoCallState::NotifyingDevice);
+    QCOMPARE(incoming.snapshot.direction, VideoCallDirection::FamilyToDevice);
+    QCOMPARE(incoming.snapshot.mode, VideoCallMode::Voice);
+    QVERIFY(media.prepared);
+    QVERIFY(!media.audio);
+    QVERIFY(prompt.playing);
+
+    prompt.complete();
+    QCOMPARE(service.snapshot().state, VideoCallState::ConnectingMedia);
+    QVERIFY(media.audio);
+    media.triggerReady();
+    QCOMPARE(service.snapshot().state, VideoCallState::Connected);
+    QVERIFY(service.snapshot().mediaReady);
+    QVERIFY(service.snapshot().connectedAt.isValid());
+
+    const VideoCallResult ended = service.hangUpFromDevice();
+    QVERIFY(ended.success);
+    QCOMPARE(ended.snapshot.state, VideoCallState::Ended);
+    QVERIFY(!ended.snapshot.mediaReady);
+    QCOMPARE(media.stopCount, 1);
+    QCOMPARE(activitySpy.count(), 2);
+}
+
 void V02Test::pagesExposeSemanticSignalsAndModels()
 {
+    HomePage homePage;
+    QSignalSpy videoCallSpy(&homePage, &HomePage::videoCallRequested);
+    QTest::mouseClick(homePage.findChild<QPushButton*>(QStringLiteral("videoCallButton")),
+                      Qt::LeftButton);
+    QCOMPARE(videoCallSpy.count(), 1);
+    QVERIFY(!homePage.findChild<QPushButton*>(QStringLiteral("reminderButton")));
+
     ReminderPage reminderPage;
     QSignalSpy addSpy(&reminderPage, &ReminderPage::addReminderRequested);
     QTest::mouseClick(reminderPage.findChild<QPushButton*>(QStringLiteral("addReminderButton")),
@@ -701,11 +916,15 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     QCOMPARE(saveSpy.count(), 1);
 
     CarePage carePage;
+    QSignalSpy careReminderSpy(&carePage, &CarePage::reminderRequested);
     CareSummary summary;
     summary.waterCompleted = 3;
     summary.lastUpdated = QDateTime::currentDateTime();
     carePage.setSummary(summary);
     QVERIFY(carePage.findChild<QPushButton*>(QStringLiteral("recordWaterButton")));
+    QTest::mouseClick(carePage.findChild<QPushButton*>(QStringLiteral("careReminderButton")),
+                      Qt::LeftButton);
+    QCOMPARE(careReminderSpy.count(), 1);
 
     SettingsPage settingsPage;
     QSignalSpy networkSetupSpy(&settingsPage, &SettingsPage::networkSetupRequested);
@@ -738,12 +957,24 @@ void V02Test::applicationControllerOwnsNavigation()
     QVERIFY2(fixture.open(&error), qPrintable(error));
     MainWindow window;
     SystemService systemService;
+    VideoCallService videoCallService;
     AppController controller(&window, fixture.reminderService.get(), fixture.careService.get(),
-                             fixture.settingsService.get(), &systemService, 15'000);
+                             fixture.settingsService.get(), &systemService, 15'000,
+                             nullptr, &videoCallService);
     controller.initialize();
     QCOMPARE(window.currentPage(), MainWindow::PageId::Companion);
 
     QTest::mouseClick(window.findChild<QPushButton*>(QStringLiteral("companionRevealButton")),
+                      Qt::LeftButton);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
+    QTest::mouseClick(window.findChild<QPushButton*>(QStringLiteral("videoCallButton")),
+                      Qt::LeftButton);
+    QCOMPARE(window.currentPage(), MainWindow::PageId::VideoCall);
+    QCOMPARE(videoCallService.snapshot().state, VideoCallState::OutgoingRinging);
+    QTest::mouseClick(window.findChild<QPushButton*>(QStringLiteral("videoCallHangUpButton")),
+                      Qt::LeftButton);
+    QCOMPARE(videoCallService.snapshot().state, VideoCallState::Ended);
+    QTest::mouseClick(window.findChild<QPushButton*>(QStringLiteral("videoCallBackButton")),
                       Qt::LeftButton);
     QCOMPARE(window.currentPage(), MainWindow::PageId::Home);
     QTest::mouseClick(window.findChild<QPushButton*>(QStringLiteral("careButton")),
@@ -869,6 +1100,11 @@ void V02Test::renderV02Pages()
     wifi.security = QStringLiteral("WPA2");
     wifi.requiresPassword = true;
     window.setWifiNetworks({wifi});
+    VideoCallSnapshot call;
+    call.callId = QStringLiteral("render-call");
+    call.state = VideoCallState::OutgoingRinging;
+    call.revision = 1;
+    window.setVideoCallSnapshot(call);
     window.show();
 
     const QList<QPair<MainWindow::PageId, QString>> pages {
@@ -877,6 +1113,7 @@ void V02Test::renderV02Pages()
         {MainWindow::PageId::Care, QStringLiteral("care")},
         {MainWindow::PageId::Reminder, QStringLiteral("reminder")},
         {MainWindow::PageId::ReminderEdit, QStringLiteral("reminder-edit")},
+        {MainWindow::PageId::VideoCall, QStringLiteral("video-call")},
         {MainWindow::PageId::Settings, QStringLiteral("settings")},
         {MainWindow::PageId::NetworkSetup, QStringLiteral("network-setup")}
     };

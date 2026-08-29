@@ -3,6 +3,7 @@
 #include "model/ReminderModels.h"
 #include "model/SettingsModels.h"
 #include "model/SystemModels.h"
+#include "model/VideoCallModels.h"
 
 #include <QDateTime>
 #include <QList>
@@ -12,6 +13,7 @@ class CareService;
 class ReminderService;
 class SettingsService;
 class SystemService;
+class VideoCallService;
 
 struct FamilyLinkStatusSnapshot {
     QString deviceId;
@@ -33,7 +35,8 @@ public:
     FamilyLinkService(ReminderService* reminderService,
                       CareService* careService,
                       SettingsService* settingsService,
-                      SystemService* systemService);
+                      SystemService* systemService,
+                      VideoCallService* videoCallService = nullptr);
 
     bool status(FamilyLinkStatusSnapshot* snapshot, QString* error = nullptr) const;
     bool settings(FamilyLinkSettingsSnapshot* snapshot, QString* error = nullptr) const;
@@ -41,6 +44,10 @@ public:
     QList<Reminder> reminders(QString* error = nullptr) const;
     ServiceResult saveReminder(const ReminderDraft& draft, Reminder* saved = nullptr) const;
     ServiceResult removeReminder(ReminderId id, int expectedRevision) const;
+    bool videoCall(VideoCallSnapshot* snapshot, QString* error = nullptr) const;
+    VideoCallResult startVideoCall(VideoCallMode mode) const;
+    VideoCallResult applyVideoCallAction(const VideoCallActionRequest& request) const;
+    bool videoCallAvailable() const;
 
 private:
     static QString configuredDeviceId();
@@ -50,4 +57,5 @@ private:
     CareService* m_careService = nullptr;
     SettingsService* m_settingsService = nullptr;
     SystemService* m_systemService = nullptr;
+    VideoCallService* m_videoCallService = nullptr;
 };

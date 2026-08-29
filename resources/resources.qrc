@@ -16,6 +16,9 @@
         <file alias="icons/clock.svg">icons/clock.svg</file>
         <file alias="icons/alert.svg">icons/alert.svg</file>
         <file alias="icons/phone-dark.svg">icons/phone-dark.svg</file>
+        <file alias="icons/video-call.svg">icons/video-call.svg</file>
+        <file alias="sounds/zh_video_call.wav">sounds/zh_video_call.wav</file>
+        <file alias="sounds/zh_voice_call.wav">sounds/zh_voice_call.wav</file>
         <file alias="icons/volume.svg">icons/volume.svg</file>
         <file alias="icons/brightness.svg">icons/brightness.svg</file>
         <file alias="icons/network.svg">icons/network.svg</file>

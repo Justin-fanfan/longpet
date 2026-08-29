@@ -9,16 +9,19 @@
 #include "mainwindow.h"
 #include "platform/AudioVolumeAdapter.h"
 #include "platform/BacklightAdapter.h"
+#include "platform/CallPromptPlayerAdapter.h"
 #include "platform/FamilyLinkHttpAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
 #include "platform/PowerStatusAdapter.h"
+#include "platform/VideoCallMediaAdapter.h"
 #include "services/CareService.h"
 #include "services/FamilyLinkService.h"
 #include "services/ReminderService.h"
 #include "services/NetworkService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
+#include "services/VideoCallService.h"
 #include "widgets/VisualTokens.h"
 
 #include <QCoreApplication>
@@ -70,6 +73,10 @@ bool Application::initialize(QString* error)
                                                   m_reminderService.get());
     m_settingsService = std::make_unique<SettingsService>(m_settingsRepository.get());
     m_systemService = std::make_unique<SystemService>();
+    m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>();
+    m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
+    m_videoCallService = std::make_unique<VideoCallService>(
+        m_videoCallMediaAdapter.get(), m_callPromptPlayerAdapter.get());
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
     m_networkManagerAdapter = std::make_unique<NetworkManagerAdapter>();
     m_networkService = std::make_unique<NetworkService>(m_networkManagerAdapter.get());
@@ -102,7 +109,7 @@ bool Application::initialize(QString* error)
     m_backlightAdapter->applyBrightness(currentSettings.brightness);
     m_familyLinkService = std::make_unique<FamilyLinkService>(
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
-        m_systemService.get());
+        m_systemService.get(), m_videoCallService.get());
     m_familyLinkHttpAdapter = std::make_unique<FamilyLinkHttpAdapter>();
     const QByteArray familyLinkToken = qEnvironmentVariable("LONGPET_FAMILY_LINK_TOKEN").toUtf8();
     const QHostAddress familyLinkAddress = configuredFamilyLinkAddress();
@@ -124,7 +131,8 @@ bool Application::initialize(QString* error)
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
-        m_systemService.get(), 15'000, m_networkService.get());
+        m_systemService.get(), 15'000, m_networkService.get(),
+        m_videoCallService.get());
     m_controller->initialize();
     return true;
 }
@@ -167,6 +175,9 @@ void Application::shutdown()
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
+    m_videoCallService.reset();
+    m_callPromptPlayerAdapter.reset();
+    m_videoCallMediaAdapter.reset();
     m_systemService.reset();
     m_settingsService.reset();
     m_careService.reset();

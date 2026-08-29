@@ -7,6 +7,7 @@
 #include "pages/ReminderEditPage.h"
 #include "pages/ReminderPage.h"
 #include "pages/SettingsPage.h"
+#include "pages/VideoCallPage.h"
 #include "widgets/VisualComponents.h"
 #include "widgets/VisualTokens.h"
 
@@ -36,6 +37,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_carePage = new CarePage(m_stack);
     m_reminderPage = new ReminderPage(m_stack);
     m_reminderEditPage = new ReminderEditPage(m_stack);
+    m_videoCallPage = new VideoCallPage(m_stack);
     m_settingsPage = new SettingsPage(m_stack);
     m_networkSetupPage = new NetworkSetupPage(m_stack);
     for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
@@ -43,6 +45,7 @@ MainWindow::MainWindow(QWidget* parent)
                           static_cast<QWidget*>(m_carePage),
                           static_cast<QWidget*>(m_reminderPage),
                           static_cast<QWidget*>(m_reminderEditPage),
+                          static_cast<QWidget*>(m_videoCallPage),
                           static_cast<QWidget*>(m_settingsPage),
                           static_cast<QWidget*>(m_networkSetupPage)}) {
         m_stack->addWidget(page);
@@ -57,8 +60,8 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::talkRequested);
     connect(m_homePage, &HomePage::careRequested,
             this, &MainWindow::careRequested);
-    connect(m_homePage, &HomePage::reminderRequested,
-            this, &MainWindow::reminderRequested);
+    connect(m_homePage, &HomePage::videoCallRequested,
+            this, &MainWindow::videoCallRequested);
     connect(m_homePage, &HomePage::settingsRequested,
             this, &MainWindow::settingsRequested);
 
@@ -84,6 +87,10 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::saveReminderRequested);
     connect(m_reminderEditPage, &ReminderEditPage::deleteRequested,
             this, &MainWindow::deleteReminderRequested);
+    connect(m_videoCallPage, &VideoCallPage::backRequested,
+            this, &MainWindow::homeRequested);
+    connect(m_videoCallPage, &VideoCallPage::hangUpRequested,
+            this, &MainWindow::videoCallHangUpRequested);
     connect(m_settingsPage, &SettingsPage::backRequested,
             this, &MainWindow::homeRequested);
     connect(m_settingsPage, &SettingsPage::volumeChangeRequested,
@@ -164,6 +171,21 @@ void MainWindow::setDeviceSummary(const DeviceSummary& summary)
     m_settingsPage->setDeviceSummary(summary);
 }
 
+void MainWindow::setVideoCallSnapshot(const VideoCallSnapshot& snapshot)
+{
+    m_videoCallPage->setSnapshot(snapshot);
+}
+
+void MainWindow::setRemoteVideoFrame(const QImage& frame)
+{
+    m_videoCallPage->setRemoteVideoFrame(frame);
+}
+
+void MainWindow::setLocalVideoFrame(const QImage& frame)
+{
+    m_videoCallPage->setLocalVideoFrame(frame);
+}
+
 void MainWindow::setWifiScanStarted()
 {
     m_networkSetupPage->setScanStarted();
@@ -206,6 +228,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
         case QEvent::MouseButtonPress:
         case QEvent::TouchBegin:
         case QEvent::KeyPress:
+            if (m_currentPage == PageId::VideoCall)
+                m_videoCallPage->showControlsTemporarily();
             emit userActivity(m_currentPage);
             break;
         default:
@@ -223,6 +247,7 @@ QWidget* MainWindow::pageWidget(PageId page) const
     case PageId::Care: return m_carePage;
     case PageId::Reminder: return m_reminderPage;
     case PageId::ReminderEdit: return m_reminderEditPage;
+    case PageId::VideoCall: return m_videoCallPage;
     case PageId::Settings: return m_settingsPage;
     case PageId::NetworkSetup: return m_networkSetupPage;
     }

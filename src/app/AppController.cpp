@@ -6,6 +6,7 @@
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
+#include "services/VideoCallService.h"
 
 AppController::AppController(MainWindow* window,
                              ReminderService* reminderService,
@@ -14,6 +15,7 @@ AppController::AppController(MainWindow* window,
                              SystemService* systemService,
                              int controlTimeoutMs,
                              NetworkService* networkService,
+                             VideoCallService* videoCallService,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
@@ -21,7 +23,8 @@ AppController::AppController(MainWindow* window,
       m_careService(careService),
       m_settingsService(settingsService),
       m_systemService(systemService),
-      m_networkService(networkService)
+      m_networkService(networkService),
+      m_videoCallService(videoCallService)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -50,8 +53,10 @@ void AppController::connectUi()
             this, &AppController::showHome);
     connect(m_window, &MainWindow::userActivity, this,
             [this](MainWindow::PageId page) {
-        if (page != MainWindow::PageId::Companion)
+        if (page != MainWindow::PageId::Companion
+            && page != MainWindow::PageId::VideoCall) {
             m_controlTimeout.start();
+        }
     });
     connect(m_window, &MainWindow::homeRequested,
             this, &AppController::showHome);
@@ -60,6 +65,10 @@ void AppController::connectUi()
     });
     connect(m_window, &MainWindow::careRequested,
             this, &AppController::showCare);
+    connect(m_window, &MainWindow::videoCallRequested,
+            this, &AppController::showVideoCall);
+    connect(m_window, &MainWindow::videoCallHangUpRequested,
+            this, &AppController::hangUpVideoCall);
     connect(m_window, &MainWindow::reminderRequested,
             this, &AppController::showReminders);
     connect(m_window, &MainWindow::settingsRequested,
@@ -178,6 +187,31 @@ void AppController::connectServices()
                 m_controlTimeout.start();
         });
     }
+    if (m_videoCallService) {
+        connect(m_videoCallService, &VideoCallService::snapshotChanged,
+                m_window, &MainWindow::setVideoCallSnapshot);
+        connect(m_videoCallService, &VideoCallService::remoteVideoFrame,
+                m_window, &MainWindow::setRemoteVideoFrame);
+        connect(m_videoCallService, &VideoCallService::localVideoFrame,
+                m_window, &MainWindow::setLocalVideoFrame);
+        connect(m_videoCallService, &VideoCallService::snapshotChanged,
+                this, [this](const VideoCallSnapshot& snapshot) {
+            if (snapshot.isActive()) {
+                m_controlTimeout.stop();
+                if (snapshot.direction == VideoCallDirection::FamilyToDevice
+                    && m_window->currentPage() != MainWindow::PageId::VideoCall) {
+                    showPage(MainWindow::PageId::VideoCall);
+                }
+                return;
+            }
+            if (m_window->currentPage() == MainWindow::PageId::VideoCall) {
+                showHome();
+                if (snapshot.state == VideoCallState::Failed)
+                    m_window->showToast(snapshot.errorMessage.isEmpty()
+                        ? QStringLiteral("通话连接失败") : snapshot.errorMessage);
+            }
+        });
+    }
 }
 
 void AppController::showHome()
@@ -188,10 +222,12 @@ void AppController::showHome()
 void AppController::showPage(MainWindow::PageId page)
 {
     m_window->showPage(page);
-    if (page == MainWindow::PageId::Companion)
+    if (page == MainWindow::PageId::Companion
+        || page == MainWindow::PageId::VideoCall) {
         m_controlTimeout.stop();
-    else
+    } else {
         m_controlTimeout.start();
+    }
 }
 
 void AppController::showCare()
@@ -221,6 +257,28 @@ void AppController::showNetworkSetup()
     }
     showPage(MainWindow::PageId::NetworkSetup);
     m_networkService->scanNetworks();
+}
+
+void AppController::showVideoCall()
+{
+    if (!m_videoCallService) {
+        m_window->showToast(QStringLiteral("视频通话服务不可用"));
+        return;
+    }
+    const VideoCallResult result = m_videoCallService->startOutgoingCall(VideoCallMode::Video);
+    m_window->setVideoCallSnapshot(result.snapshot);
+    showPage(MainWindow::PageId::VideoCall);
+    if (!result.success)
+        m_window->showToast(result.error);
+}
+
+void AppController::hangUpVideoCall()
+{
+    if (!m_videoCallService)
+        return;
+    const VideoCallResult result = m_videoCallService->hangUpFromDevice();
+    if (!result.success)
+        m_window->showToast(result.error);
 }
 
 void AppController::editReminder(ReminderId id)

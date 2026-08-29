@@ -17,12 +17,12 @@ public:
 signals:
     void talkRequested();
     void careRequested();
-    void reminderRequested();
+    void videoCallRequested();
     void settingsRequested();
 
 private:
     QPushButton* m_talkButton = nullptr;
     QPushButton* m_careButton = nullptr;
-    QPushButton* m_reminderButton = nullptr;
+    QPushButton* m_videoCallButton = nullptr;
     StatusBarWidget* m_statusBar = nullptr;
 };

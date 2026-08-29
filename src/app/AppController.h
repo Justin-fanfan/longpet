@@ -11,6 +11,7 @@ class NetworkService;
 class ReminderService;
 class SettingsService;
 class SystemService;
+class VideoCallService;
 
 class AppController final : public QObject {
     Q_OBJECT
@@ -23,6 +24,7 @@ public:
                   SystemService* systemService,
                   int controlTimeoutMs = 15'000,
                   NetworkService* networkService = nullptr,
+                  VideoCallService* videoCallService = nullptr,
                   QObject* parent = nullptr);
 
     void initialize();
@@ -36,6 +38,8 @@ private:
     void showReminders();
     void showSettings();
     void showNetworkSetup();
+    void showVideoCall();
+    void hangUpVideoCall();
     void editReminder(ReminderId id);
     void saveReminder(const ReminderDraft& draft);
     void deleteReminder(ReminderId id);
@@ -51,5 +55,6 @@ private:
     SettingsService* m_settingsService = nullptr;
     SystemService* m_systemService = nullptr;
     NetworkService* m_networkService = nullptr;
+    VideoCallService* m_videoCallService = nullptr;
     QTimer m_controlTimeout;
 };

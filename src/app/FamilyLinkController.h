@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ReminderModels.h"
+#include "model/VideoCallModels.h"
 #include "platform/FamilyLinkHttpAdapter.h"
 
 #include <QByteArray>
@@ -26,6 +27,9 @@ private:
     FamilyLinkHttpResponse statusResponse() const;
     FamilyLinkHttpResponse settingsResponse() const;
     FamilyLinkHttpResponse remindersResponse() const;
+    FamilyLinkHttpResponse videoCallResponse() const;
+    FamilyLinkHttpResponse startVideoCallResponse(const QByteArray& body) const;
+    FamilyLinkHttpResponse videoCallActionResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse updateSettingsResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse createReminderResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse updateReminderResponse(ReminderId id,

@@ -4,8 +4,11 @@
 #include "model/NetworkModels.h"
 #include "model/SettingsModels.h"
 #include "model/SystemModels.h"
+#include "model/VideoCallModels.h"
 
 #include <QWidget>
+
+class QImage;
 
 class CarePage;
 class CompanionPage;
@@ -17,6 +20,7 @@ class ReminderEditPage;
 class ReminderPage;
 class SettingsPage;
 class ToastWidget;
+class VideoCallPage;
 
 class MainWindow final : public QWidget {
     Q_OBJECT
@@ -31,6 +35,7 @@ public:
         Care,
         Reminder,
         ReminderEdit,
+        VideoCall,
         Settings,
         NetworkSetup
     };
@@ -44,6 +49,9 @@ public:
     void setSettings(const UserSettings& settings);
     void setSystemStatus(const SystemStatus& status);
     void setDeviceSummary(const DeviceSummary& summary);
+    void setVideoCallSnapshot(const VideoCallSnapshot& snapshot);
+    void setRemoteVideoFrame(const QImage& frame);
+    void setLocalVideoFrame(const QImage& frame);
     void setWifiScanStarted();
     void setWifiNetworks(const QList<WifiNetwork>& networks);
     void setWifiScanFailed(const QString& error);
@@ -57,6 +65,8 @@ signals:
     void talkRequested();
     void careRequested();
     void reminderRequested();
+    void videoCallRequested();
+    void videoCallHangUpRequested();
     void settingsRequested();
     void homeRequested();
     void addReminderRequested();
@@ -85,6 +95,7 @@ private:
     CarePage* m_carePage = nullptr;
     ReminderPage* m_reminderPage = nullptr;
     ReminderEditPage* m_reminderEditPage = nullptr;
+    VideoCallPage* m_videoCallPage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
     NetworkSetupPage* m_networkSetupPage = nullptr;
     ToastWidget* m_toast = nullptr;

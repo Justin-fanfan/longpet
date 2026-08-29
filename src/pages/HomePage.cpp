@@ -38,25 +38,25 @@ HomePage::HomePage(QWidget* parent)
         QStringLiteral(":/icons/microphone-dark.svg"), "primary", this);
     m_careButton = new LargeActionButton(QStringLiteral("今日关怀"),
         QStringLiteral(":/icons/care.svg"), "secondary", this);
-    m_reminderButton = new LargeActionButton(QStringLiteral("提醒"),
-        QStringLiteral(":/icons/reminder.svg"), "secondary", this);
+    m_videoCallButton = new LargeActionButton(QStringLiteral("视频通话"),
+        QStringLiteral(":/icons/video-call.svg"), "secondary", this);
     m_talkButton->setObjectName(QStringLiteral("talkButton"));
     m_careButton->setObjectName(QStringLiteral("careButton"));
-    m_reminderButton->setObjectName(QStringLiteral("reminderButton"));
+    m_videoCallButton->setObjectName(QStringLiteral("videoCallButton"));
     m_talkButton->setFixedHeight(96);
     m_careButton->setFixedHeight(96);
-    m_reminderButton->setFixedHeight(96);
+    m_videoCallButton->setFixedHeight(96);
     buttons->addWidget(m_talkButton, 1);
     buttons->addWidget(m_careButton, 1);
-    buttons->addWidget(m_reminderButton, 1);
+    buttons->addWidget(m_videoCallButton, 1);
     root->addLayout(buttons);
 
     connect(m_talkButton, &QPushButton::clicked,
             this, &HomePage::talkRequested);
     connect(m_careButton, &QPushButton::clicked,
             this, &HomePage::careRequested);
-    connect(m_reminderButton, &QPushButton::clicked,
-            this, &HomePage::reminderRequested);
+    connect(m_videoCallButton, &QPushButton::clicked,
+            this, &HomePage::videoCallRequested);
     connect(m_statusBar, &StatusBarWidget::settingsRequested,
             this, &HomePage::settingsRequested);
 }
