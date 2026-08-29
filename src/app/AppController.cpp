@@ -192,8 +192,6 @@ void AppController::connectServices()
                 m_window, &MainWindow::setVideoCallSnapshot);
         connect(m_videoCallService, &VideoCallService::remoteVideoFrame,
                 m_window, &MainWindow::setRemoteVideoFrame);
-        connect(m_videoCallService, &VideoCallService::localVideoFrame,
-                m_window, &MainWindow::setLocalVideoFrame);
         connect(m_videoCallService, &VideoCallService::snapshotChanged,
                 this, [this](const VideoCallSnapshot& snapshot) {
             if (snapshot.isActive()) {

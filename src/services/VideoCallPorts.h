@@ -25,7 +25,6 @@ signals:
     void failed(const QString& code, const QString& message);
     void disconnected(const QString& message);
     void remoteVideoFrame(const QImage& frame);
-    void localVideoFrame(const QImage& frame);
 };
 
 class CallPromptPlayerPort : public QObject {

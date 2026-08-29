@@ -51,7 +51,6 @@ public:
     void setDeviceSummary(const DeviceSummary& summary);
     void setVideoCallSnapshot(const VideoCallSnapshot& snapshot);
     void setRemoteVideoFrame(const QImage& frame);
-    void setLocalVideoFrame(const QImage& frame);
     void setWifiScanStarted();
     void setWifiNetworks(const QList<WifiNetwork>& networks);
     void setWifiScanFailed(const QString& error);

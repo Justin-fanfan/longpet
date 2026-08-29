@@ -23,8 +23,6 @@ VideoCallService::VideoCallService(VideoCallMediaPort* mediaPort,
         });
         connect(m_mediaPort, &VideoCallMediaPort::remoteVideoFrame,
                 this, &VideoCallService::remoteVideoFrame);
-        connect(m_mediaPort, &VideoCallMediaPort::localVideoFrame,
-                this, &VideoCallService::localVideoFrame);
     }
     if (m_promptPlayer) {
         connect(m_promptPlayer, &CallPromptPlayerPort::finished,

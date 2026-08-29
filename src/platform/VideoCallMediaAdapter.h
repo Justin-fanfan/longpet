@@ -4,6 +4,7 @@
 #include "services/VideoCallPorts.h"
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QPointer>
 #include <QProcess>
 #include <QJsonObject>
@@ -64,7 +65,7 @@ private:
     QByteArray m_pendingRemoteVideo;
     QQueue<QByteArray> m_audioPlaybackQueue;
     quint32 m_sequences[6] {};
-    quint64 m_lastFamilyVideoTimestamp = 0;
+    QElapsedTimer m_remoteVideoDecodeClock;
     int m_cameraFrameCounter = 0;
     bool m_prepared = false;
     bool m_authenticated = false;

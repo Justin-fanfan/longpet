@@ -13,6 +13,7 @@
 namespace {
 constexpr qsizetype AudioChunkBytes = 640;
 constexpr qint64 MaximumSocketBacklog = 256 * 1024;
+constexpr qint64 RemoteVideoMinimumIntervalMs = 120;
 
 QString captureDevice()
 {
@@ -168,7 +169,7 @@ void VideoCallMediaAdapter::stop()
     std::fill(std::begin(m_sequences), std::end(m_sequences), 0U);
     m_session = {};
     m_cameraFrameCounter = 0;
-    m_lastFamilyVideoTimestamp = 0;
+    m_remoteVideoDecodeClock.invalidate();
     m_prepared = false;
     m_authenticated = false;
     m_audioEnabled = false;
@@ -219,8 +220,12 @@ void VideoCallMediaAdapter::handleBinaryMessage(const QByteArray& message)
     switch (frame.streamType) {
     case MediaStreamType::FamilyVideo:
         if (m_session.mode == VideoCallMode::Video
-            && frame.timestampUsec >= m_lastFamilyVideoTimestamp) {
-            m_lastFamilyVideoTimestamp = frame.timestampUsec;
+            && (!m_remoteVideoDecodeClock.isValid()
+                || m_remoteVideoDecodeClock.elapsed() >= RemoteVideoMinimumIntervalMs)) {
+            if (m_remoteVideoDecodeClock.isValid())
+                m_remoteVideoDecodeClock.restart();
+            else
+                m_remoteVideoDecodeClock.start();
             scheduleRemoteVideoDecode(frame.payload);
         }
         break;
@@ -389,13 +394,8 @@ void VideoCallMediaAdapter::processCameraOutput()
         QByteArray jpeg = m_cameraBuffer.left(end + 2);
         m_cameraBuffer.remove(0, end + 2);
         ++m_cameraFrameCounter;
-        if ((m_cameraFrameCounter % 2) != 0)
+        if ((m_cameraFrameCounter % 3) != 0)
             continue;
-        if ((m_cameraFrameCounter % 12) == 0) {
-            const QImage preview = QImage::fromData(jpeg, "JPG");
-            if (!preview.isNull())
-                emit localVideoFrame(preview);
-        }
         if (!m_authenticated)
             continue;
         if (m_socket && m_socket->bytesToWrite() < MaximumSocketBacklog)

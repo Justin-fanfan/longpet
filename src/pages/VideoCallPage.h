@@ -19,7 +19,6 @@ public:
 
     void setSnapshot(const VideoCallSnapshot& snapshot);
     void setRemoteVideoFrame(const QImage& frame);
-    void setLocalVideoFrame(const QImage& frame);
     void showControlsTemporarily();
 
 signals:
@@ -36,9 +35,7 @@ private:
     QLabel* m_callId = nullptr;
     QLabel* m_duration = nullptr;
     VideoFrameWidget* m_remoteVideo = nullptr;
-    VideoFrameWidget* m_localVideo = nullptr;
     QWidget* m_audioStage = nullptr;
-    QWidget* m_localPreview = nullptr;
     QWidget* m_controlOverlay = nullptr;
     PetFaceWidget* m_speakingFace = nullptr;
     QPushButton* m_backButton = nullptr;

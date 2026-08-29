@@ -26,7 +26,6 @@ public:
 signals:
     void snapshotChanged(const VideoCallSnapshot& snapshot);
     void remoteVideoFrame(const QImage& frame);
-    void localVideoFrame(const QImage& frame);
     void callActivityChanged(bool active);
 
 private:

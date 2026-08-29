@@ -181,11 +181,6 @@ void MainWindow::setRemoteVideoFrame(const QImage& frame)
     m_videoCallPage->setRemoteVideoFrame(frame);
 }
 
-void MainWindow::setLocalVideoFrame(const QImage& frame)
-{
-    m_videoCallPage->setLocalVideoFrame(frame);
-}
-
 void MainWindow::setWifiScanStarted()
 {
     m_networkSetupPage->setScanStarted();

@@ -18,7 +18,7 @@ Windows Camera -> Canvas 等比裁切 -> JPEG -> WebSocket -> LongPet QImage
 LongPet USB Mic/Speaker <-> PCM S16_LE / 16 kHz / Mono <-> Windows 默认音频设备
 ```
 
-目标板不解码再重编码自己的摄像头画面，实际发送约 15 FPS。视频堵塞时只保留最新帧；音频使用有界低延迟缓冲。
+目标板不解码再重编码自己的摄像头画面，优化后实际发送约 10 FPS。电脑发往板端使用 480×360、8 FPS，板端另有约 8 FPS 解码硬上限。视频堵塞时只保留最新帧；音频使用有界低延迟缓冲。
 
 ## 2. 分层与调用链
 
@@ -103,6 +103,20 @@ Content-Type: application/json
 
 ## 6. 媒体实现与积压控制
 
+### 6.1 2026-08-30 板端性能修正
+
+首轮上板时视频通话出现 LongPet CPU 100% 和明显卡顿。热点在板端 GUI 进程：每秒约 15 次解码家属端 640×480 JPEG，并对每帧做平滑满屏缩放；同时还会周期性解码板端自己的摄像头 JPEG，仅用于右上角本地预览。这些工作都发生在资源有限的板端，语音通话稳定也进一步说明瓶颈不是 PCM 音频链路。
+
+本次采用非对称媒体参数，把计算量留给 Windows：
+
+- 家属端发往 LongPet：由 640×480 / 约 15 FPS 调整为 480×360 / 8 FPS，JPEG quality 由 0.68 调整为 0.60；
+- LongPet 接收：用单调时钟设置 120 ms 最小解码间隔，即使旧版家属端发送更快也最多约 8.3 FPS；
+- LongPet 摄像头：仍直接转发相机输出的 MJPEG，不做重编码，发送由约 15 FPS 调整为约 10 FPS；
+- 删除 LongPet 本地小窗及其本机 JPEG 解码链路；家属端仍可看到 LongPet 摄像头；
+- 满屏绘制继续保持等比居中裁切，但关闭高开销的平滑缩放提示；视频积压仍只保留最新帧。
+
+按解码像素吞吐量估算，仅“家属端视频解码”就由约 4.61 Mpx/s 降至约 1.38 Mpx/s，下降约 70%；本地预览解码则完全消失。最终 CPU 数字仍必须以新产物上板后的 `top` 数据为准。
+
 板端摄像头子进程等价于：
 
 ```text
@@ -110,7 +124,7 @@ gst-launch-1.0 -q v4l2src device=/dev/video0 !
   image/jpeg,width=640,height=480,framerate=30/1 ! fdsink fd=1 sync=false
 ```
 
-Adapter 解析 JPEG SOI/EOI 并隔帧发送，约 15 FPS。不对板端 JPEG 重编码。WebSocket 待发送量超过 256 KiB 时不继续排队，只覆盖一个“最新待发帧”。接收家属视频也只保留最新待解码帧；显示使用等比铺满裁切，不拉伸。
+Adapter 解析 JPEG SOI/EOI 并每三帧发送一帧，约 10 FPS。不对板端 JPEG 重编码。WebSocket 待发送量超过 256 KiB 时不继续排队，只覆盖一个“最新待发帧”。接收家属视频只保留最新待解码帧，并用单调时钟限制为约 8 FPS；显示使用快速等比铺满裁切，不拉伸。板端不再解码自己的摄像头 JPEG 做本地小窗预览。
 
 音频格式为 PCM S16_LE、16 kHz、mono、每包 20 ms/640 bytes。板端播放队列 3 包起播，最多保留 12 包，过量时丢弃旧包；GStreamer queue 另限制到 200 ms 并启用 downstream leaky。家属端播放目标缓冲约 60–250 ms。
 
@@ -128,8 +142,8 @@ LONGPET_MEDIA_PORT=8788
 
 ## 7. LongPet 页面
 
-- 视频：远端画面覆盖整个页面，按比例居中裁切；板端本地预览叠在右上角；状态和控制均为覆盖层，不压缩视频区域；
-- 语音：不创建黑色视频框，显示 `PetFaceWidget(PetExpression::Speaking)` 连续动画；
+- 视频：远端画面覆盖整个页面，按比例居中裁切；等待远端视频时为纯黑背景；不再显示板端本地预览；状态和控制均为覆盖层，不压缩视频区域；
+- 语音：使用项目统一的 `#121210` 背景，`PetFaceWidget(PetExpression::Speaking)` 像 CompanionPage 一样铺满舞台；
 - 双模式均显示家属端、状态和时长；
 - connected 后挂断控制默认隐藏，触屏显示醒目挂断按钮，4 秒无操作自动隐藏；
 - 挂断、失败或网络中断后自动返回首页；
@@ -148,7 +162,7 @@ Service 新增 `callActivityChanged(bool)` 信号。当前 main 尚未接入 KWS
 - Qt 6.11.2 MSVC Release：编译、RCC、MOC 和链接全部通过；
 - Qt WebSockets 正确找到并链接；
 - 更新后的测试程序也成功编译、链接；
-- 运行 CTest 时主机“应用程序控制策略”阻止新生成测试 EXE，CTest 报 `BAD_COMMAND`，不是测试断言失败。策略阻止后未尝试绕过。
+- `ctest --test-dir build-familylink-ninja -C Release --output-on-failure`：1/1 通过，用时 1.46 秒。
 
 ### LoongArch 交叉 Release
 
@@ -160,7 +174,7 @@ Service 新增 `callActivityChanged(bool)` 信号。当前 main 尚未接入 KWS
 ### 家属端
 
 - `npm run check`：通过；
-- `npm test`：19/19 通过；
+- `npm test`：20/20 通过，包含 480×360 / 125 ms 低负载视频配置测试；
 - `npm run build:release`：通过，生成 `release/win-unpacked/LongPet Family.exe`。
 
 ### 当前板端只读检查
@@ -184,7 +198,7 @@ Service 新增 `callActivityChanged(bool)` 信号。当前 main 尚未接入 KWS
 3. 家属端先发起语音通话，确认只播一次 `zh_voice_call.wav`，提示期间页面为“正在通知设备”；
 4. 提示结束后确认双方能互相听见，且未打开摄像头；
 5. 挂断后立即连续呼叫两次，观察无 `Device or resource busy`；
-6. 发起视频，确认双向视频/音频、LongPet 满屏裁切与右上预览；
+6. 发起视频，确认双向视频/音频、LongPet 满屏裁切且不再出现本地预览；
 7. 在提示期间取消，确认提示立即停、摄像头释放并返回首页；
 8. 通话中断网，确认双方错误可理解且设备释放；
 9. 通话中再次发起呼叫，确认 `DEVICE_BUSY`；
@@ -195,8 +209,12 @@ Service 新增 `callActivityChanged(bool)` 信号。当前 main 尚未接入 KWS
 ```sh
 ss -lntp | grep 8788
 ps -ef | grep -E 'gst-launch|aplay'
-top
+pidof LongPet
+top -H -p "$(pidof LongPet)"
+ps -C gst-launch-1.0 -o pid,pcpu,pmem,args
 ```
+
+请分别记录空闲、语音通话和视频通话稳定 30 秒后的 LongPet 与三个 GStreamer 进程 CPU。界面还应确认：视频等待阶段为纯黑、通话中无板端本地小窗；语音页面保持 `#121210` 背景且 Speaking 脸铺满主要区域；家属端每次新通话都从 `00:00` 开始计时。
 
 通话结束后 8788、`gst-launch-1.0` 与 `aplay` 应消失。
 
@@ -208,4 +226,4 @@ top
 - 固定低延迟缓冲不是自适应 jitter buffer，不做音视频唇音同步；
 - GStreamer 子进程在启动后若插件/设备协商失败，会异步进入 `failed` 并释放；
 - 当前未集成 KWS，只提供了正确的暂停/恢复信号边界；
-- 受 Windows 应用控制策略影响，本轮无法在当前主机执行新 C++ 测试 EXE，但 Windows/LoongArch 两套 Release 都已完成编译链接。
+- 当前的低负载档位优先保证 2K0300 上的实时性，不追求高清画质；本轮没有替换板端程序，实际 CPU、流畅度和温度等待用户上板验证。

@@ -23,7 +23,7 @@ protected:
     void paintEvent(QPaintEvent*) override
     {
         QPainter painter(this);
-        painter.fillRect(rect(), QColor(QStringLiteral("#10201b")));
+        painter.fillRect(rect(), Qt::black);
         if (m_frame.isNull())
             return;
         const qreal sourceAspect = qreal(m_frame.width()) / m_frame.height();
@@ -38,7 +38,6 @@ protected:
             source.setLeft((m_frame.width() - wantedWidth) / 2.0);
             source.setWidth(wantedWidth);
         }
-        painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
         painter.drawImage(QRectF(rect()), m_frame, source);
     }
 
@@ -87,7 +86,6 @@ VideoCallPage::VideoCallPage(QWidget* parent)
     setProperty("page", true);
     setObjectName(QStringLiteral("videoCallPage"));
     setAttribute(Qt::WA_StyledBackground, true);
-    setStyleSheet(QStringLiteral("#videoCallPage { background: #10201b; }"));
 
     auto* root = new QGridLayout(this);
     root->setContentsMargins(0, 0, 0, 0);
@@ -99,23 +97,19 @@ VideoCallPage::VideoCallPage(QWidget* parent)
     m_audioStage = new QWidget(this);
     m_audioStage->setObjectName(QStringLiteral("voiceCallStage"));
     m_audioStage->setStyleSheet(QStringLiteral(
-        "#voiceCallStage { background: qradialgradient(cx:.5,cy:.45,radius:.75,"
-        "stop:0 #315d50, stop:1 #10201b); }"));
+        "#voiceCallStage { background: #121210; }"));
     auto* audioLayout = new QVBoxLayout(m_audioStage);
-    audioLayout->setContentsMargins(100, 70, 100, 70);
+    audioLayout->setContentsMargins(0, 0, 0, 0);
     m_speakingFace = new PetFaceWidget(PetExpression::Speaking, m_audioStage);
-    m_speakingFace->setMinimumSize(620, 300);
-    m_speakingFace->setBackgroundColor(QColor(QStringLiteral("#315d50")));
+    m_speakingFace->setBackgroundColor(QColor(QStringLiteral("#121210")));
     m_speakingFace->setAnimationEnabled(true);
-    audioLayout->addStretch(1);
-    audioLayout->addWidget(m_speakingFace, 1);
-    audioLayout->addStretch(1);
+    audioLayout->addWidget(m_speakingFace);
     root->addWidget(m_audioStage, 0, 0);
 
     auto* statusOverlay = new QWidget(this);
     statusOverlay->setObjectName(QStringLiteral("callStatusOverlay"));
     statusOverlay->setStyleSheet(QStringLiteral(
-        "#callStatusOverlay { background: rgba(9,24,20,185); border-radius: 18px; }"
+        "#callStatusOverlay { background: rgba(11,11,10,190); border-radius: 18px; }"
         "#callStatusOverlay QLabel { color: white; background: transparent; }"));
     auto* statusLayout = new QVBoxLayout(statusOverlay);
     statusLayout->setContentsMargins(20, 12, 20, 12);
@@ -138,17 +132,6 @@ VideoCallPage::VideoCallPage(QWidget* parent)
     statusLayout->addWidget(m_duration);
     statusLayout->addWidget(m_callId);
     root->addWidget(statusOverlay, 0, 0, Qt::AlignTop | Qt::AlignLeft);
-
-    m_localPreview = new QWidget(this);
-    m_localPreview->setObjectName(QStringLiteral("localVideoPreview"));
-    m_localPreview->setFixedSize(280, 190);
-    m_localPreview->setStyleSheet(QStringLiteral(
-        "#localVideoPreview { border: 4px solid white; border-radius: 14px; background: #162b25; }"));
-    auto* localLayout = new QVBoxLayout(m_localPreview);
-    localLayout->setContentsMargins(4, 4, 4, 4);
-    m_localVideo = new VideoFrameWidget(m_localPreview);
-    localLayout->addWidget(m_localVideo);
-    root->addWidget(m_localPreview, 0, 0, Qt::AlignTop | Qt::AlignRight);
 
     m_controlOverlay = new QWidget(this);
     m_controlOverlay->setObjectName(QStringLiteral("callControlOverlay"));
@@ -184,7 +167,10 @@ VideoCallPage::VideoCallPage(QWidget* parent)
 void VideoCallPage::setSnapshot(const VideoCallSnapshot& snapshot)
 {
     const VideoCallState previousState = m_snapshot.state;
+    const QString previousCallId = m_snapshot.callId;
     m_snapshot = snapshot;
+    if (snapshot.callId != previousCallId)
+        m_remoteVideo->setFrame({});
     m_title->setText(titleFor(snapshot));
     m_description->setText(descriptionFor(snapshot));
     m_remoteName->setText(snapshot.remoteName.isEmpty()
@@ -199,7 +185,6 @@ void VideoCallPage::setSnapshot(const VideoCallSnapshot& snapshot)
         ? QStringLiteral("挂断通话") : QStringLiteral("取消呼叫"));
     const bool video = snapshot.mode == VideoCallMode::Video;
     m_remoteVideo->setVisible(video);
-    m_localPreview->setVisible(video && active);
     m_audioStage->setVisible(!video);
     m_speakingFace->setAnimationEnabled(!video && active);
     updateDuration();
@@ -218,11 +203,6 @@ void VideoCallPage::setSnapshot(const VideoCallSnapshot& snapshot)
 void VideoCallPage::setRemoteVideoFrame(const QImage& frame)
 {
     m_remoteVideo->setFrame(frame);
-}
-
-void VideoCallPage::setLocalVideoFrame(const QImage& frame)
-{
-    m_localVideo->setFrame(frame);
 }
 
 void VideoCallPage::showControlsTemporarily()
