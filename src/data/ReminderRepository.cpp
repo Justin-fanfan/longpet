@@ -69,7 +69,21 @@ Reminder reminderFromQuery(const QSqlQuery& query)
 
 ServiceResult failedResult(const QSqlQuery& query)
 {
-    return {false, query.lastError().text(), 0};
+    return {false, query.lastError().text(), 0, ServiceErrorCode::Storage};
+}
+
+ServiceResult classifyWriteMiss(const QSqlDatabase& database, ReminderId id,
+                                const QString& conflictMessage)
+{
+    QSqlQuery query(database);
+    query.prepare(QStringLiteral("SELECT revision FROM reminders WHERE id=?"));
+    query.addBindValue(id);
+    if (!query.exec())
+        return failedResult(query);
+    if (!query.next())
+        return {false, QStringLiteral("提醒不存在"), 0, ServiceErrorCode::NotFound};
+    return {false, conflictMessage, 0, ServiceErrorCode::RevisionConflict,
+            query.value(0).toInt()};
 }
 }
 
@@ -149,19 +163,27 @@ ServiceResult ReminderRepository::update(ReminderId id, const ReminderDraft& dra
     if (!query.exec())
         return failedResult(query);
     if (query.numRowsAffected() != 1)
-        return {false, QStringLiteral("提醒已被其他操作修改，请刷新后重试"), 0};
+        return classifyWriteMiss(m_database, id,
+            QStringLiteral("提醒已被其他操作修改，请刷新后重试"));
     return {true, {}, id};
 }
 
-ServiceResult ReminderRepository::remove(ReminderId id)
+ServiceResult ReminderRepository::remove(ReminderId id, int expectedRevision)
 {
     QSqlQuery query(m_database);
-    query.prepare(QStringLiteral("DELETE FROM reminders WHERE id = ?"));
+    if (expectedRevision >= 0) {
+        query.prepare(QStringLiteral("DELETE FROM reminders WHERE id=? AND revision=?"));
+    } else {
+        query.prepare(QStringLiteral("DELETE FROM reminders WHERE id=?"));
+    }
     query.addBindValue(id);
+    if (expectedRevision >= 0)
+        query.addBindValue(expectedRevision);
     if (!query.exec())
         return failedResult(query);
     if (query.numRowsAffected() != 1)
-        return {false, QStringLiteral("提醒不存在"), 0};
+        return classifyWriteMiss(m_database, id,
+            QStringLiteral("提醒已被其他操作修改，请刷新后重试"));
     return {true, {}, id};
 }
 

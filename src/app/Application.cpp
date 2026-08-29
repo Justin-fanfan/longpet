@@ -117,7 +117,7 @@ bool Application::initialize(QString* error)
                                                &familyLinkError)) {
         qWarning("FamilyLink HTTP service unavailable: %s", qPrintable(familyLinkError));
     } else {
-        qInfo("FamilyLink read-only API listening on %s:%u",
+        qInfo("FamilyLink API listening on %s:%u",
               qPrintable(familyLinkAddress.toString()),
               static_cast<unsigned>(m_familyLinkController->port()));
     }

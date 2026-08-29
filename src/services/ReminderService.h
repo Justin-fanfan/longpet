@@ -16,7 +16,7 @@ public:
     QList<Reminder> reminders(QString* error = nullptr) const;
     Reminder reminder(ReminderId id, bool* found = nullptr, QString* error = nullptr) const;
     ServiceResult save(const ReminderDraft& draft);
-    ServiceResult remove(ReminderId id);
+    ServiceResult remove(ReminderId id, int expectedRevision = -1);
     ServiceResult markCompleted(ReminderId id);
     void start();
     void stop();
@@ -35,4 +35,3 @@ private:
     ReminderRepository* m_repository = nullptr;
     QTimer m_scheduler;
 };
-

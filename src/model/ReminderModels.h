@@ -27,6 +27,14 @@ enum class ReminderOccurrenceStatus {
     Disabled
 };
 
+enum class ServiceErrorCode {
+    None,
+    Validation,
+    NotFound,
+    RevisionConflict,
+    Storage
+};
+
 struct Reminder {
     ReminderId id = 0;
     ReminderType type = ReminderType::Other;
@@ -56,6 +64,8 @@ struct ServiceResult {
     bool success = false;
     QString error;
     ReminderId id = 0;
+    ServiceErrorCode code = ServiceErrorCode::None;
+    int currentRevision = 0;
 };
 
 struct CareSummary {

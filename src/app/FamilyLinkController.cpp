@@ -7,8 +7,12 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QSet>
 #include <QUrl>
+#include <QUrlQuery>
 
+#include <cmath>
+#include <limits>
 #include <utility>
 
 namespace {
@@ -59,11 +63,258 @@ QString occurrenceStatusName(ReminderOccurrenceStatus status)
     return QStringLiteral("pending");
 }
 
-bool isKnownReadPath(const QString& path)
+bool reminderTypeFromName(const QString& value, ReminderType* type)
 {
-    return path == QStringLiteral("/api/v1/status")
-        || path == QStringLiteral("/api/v1/settings")
-        || path == QStringLiteral("/api/v1/reminders");
+    if (value == QStringLiteral("medicine")) {
+        *type = ReminderType::Medicine;
+        return true;
+    }
+    if (value == QStringLiteral("water")) {
+        *type = ReminderType::Water;
+        return true;
+    }
+    if (value == QStringLiteral("other")) {
+        *type = ReminderType::Other;
+        return true;
+    }
+    return false;
+}
+
+bool repeatRuleFromName(const QString& value, ReminderRepeatRule* rule)
+{
+    if (value == QStringLiteral("daily")) {
+        *rule = ReminderRepeatRule::Daily;
+        return true;
+    }
+    if (value == QStringLiteral("weekdays")) {
+        *rule = ReminderRepeatRule::Weekdays;
+        return true;
+    }
+    if (value == QStringLiteral("once")) {
+        *rule = ReminderRepeatRule::Once;
+        return true;
+    }
+    return false;
+}
+
+QJsonObject reminderObject(const Reminder& reminder)
+{
+    return {
+        {QStringLiteral("id"), reminder.id},
+        {QStringLiteral("type"), reminderTypeName(reminder.type)},
+        {QStringLiteral("title"), reminder.title},
+        {QStringLiteral("timeOfDay"), reminder.timeOfDay.toString(QStringLiteral("HH:mm"))},
+        {QStringLiteral("scheduledDate"), reminder.scheduledDate.toString(Qt::ISODate)},
+        {QStringLiteral("repeatRule"), repeatRuleName(reminder.repeatRule)},
+        {QStringLiteral("enabled"), reminder.enabled},
+        {QStringLiteral("revision"), reminder.revision},
+        {QStringLiteral("status"), occurrenceStatusName(reminder.status)},
+        {QStringLiteral("createdAt"), dateTimeValue(reminder.createdAt)},
+        {QStringLiteral("updatedAt"), dateTimeValue(reminder.updatedAt)}
+    };
+}
+
+QJsonObject settingsObject(const FamilyLinkSettingsSnapshot& snapshot)
+{
+    const QJsonObject volumeCapability {
+        {QStringLiteral("available"), snapshot.device.audioControlAvailable},
+        {QStringLiteral("summary"), snapshot.device.audioSummary}
+    };
+    const QJsonObject brightnessCapability {
+        {QStringLiteral("available"), snapshot.device.brightnessControlAvailable},
+        {QStringLiteral("summary"), snapshot.device.brightnessSummary}
+    };
+    return {
+        {QStringLiteral("volume"), snapshot.settings.volume},
+        {QStringLiteral("brightness"), snapshot.settings.brightness},
+        {QStringLiteral("petStyle"), snapshot.settings.petStyle},
+        {QStringLiteral("revision"), snapshot.revision},
+        {QStringLiteral("remoteWritable"), true},
+        {QStringLiteral("capabilities"), QJsonObject {
+            {QStringLiteral("volume"), volumeCapability},
+            {QStringLiteral("brightness"), brightnessCapability}
+        }}
+    };
+}
+
+bool parseObjectBody(const QByteArray& body, QJsonObject* object, QString* error)
+{
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject()) {
+        if (error)
+            *error = QStringLiteral("请求正文必须是 JSON 对象");
+        return false;
+    }
+    *object = document.object();
+    return true;
+}
+
+bool hasOnlyKeys(const QJsonObject& object, const QSet<QString>& allowed,
+                 QString* error)
+{
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        if (!allowed.contains(it.key())) {
+            if (error)
+                *error = QStringLiteral("不支持的字段：%1").arg(it.key());
+            return false;
+        }
+    }
+    return true;
+}
+
+bool integerField(const QJsonObject& object, const QString& key,
+                  int minimum, int maximum, int* value, QString* error)
+{
+    const QJsonValue field = object.value(key);
+    if (!field.isDouble()) {
+        if (error)
+            *error = QStringLiteral("%1 必须是整数").arg(key);
+        return false;
+    }
+    const double number = field.toDouble();
+    if (!std::isfinite(number) || std::floor(number) != number
+        || number < minimum || number > maximum) {
+        if (error)
+            *error = QStringLiteral("%1 超出允许范围").arg(key);
+        return false;
+    }
+    *value = static_cast<int>(number);
+    return true;
+}
+
+bool parseSettingsUpdate(const QByteArray& body, SettingsUpdateRequest* request,
+                         QString* error)
+{
+    QJsonObject object;
+    if (!parseObjectBody(body, &object, error))
+        return false;
+    const QSet<QString> allowed {
+        QStringLiteral("volume"), QStringLiteral("brightness"),
+        QStringLiteral("petStyle"), QStringLiteral("expectedRevision")
+    };
+    if (!hasOnlyKeys(object, allowed, error))
+        return false;
+    if (!integerField(object, QStringLiteral("expectedRevision"), 0,
+                      std::numeric_limits<int>::max(), &request->expectedRevision, error)) {
+        return false;
+    }
+    if (object.contains(QStringLiteral("volume"))) {
+        int value = 0;
+        if (!integerField(object, QStringLiteral("volume"), 0, 100, &value, error))
+            return false;
+        request->volume = value;
+    }
+    if (object.contains(QStringLiteral("brightness"))) {
+        int value = 0;
+        if (!integerField(object, QStringLiteral("brightness"), 0, 100, &value, error))
+            return false;
+        request->brightness = value;
+    }
+    if (object.contains(QStringLiteral("petStyle"))) {
+        if (!object.value(QStringLiteral("petStyle")).isString()) {
+            if (error)
+                *error = QStringLiteral("petStyle 必须是字符串");
+            return false;
+        }
+        request->petStyle = object.value(QStringLiteral("petStyle")).toString();
+    }
+    if (request->isEmpty()) {
+        if (error)
+            *error = QStringLiteral("没有可保存的设置字段");
+        return false;
+    }
+    return true;
+}
+
+bool parseReminderDraft(const QByteArray& body, bool updating,
+                        ReminderDraft* draft, QString* error)
+{
+    QJsonObject object;
+    if (!parseObjectBody(body, &object, error))
+        return false;
+    QSet<QString> allowed {
+        QStringLiteral("type"), QStringLiteral("title"),
+        QStringLiteral("timeOfDay"), QStringLiteral("scheduledDate"),
+        QStringLiteral("repeatRule"), QStringLiteral("enabled")
+    };
+    if (updating)
+        allowed.insert(QStringLiteral("expectedRevision"));
+    if (!hasOnlyKeys(object, allowed, error))
+        return false;
+
+    const QStringList stringFields {
+        QStringLiteral("type"), QStringLiteral("title"), QStringLiteral("timeOfDay"),
+        QStringLiteral("scheduledDate"), QStringLiteral("repeatRule")
+    };
+    for (const QString& field : stringFields) {
+        if (!object.value(field).isString()) {
+            if (error)
+                *error = QStringLiteral("%1 必须是字符串").arg(field);
+            return false;
+        }
+    }
+    if (!object.value(QStringLiteral("enabled")).isBool()) {
+        if (error)
+            *error = QStringLiteral("enabled 必须是布尔值");
+        return false;
+    }
+
+    draft->title = object.value(QStringLiteral("title")).toString().simplified();
+    if (draft->title.isEmpty() || draft->title.size() > 40) {
+        if (error)
+            *error = QStringLiteral("提醒标题长度必须为 1 到 40 个字符");
+        return false;
+    }
+    if (!reminderTypeFromName(object.value(QStringLiteral("type")).toString(),
+                              &draft->type)) {
+        if (error)
+            *error = QStringLiteral("提醒类型无效");
+        return false;
+    }
+    if (!repeatRuleFromName(object.value(QStringLiteral("repeatRule")).toString(),
+                            &draft->repeatRule)) {
+        if (error)
+            *error = QStringLiteral("重复规则无效");
+        return false;
+    }
+    const QString timeText = object.value(QStringLiteral("timeOfDay")).toString();
+    draft->timeOfDay = QTime::fromString(timeText, QStringLiteral("HH:mm"));
+    if (!draft->timeOfDay.isValid()
+        || draft->timeOfDay.toString(QStringLiteral("HH:mm")) != timeText) {
+        if (error)
+            *error = QStringLiteral("提醒时间必须使用 HH:mm 格式");
+        return false;
+    }
+    const QString dateText = object.value(QStringLiteral("scheduledDate")).toString();
+    draft->scheduledDate = QDate::fromString(dateText, Qt::ISODate);
+    if (!draft->scheduledDate.isValid()
+        || draft->scheduledDate.toString(Qt::ISODate) != dateText) {
+        if (error)
+            *error = QStringLiteral("提醒日期必须使用 YYYY-MM-DD 格式");
+        return false;
+    }
+    draft->enabled = object.value(QStringLiteral("enabled")).toBool();
+    if (updating
+        && !integerField(object, QStringLiteral("expectedRevision"), 0,
+                         std::numeric_limits<int>::max(), &draft->expectedRevision, error)) {
+        return false;
+    }
+    return true;
+}
+
+bool reminderIdFromPath(const QString& path, ReminderId* id)
+{
+    const QString prefix = QStringLiteral("/api/v1/reminders/");
+    if (!path.startsWith(prefix))
+        return false;
+    const QString idText = path.mid(prefix.size());
+    bool valid = false;
+    const qlonglong parsed = idText.toLongLong(&valid);
+    if (!valid || parsed <= 0)
+        return false;
+    *id = parsed;
+    return true;
 }
 }
 
@@ -129,22 +380,35 @@ FamilyLinkHttpResponse FamilyLinkController::handleRequest(
                              QStringLiteral("BAD_REQUEST"),
                              QStringLiteral("请求地址无效"));
     }
-    if (!isKnownReadPath(path)) {
-        return errorResponse(404, QByteArrayLiteral("Not Found"),
-                             QStringLiteral("ENDPOINT_NOT_FOUND"),
-                             QStringLiteral("接口不存在"));
-    }
-    if (request.method != QByteArrayLiteral("GET")) {
-        return errorResponse(405, QByteArrayLiteral("Method Not Allowed"),
-                             QStringLiteral("READ_ONLY_API"),
-                             QStringLiteral("当前 FamilyLink 版本仅开放只读接口"));
+    if (path == QStringLiteral("/api/v1/status")) {
+        if (request.method == QByteArrayLiteral("GET"))
+            return statusResponse();
+    } else if (path == QStringLiteral("/api/v1/settings")) {
+        if (request.method == QByteArrayLiteral("GET"))
+            return settingsResponse();
+        if (request.method == QByteArrayLiteral("PATCH"))
+            return updateSettingsResponse(request.body);
+    } else if (path == QStringLiteral("/api/v1/reminders")) {
+        if (request.method == QByteArrayLiteral("GET"))
+            return remindersResponse();
+        if (request.method == QByteArrayLiteral("POST"))
+            return createReminderResponse(request.body);
+    } else {
+        ReminderId id = 0;
+        if (!reminderIdFromPath(path, &id)) {
+            return errorResponse(404, QByteArrayLiteral("Not Found"),
+                                 QStringLiteral("ENDPOINT_NOT_FOUND"),
+                                 QStringLiteral("接口不存在"));
+        }
+        if (request.method == QByteArrayLiteral("PUT"))
+            return updateReminderResponse(id, request.body);
+        if (request.method == QByteArrayLiteral("DELETE"))
+            return deleteReminderResponse(id, target);
     }
 
-    if (path == QStringLiteral("/api/v1/status"))
-        return statusResponse();
-    if (path == QStringLiteral("/api/v1/settings"))
-        return settingsResponse();
-    return remindersResponse();
+    return errorResponse(405, QByteArrayLiteral("Method Not Allowed"),
+                         QStringLiteral("METHOD_NOT_ALLOWED"),
+                         QStringLiteral("该接口不支持当前请求方法"));
 }
 
 FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
@@ -166,9 +430,9 @@ FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
 
     const QJsonObject capabilities {
         {QStringLiteral("settingsRead"), true},
-        {QStringLiteral("settingsWrite"), false},
+        {QStringLiteral("settingsWrite"), true},
         {QStringLiteral("remindersRead"), true},
-        {QStringLiteral("remindersWrite"), false}
+        {QStringLiteral("remindersWrite"), true}
     };
     const QJsonObject device {
         {QStringLiteral("id"), snapshot.deviceId},
@@ -224,27 +488,7 @@ FamilyLinkHttpResponse FamilyLinkController::settingsResponse() const
                              QStringLiteral("读取设备设置失败"));
     }
 
-    const QJsonObject volumeCapability {
-        {QStringLiteral("available"), snapshot.device.audioControlAvailable},
-        {QStringLiteral("summary"), snapshot.device.audioSummary}
-    };
-    const QJsonObject brightnessCapability {
-        {QStringLiteral("available"), snapshot.device.brightnessControlAvailable},
-        {QStringLiteral("summary"), snapshot.device.brightnessSummary}
-    };
-    const QJsonObject capabilities {
-        {QStringLiteral("volume"), volumeCapability},
-        {QStringLiteral("brightness"), brightnessCapability}
-    };
-    const QJsonObject root {
-        {QStringLiteral("volume"), snapshot.settings.volume},
-        {QStringLiteral("brightness"), snapshot.settings.brightness},
-        {QStringLiteral("petStyle"), snapshot.settings.petStyle},
-        {QStringLiteral("revision"), snapshot.revision},
-        {QStringLiteral("remoteWritable"), false},
-        {QStringLiteral("capabilities"), capabilities}
-    };
-    return jsonResponse(200, QByteArrayLiteral("OK"), root);
+    return jsonResponse(200, QByteArrayLiteral("OK"), settingsObject(snapshot));
 }
 
 FamilyLinkHttpResponse FamilyLinkController::remindersResponse() const
@@ -265,24 +509,169 @@ FamilyLinkHttpResponse FamilyLinkController::remindersResponse() const
     }
 
     QJsonArray items;
-    for (const Reminder& reminder : reminders) {
-        items.append(QJsonObject {
-            {QStringLiteral("id"), reminder.id},
-            {QStringLiteral("type"), reminderTypeName(reminder.type)},
-            {QStringLiteral("title"), reminder.title},
-            {QStringLiteral("timeOfDay"), reminder.timeOfDay.toString(QStringLiteral("HH:mm"))},
-            {QStringLiteral("scheduledDate"), reminder.scheduledDate.toString(Qt::ISODate)},
-            {QStringLiteral("repeatRule"), repeatRuleName(reminder.repeatRule)},
-            {QStringLiteral("enabled"), reminder.enabled},
-            {QStringLiteral("revision"), reminder.revision},
-            {QStringLiteral("status"), occurrenceStatusName(reminder.status)},
-            {QStringLiteral("createdAt"), dateTimeValue(reminder.createdAt)},
-            {QStringLiteral("updatedAt"), dateTimeValue(reminder.updatedAt)}
-        });
-    }
+    for (const Reminder& reminder : reminders)
+        items.append(reminderObject(reminder));
     return jsonResponse(200, QByteArrayLiteral("OK"),
                         QJsonObject {{QStringLiteral("items"), items},
-                                     {QStringLiteral("remoteWritable"), false}});
+                                     {QStringLiteral("remoteWritable"), true}});
+}
+
+FamilyLinkHttpResponse FamilyLinkController::updateSettingsResponse(
+    const QByteArray& body) const
+{
+    if (!m_service) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("FamilyLink 服务尚未就绪"));
+    }
+    SettingsUpdateRequest request;
+    QString validationError;
+    if (!parseSettingsUpdate(body, &request, &validationError)) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"), validationError);
+    }
+
+    const SettingsUpdateResult result = m_service->updateSettings(request);
+    if (!result.success) {
+        if (result.code == SettingsUpdateErrorCode::RevisionConflict) {
+            return errorResponse(409, QByteArrayLiteral("Conflict"),
+                                 QStringLiteral("REVISION_CONFLICT"), result.error,
+                                 QJsonObject {{QStringLiteral("currentRevision"),
+                                               result.revision}});
+        }
+        if (result.code == SettingsUpdateErrorCode::Validation) {
+            return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                                 QStringLiteral("VALIDATION_ERROR"), result.error);
+        }
+        if (result.code == SettingsUpdateErrorCode::CapabilityUnavailable) {
+            return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                                 QStringLiteral("CAPABILITY_UNAVAILABLE"), result.error);
+        }
+        qWarning() << "FamilyLink settings update failed:" << result.error;
+        return errorResponse(500, QByteArrayLiteral("Internal Server Error"),
+                             QStringLiteral("INTERNAL_ERROR"),
+                             QStringLiteral("保存设备设置失败"));
+    }
+
+    FamilyLinkSettingsSnapshot snapshot;
+    QString error;
+    if (!m_service->settings(&snapshot, &error)) {
+        qWarning() << "FamilyLink updated settings read failed:" << error;
+        return errorResponse(500, QByteArrayLiteral("Internal Server Error"),
+                             QStringLiteral("INTERNAL_ERROR"),
+                             QStringLiteral("读取更新后的设置失败"));
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"), settingsObject(snapshot));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::createReminderResponse(
+    const QByteArray& body) const
+{
+    if (!m_service) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("FamilyLink 服务尚未就绪"));
+    }
+    ReminderDraft draft;
+    QString validationError;
+    if (!parseReminderDraft(body, false, &draft, &validationError)) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"), validationError);
+    }
+
+    Reminder saved;
+    const ServiceResult result = m_service->saveReminder(draft, &saved);
+    if (!result.success) {
+        if (result.code == ServiceErrorCode::Validation) {
+            return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                                 QStringLiteral("VALIDATION_ERROR"), result.error);
+        }
+        qWarning() << "FamilyLink reminder create failed:" << result.error;
+        return errorResponse(500, QByteArrayLiteral("Internal Server Error"),
+                             QStringLiteral("INTERNAL_ERROR"),
+                             QStringLiteral("创建提醒失败"));
+    }
+    return jsonResponse(201, QByteArrayLiteral("Created"), reminderObject(saved));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::updateReminderResponse(
+    ReminderId id, const QByteArray& body) const
+{
+    if (!m_service) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("FamilyLink 服务尚未就绪"));
+    }
+    ReminderDraft draft;
+    QString validationError;
+    if (!parseReminderDraft(body, true, &draft, &validationError)) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"), validationError);
+    }
+    draft.id = id;
+
+    Reminder saved;
+    const ServiceResult result = m_service->saveReminder(draft, &saved);
+    if (!result.success) {
+        if (result.code == ServiceErrorCode::RevisionConflict) {
+            return errorResponse(409, QByteArrayLiteral("Conflict"),
+                                 QStringLiteral("REVISION_CONFLICT"), result.error,
+                                 QJsonObject {{QStringLiteral("currentRevision"),
+                                               result.currentRevision}});
+        }
+        if (result.code == ServiceErrorCode::NotFound) {
+            return errorResponse(404, QByteArrayLiteral("Not Found"),
+                                 QStringLiteral("REMINDER_NOT_FOUND"), result.error);
+        }
+        if (result.code == ServiceErrorCode::Validation) {
+            return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                                 QStringLiteral("VALIDATION_ERROR"), result.error);
+        }
+        qWarning() << "FamilyLink reminder update failed:" << result.error;
+        return errorResponse(500, QByteArrayLiteral("Internal Server Error"),
+                             QStringLiteral("INTERNAL_ERROR"),
+                             QStringLiteral("更新提醒失败"));
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"), reminderObject(saved));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::deleteReminderResponse(
+    ReminderId id, const QUrl& target) const
+{
+    if (!m_service) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("SERVICE_UNAVAILABLE"),
+                             QStringLiteral("FamilyLink 服务尚未就绪"));
+    }
+    bool valid = false;
+    const int expectedRevision = QUrlQuery(target).queryItemValue(
+        QStringLiteral("expectedRevision")).toInt(&valid);
+    if (!valid || expectedRevision < 0) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"),
+                             QStringLiteral("expectedRevision 必须是非负整数"));
+    }
+
+    const ServiceResult result = m_service->removeReminder(id, expectedRevision);
+    if (!result.success) {
+        if (result.code == ServiceErrorCode::RevisionConflict) {
+            return errorResponse(409, QByteArrayLiteral("Conflict"),
+                                 QStringLiteral("REVISION_CONFLICT"), result.error,
+                                 QJsonObject {{QStringLiteral("currentRevision"),
+                                               result.currentRevision}});
+        }
+        if (result.code == ServiceErrorCode::NotFound) {
+            return errorResponse(404, QByteArrayLiteral("Not Found"),
+                                 QStringLiteral("REMINDER_NOT_FOUND"), result.error);
+        }
+        qWarning() << "FamilyLink reminder delete failed:" << result.error;
+        return errorResponse(500, QByteArrayLiteral("Internal Server Error"),
+                             QStringLiteral("INTERNAL_ERROR"),
+                             QStringLiteral("删除提醒失败"));
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"),
+                        QJsonObject {{QStringLiteral("deleted"), true},
+                                     {QStringLiteral("id"), id}});
 }
 
 FamilyLinkHttpResponse FamilyLinkController::jsonResponse(
@@ -294,12 +683,14 @@ FamilyLinkHttpResponse FamilyLinkController::jsonResponse(
 
 FamilyLinkHttpResponse FamilyLinkController::errorResponse(
     int statusCode, const QByteArray& reasonPhrase, const QString& code,
-    const QString& message)
+    const QString& message, const QJsonObject& details)
 {
-    const QJsonObject error {
+    QJsonObject error {
         {QStringLiteral("code"), code},
         {QStringLiteral("message"), message}
     };
+    if (!details.isEmpty())
+        error.insert(QStringLiteral("details"), details);
     return jsonResponse(statusCode, reasonPhrase,
                         QJsonObject {{QStringLiteral("error"), error}});
 }

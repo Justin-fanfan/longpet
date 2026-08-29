@@ -14,6 +14,7 @@ struct FamilyLinkHttpRequest {
     QByteArray method;
     QByteArray target;
     QHash<QByteArray, QByteArray> headers;
+    QByteArray body;
 };
 
 struct FamilyLinkHttpResponse {
@@ -47,6 +48,7 @@ private:
                                                  const QByteArray& message);
 
     static constexpr qsizetype MaximumHeaderBytes = 16 * 1024;
+    static constexpr qsizetype MaximumBodyBytes = 64 * 1024;
 
     QTcpServer m_server;
     QHash<QTcpSocket*, QByteArray> m_requestBuffers;

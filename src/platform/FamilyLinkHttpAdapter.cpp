@@ -83,20 +83,27 @@ void FamilyLinkHttpAdapter::readRequest(QTcpSocket* socket)
 
     QByteArray& buffer = m_requestBuffers[socket];
     buffer.append(socket->readAll());
-    if (buffer.size() > MaximumHeaderBytes) {
+    const qsizetype headerEnd = buffer.indexOf(QByteArrayLiteral("\r\n\r\n"));
+    if (headerEnd < 0) {
+        if (buffer.size() > MaximumHeaderBytes) {
+            m_requestBuffers.remove(socket);
+            writeResponse(socket, transportError(
+                431, QByteArrayLiteral("Request Header Fields Too Large"),
+                QByteArrayLiteral("REQUEST_TOO_LARGE"),
+                QByteArrayLiteral("Request headers are too large")));
+        }
+        return;
+    }
+    if (headerEnd > MaximumHeaderBytes) {
         m_requestBuffers.remove(socket);
-        writeResponse(socket, transportError(431, QByteArrayLiteral("Request Header Fields Too Large"),
-                                             QByteArrayLiteral("REQUEST_TOO_LARGE"),
-                                             QByteArrayLiteral("Request headers are too large")));
+        writeResponse(socket, transportError(
+            431, QByteArrayLiteral("Request Header Fields Too Large"),
+            QByteArrayLiteral("REQUEST_TOO_LARGE"),
+            QByteArrayLiteral("Request headers are too large")));
         return;
     }
 
-    const qsizetype headerEnd = buffer.indexOf(QByteArrayLiteral("\r\n\r\n"));
-    if (headerEnd < 0)
-        return;
-
     const QByteArray headerBlock = buffer.left(headerEnd);
-    m_requestBuffers.remove(socket);
     QList<QByteArray> lines = headerBlock.split('\n');
     if (lines.isEmpty()) {
         writeResponse(socket, transportError(400, QByteArrayLiteral("Bad Request"),
@@ -130,6 +137,33 @@ void FamilyLinkHttpAdapter::readRequest(QTcpSocket* socket)
         request.headers.insert(line.left(separator).trimmed().toLower(),
                                line.mid(separator + 1).trimmed());
     }
+
+    if (request.headers.contains(QByteArrayLiteral("transfer-encoding"))) {
+        m_requestBuffers.remove(socket);
+        writeResponse(socket, transportError(400, QByteArrayLiteral("Bad Request"),
+                                             QByteArrayLiteral("BAD_REQUEST"),
+                                             QByteArrayLiteral("Transfer-Encoding is unsupported")));
+        return;
+    }
+    qsizetype contentLength = 0;
+    if (request.headers.contains(QByteArrayLiteral("content-length"))) {
+        bool valid = false;
+        const qlonglong parsed = request.headers.value(
+            QByteArrayLiteral("content-length")).toLongLong(&valid);
+        if (!valid || parsed < 0 || parsed > MaximumBodyBytes) {
+            m_requestBuffers.remove(socket);
+            writeResponse(socket, transportError(413, QByteArrayLiteral("Payload Too Large"),
+                                                 QByteArrayLiteral("REQUEST_TOO_LARGE"),
+                                                 QByteArrayLiteral("Request body is too large")));
+            return;
+        }
+        contentLength = static_cast<qsizetype>(parsed);
+    }
+    const qsizetype requestBytes = headerEnd + 4 + contentLength;
+    if (buffer.size() < requestBytes)
+        return;
+    request.body = buffer.mid(headerEnd + 4, contentLength);
+    m_requestBuffers.remove(socket);
 
     const FamilyLinkHttpResponse response = m_handler
         ? m_handler(request)

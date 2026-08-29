@@ -85,8 +85,39 @@ bool FamilyLinkService::settings(FamilyLinkSettingsSnapshot* snapshot, QString* 
 
     snapshot->settings = userSettings;
     snapshot->device = m_systemService->deviceSummary();
-    snapshot->revision = 0;
+    snapshot->revision = m_settingsService->revision(&settingsError);
+    if (!settingsError.isEmpty()) {
+        if (error)
+            *error = settingsError;
+        return false;
+    }
     return true;
+}
+
+SettingsUpdateResult FamilyLinkService::updateSettings(
+    const SettingsUpdateRequest& request) const
+{
+    if (!m_settingsService || !m_systemService) {
+        SettingsUpdateResult result;
+        result.error = QStringLiteral("FamilyLink 设置服务未初始化");
+        result.code = SettingsUpdateErrorCode::Storage;
+        return result;
+    }
+    const DeviceSummary device = m_systemService->deviceSummary();
+    if (request.volume.has_value() && !device.audioControlAvailable) {
+        SettingsUpdateResult result;
+        result.error = QStringLiteral("当前音量控制不可用：%1").arg(device.audioSummary);
+        result.code = SettingsUpdateErrorCode::CapabilityUnavailable;
+        return result;
+    }
+    if (request.brightness.has_value() && !device.brightnessControlAvailable) {
+        SettingsUpdateResult result;
+        result.error = QStringLiteral("当前亮度控制不可用：%1")
+                           .arg(device.brightnessSummary);
+        result.code = SettingsUpdateErrorCode::CapabilityUnavailable;
+        return result;
+    }
+    return m_settingsService->updateSettings(request);
 }
 
 QList<Reminder> FamilyLinkService::reminders(QString* error) const
@@ -97,6 +128,40 @@ QList<Reminder> FamilyLinkService::reminders(QString* error) const
         return {};
     }
     return m_reminderService->reminders(error);
+}
+
+ServiceResult FamilyLinkService::saveReminder(const ReminderDraft& draft,
+                                              Reminder* saved) const
+{
+    if (!m_reminderService) {
+        return {false, QStringLiteral("FamilyLink 提醒服务未初始化"), 0,
+                ServiceErrorCode::Storage};
+    }
+    const ServiceResult result = m_reminderService->save(draft);
+    if (!result.success)
+        return result;
+
+    bool found = false;
+    QString error;
+    const Reminder current = m_reminderService->reminder(result.id, &found, &error);
+    if (!error.isEmpty())
+        return {false, error, result.id, ServiceErrorCode::Storage};
+    if (!found)
+        return {false, QStringLiteral("保存后的提醒不存在"), result.id,
+                ServiceErrorCode::Storage};
+    if (saved)
+        *saved = current;
+    return result;
+}
+
+ServiceResult FamilyLinkService::removeReminder(ReminderId id,
+                                                int expectedRevision) const
+{
+    if (!m_reminderService) {
+        return {false, QStringLiteral("FamilyLink 提醒服务未初始化"), 0,
+                ServiceErrorCode::Storage};
+    }
+    return m_reminderService->remove(id, expectedRevision);
 }
 
 QString FamilyLinkService::configuredDeviceId()

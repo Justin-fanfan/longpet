@@ -14,6 +14,8 @@ public:
     explicit SettingsService(SettingsRepository* repository, QObject* parent = nullptr);
 
     UserSettings settings(QString* error = nullptr) const;
+    int revision(QString* error = nullptr) const;
+    SettingsUpdateResult updateSettings(const SettingsUpdateRequest& request);
     bool setVolume(int value, QString* error = nullptr);
     bool setBrightness(int value, QString* error = nullptr);
     bool setPetStyle(const QString& style, QString* error = nullptr);

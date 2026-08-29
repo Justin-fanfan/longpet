@@ -12,7 +12,7 @@ LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本
 - 音量、亮度、宠物风格持久化；音量通过 ALSA mixer 接入，背光通过 sysfs 接入；
 - 状态栏真实时钟，以及基于 QNetworkInformation 的事件驱动网络状态；
 - power-supply 电池状态读取，以及无电池设备的正常降级；
-- FamilyLink 局域网只读 API，可读取真实设备状态、设置与提醒；
+- FamilyLink 局域网 API，可读取设备状态并远程管理设置与提醒；
 - QRC 内嵌 QSS/SVG，保留后续版本会使用的页面与资源；
 - 正式页面全部使用语义信号，页面不直接访问 SQL 或硬件。
 
@@ -61,22 +61,28 @@ ctest --test-dir build --output-on-failure
 
 具体上机验证项和当前限制见 [V0.2 工作报告](docs/LongPet-V0.2-Work-Report.md)。
 
-## FamilyLink 只读 API
+## FamilyLink API
 
-应用默认仅监听 `127.0.0.1:8787`，当前只开放：
+应用默认仅监听 `127.0.0.1:8787`，当前开放：
 
 - `GET /api/v1/status`
 - `GET /api/v1/settings`
+- `PATCH /api/v1/settings`
 - `GET /api/v1/reminders`
+- `POST /api/v1/reminders`
+- `PUT /api/v1/reminders/{id}`
+- `DELETE /api/v1/reminders/{id}?expectedRevision={revision}`
 
-已知资源的非 GET 请求返回 `405 READ_ONLY_API`。可通过以下环境变量配置：
+设置与提醒写入均使用持久化 revision 做乐观锁；旧版本写入返回 HTTP 409，客户端刷新后再提交。音量或亮度 Adapter 不可用时，对应远程字段返回 HTTP 503，不会写入数据库。
+
+可通过以下环境变量配置：
 
 - `LONGPET_FAMILY_LINK_PORT`：监听端口，默认 `8787`；
 - `LONGPET_FAMILY_LINK_ADDRESS`：监听地址，默认 `127.0.0.1`；
 - `LONGPET_FAMILY_LINK_TOKEN`：Bearer Token；非回环监听时必须配置；
 - `LONGPET_DEVICE_ID`、`LONGPET_DEVICE_NAME`：家属端显示的设备标识和名称。
 
-局域网监听必须使用 Token，且不得将端口映射到公网。实现、测试、部署与回滚记录见 [FamilyLink 只读连接报告](docs/LongPet-FamilyLink-ReadOnly-Report.md)。
+局域网监听必须使用 Token，且不得将端口映射到公网。只读连接基线见 [FamilyLink 只读连接报告](docs/LongPet-FamilyLink-ReadOnly-Report.md)，写入实现、测试方法与回滚记录见 [FamilyLink 写入报告](docs/LongPet-FamilyLink-Write-Report.md)。
 systemd drop-in 示例见 `deploy/longpet-familylink.conf.example`，示例中的 Token 占位值必须替换。
 
 ## LS2K300 板端运行

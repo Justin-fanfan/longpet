@@ -37,7 +37,10 @@ public:
 
     bool status(FamilyLinkStatusSnapshot* snapshot, QString* error = nullptr) const;
     bool settings(FamilyLinkSettingsSnapshot* snapshot, QString* error = nullptr) const;
+    SettingsUpdateResult updateSettings(const SettingsUpdateRequest& request) const;
     QList<Reminder> reminders(QString* error = nullptr) const;
+    ServiceResult saveReminder(const ReminderDraft& draft, Reminder* saved = nullptr) const;
+    ServiceResult removeReminder(ReminderId id, int expectedRevision) const;
 
 private:
     static QString configuredDeviceId();

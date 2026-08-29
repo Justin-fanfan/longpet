@@ -65,7 +65,7 @@ private slots:
     void reminderCrudPersistsAndRejectsStaleRevision();
     void reminderSchedulerDoesNotRedeliverToday();
     void careAndSettingsArePersistentServices();
-    void familyLinkReadOnlyApiServesServiceData();
+    void familyLinkApiReadsAndWritesServiceData();
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
     void statusBarRemains64AndShowsSystemInput();
@@ -118,14 +118,18 @@ struct HttpTestResult {
 
 HttpTestResult requestJson(QNetworkAccessManager* manager, const QUrl& url,
                            const QByteArray& method = QByteArrayLiteral("GET"),
-                           const QByteArray& bearerToken = {})
+                           const QByteArray& bearerToken = {},
+                           const QByteArray& body = {})
 {
     QNetworkRequest request(url);
     request.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/json"));
     if (!bearerToken.isEmpty())
         request.setRawHeader(QByteArrayLiteral("Authorization"),
                              QByteArrayLiteral("Bearer ") + bearerToken);
-    QNetworkReply* reply = manager->sendCustomRequest(request, method);
+    if (!body.isEmpty())
+        request.setHeader(QNetworkRequest::ContentTypeHeader,
+                          QStringLiteral("application/json"));
+    QNetworkReply* reply = manager->sendCustomRequest(request, method, body);
     QEventLoop loop;
     QTimer timeout;
     timeout.setSingleShot(true);
@@ -505,7 +509,7 @@ void V02Test::careAndSettingsArePersistentServices()
     QVERIFY(!fixture.settingsService->setVolume(101, &error));
 }
 
-void V02Test::familyLinkReadOnlyApiServesServiceData()
+void V02Test::familyLinkApiReadsAndWritesServiceData()
 {
     ServiceFixture fixture;
     QString error;
@@ -553,8 +557,10 @@ void V02Test::familyLinkReadOnlyApiServesServiceData()
                 .value(QStringLiteral("currentDateTime")).toString().endsWith(QLatin1Char('Z')));
     QCOMPARE(status.body.value(QStringLiteral("care")).toObject()
                  .value(QStringLiteral("waterCompleted")).toInt(), 1);
-    QVERIFY(!status.body.value(QStringLiteral("capabilities")).toObject()
-                 .value(QStringLiteral("settingsWrite")).toBool(true));
+    QVERIFY(status.body.value(QStringLiteral("capabilities")).toObject()
+                .value(QStringLiteral("settingsWrite")).toBool());
+    QVERIFY(status.body.value(QStringLiteral("capabilities")).toObject()
+                .value(QStringLiteral("remindersWrite")).toBool());
 
     const HttpTestResult settings = requestJson(
         &manager, QUrl(baseUrl + QStringLiteral("settings")), QByteArrayLiteral("GET"), token);
@@ -563,7 +569,49 @@ void V02Test::familyLinkReadOnlyApiServesServiceData()
     QCOMPARE(settings.body.value(QStringLiteral("volume")).toInt(), 47);
     QCOMPARE(settings.body.value(QStringLiteral("petStyle")).toString(),
              QStringLiteral("活泼陪伴"));
-    QVERIFY(!settings.body.value(QStringLiteral("remoteWritable")).toBool(true));
+    QVERIFY(settings.body.value(QStringLiteral("remoteWritable")).toBool());
+    const int settingsRevision = settings.body.value(QStringLiteral("revision")).toInt();
+    QCOMPARE(settingsRevision, 2);
+
+    QSignalSpy applySpy(fixture.settingsService.get(),
+                        &SettingsService::settingApplyRequested);
+    const QByteArray settingsPatch = QJsonDocument(QJsonObject {
+        {QStringLiteral("volume"), 52},
+        {QStringLiteral("expectedRevision"), settingsRevision}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult updatedSettings = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("settings")),
+        QByteArrayLiteral("PATCH"), token, settingsPatch);
+    QCOMPARE(updatedSettings.statusCode, 200);
+    QCOMPARE(updatedSettings.body.value(QStringLiteral("volume")).toInt(), 52);
+    QCOMPARE(updatedSettings.body.value(QStringLiteral("revision")).toInt(),
+             settingsRevision + 1);
+    QCOMPARE(fixture.settingsService->settings().volume, 52);
+    QCOMPARE(applySpy.count(), 1);
+
+    const HttpTestResult staleSettings = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("settings")),
+        QByteArrayLiteral("PATCH"), token, settingsPatch);
+    QCOMPARE(staleSettings.statusCode, 409);
+    QCOMPARE(staleSettings.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(),
+             QStringLiteral("REVISION_CONFLICT"));
+    QCOMPARE(staleSettings.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("details")).toObject()
+                 .value(QStringLiteral("currentRevision")).toInt(), settingsRevision + 1);
+
+    const QByteArray unavailableBrightnessPatch = QJsonDocument(QJsonObject {
+        {QStringLiteral("brightness"), 40},
+        {QStringLiteral("expectedRevision"), settingsRevision + 1}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult unavailableBrightness = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("settings")),
+        QByteArrayLiteral("PATCH"), token, unavailableBrightnessPatch);
+    QCOMPARE(unavailableBrightness.statusCode, 503);
+    QCOMPARE(unavailableBrightness.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(),
+             QStringLiteral("CAPABILITY_UNAVAILABLE"));
+    QCOMPARE(fixture.settingsService->revision(), settingsRevision + 1);
 
     const HttpTestResult reminders = requestJson(
         &manager, QUrl(baseUrl + QStringLiteral("reminders")), QByteArrayLiteral("GET"), token);
@@ -571,11 +619,52 @@ void V02Test::familyLinkReadOnlyApiServesServiceData()
     QVERIFY2(reminders.error.isEmpty(), qPrintable(reminders.error));
     QCOMPARE(reminders.body.value(QStringLiteral("items")).toArray().size(), 1);
 
-    const HttpTestResult writeAttempt = requestJson(
-        &manager, QUrl(baseUrl + QStringLiteral("settings")), QByteArrayLiteral("PATCH"), token);
-    QCOMPARE(writeAttempt.statusCode, 405);
-    QCOMPARE(writeAttempt.body.value(QStringLiteral("error")).toObject()
-                 .value(QStringLiteral("code")).toString(), QStringLiteral("READ_ONLY_API"));
+    const QByteArray createBody = QJsonDocument(QJsonObject {
+        {QStringLiteral("type"), QStringLiteral("water")},
+        {QStringLiteral("title"), QStringLiteral("上午喝水")},
+        {QStringLiteral("timeOfDay"), QStringLiteral("10:15")},
+        {QStringLiteral("scheduledDate"), QDate::currentDate().toString(Qt::ISODate)},
+        {QStringLiteral("repeatRule"), QStringLiteral("daily")},
+        {QStringLiteral("enabled"), true}
+    }).toJson(QJsonDocument::Compact);
+    const HttpTestResult created = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("reminders")),
+        QByteArrayLiteral("POST"), token, createBody);
+    QCOMPARE(created.statusCode, 201);
+    const ReminderId createdId = created.body.value(QStringLiteral("id")).toInteger();
+    QVERIFY(createdId > 0);
+    QCOMPARE(created.body.value(QStringLiteral("revision")).toInt(), 1);
+
+    const QByteArray updateBody = QJsonDocument(QJsonObject {
+        {QStringLiteral("type"), QStringLiteral("water")},
+        {QStringLiteral("title"), QStringLiteral("上午补水")},
+        {QStringLiteral("timeOfDay"), QStringLiteral("10:20")},
+        {QStringLiteral("scheduledDate"), QDate::currentDate().toString(Qt::ISODate)},
+        {QStringLiteral("repeatRule"), QStringLiteral("daily")},
+        {QStringLiteral("enabled"), true},
+        {QStringLiteral("expectedRevision"), 1}
+    }).toJson(QJsonDocument::Compact);
+    const QUrl reminderUrl(baseUrl + QStringLiteral("reminders/%1").arg(createdId));
+    const HttpTestResult updated = requestJson(
+        &manager, reminderUrl, QByteArrayLiteral("PUT"), token, updateBody);
+    QCOMPARE(updated.statusCode, 200);
+    QCOMPARE(updated.body.value(QStringLiteral("title")).toString(),
+             QStringLiteral("上午补水"));
+    QCOMPARE(updated.body.value(QStringLiteral("revision")).toInt(), 2);
+
+    const HttpTestResult staleReminder = requestJson(
+        &manager, reminderUrl, QByteArrayLiteral("PUT"), token, updateBody);
+    QCOMPARE(staleReminder.statusCode, 409);
+    QCOMPARE(staleReminder.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(),
+             QStringLiteral("REVISION_CONFLICT"));
+
+    const HttpTestResult deleted = requestJson(
+        &manager, QUrl(reminderUrl.toString() + QStringLiteral("?expectedRevision=2")),
+        QByteArrayLiteral("DELETE"), token);
+    QCOMPARE(deleted.statusCode, 200);
+    QVERIFY(deleted.body.value(QStringLiteral("deleted")).toBool());
+    QCOMPARE(fixture.reminderService->reminders().size(), 1);
     controller.stop();
 }
 

@@ -59,15 +59,18 @@ ServiceResult ReminderService::save(const ReminderDraft& draft)
     if (validated.title.isEmpty())
         validated.title = defaultTitle(validated.type);
     if (validated.title.size() > 40)
-        return {false, QStringLiteral("提醒内容不能超过 40 个字"), 0};
+        return {false, QStringLiteral("提醒内容不能超过 40 个字"), 0,
+                ServiceErrorCode::Validation};
     if (!validated.timeOfDay.isValid())
-        return {false, QStringLiteral("请选择有效的提醒时间"), 0};
+        return {false, QStringLiteral("请选择有效的提醒时间"), 0,
+                ServiceErrorCode::Validation};
     if (!validated.scheduledDate.isValid())
         validated.scheduledDate = QDate::currentDate();
     if (validated.repeatRule == ReminderRepeatRule::Once
         && QDateTime(validated.scheduledDate, validated.timeOfDay)
                <= QDateTime::currentDateTime()) {
-        return {false, QStringLiteral("单次提醒时间必须晚于当前时间"), 0};
+        return {false, QStringLiteral("单次提醒时间必须晚于当前时间"), 0,
+                ServiceErrorCode::Validation};
     }
 
     const ServiceResult result = validated.id == 0
@@ -80,9 +83,9 @@ ServiceResult ReminderService::save(const ReminderDraft& draft)
     return result;
 }
 
-ServiceResult ReminderService::remove(ReminderId id)
+ServiceResult ReminderService::remove(ReminderId id, int expectedRevision)
 {
-    const ServiceResult result = m_repository->remove(id);
+    const ServiceResult result = m_repository->remove(id, expectedRevision);
     if (result.success) {
         emit remindersChanged();
         scheduleNext();
