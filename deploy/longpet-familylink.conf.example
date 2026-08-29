@@ -1,0 +1,10 @@
+#部署于/etc/systemd/system/longpet.service.d/familylink.conf
+[Service]
+# 局域网监听必须同时设置强随机 Token；不要把该文件中的占位值用于正式部署。
+Environment="LONGPET_FAMILY_LINK_ADDRESS=0.0.0.0"
+Environment="LONGPET_FAMILY_LINK_PORT=8787"
+Environment="LONGPET_FAMILY_LINK_TOKEN=replace-with-a-random-token"
+
+# 可选的家属端显示信息。
+# Environment="LONGPET_DEVICE_ID=longpet-ls-gd"
+# Environment="LONGPET_DEVICE_NAME=LongPet LS-GD"

@@ -1,0 +1,38 @@
+#pragma once
+
+#include "platform/FamilyLinkHttpAdapter.h"
+
+#include <QByteArray>
+#include <QJsonObject>
+#include <QString>
+
+class FamilyLinkService;
+
+class FamilyLinkController final {
+public:
+    FamilyLinkController(FamilyLinkService* service,
+                         FamilyLinkHttpAdapter* httpAdapter,
+                         QByteArray bearerToken = {});
+    ~FamilyLinkController();
+
+    bool start(quint16 port, QHostAddress address, QString* error = nullptr);
+    void stop();
+    quint16 port() const;
+
+private:
+    FamilyLinkHttpResponse handleRequest(const FamilyLinkHttpRequest& request) const;
+    FamilyLinkHttpResponse statusResponse() const;
+    FamilyLinkHttpResponse settingsResponse() const;
+    FamilyLinkHttpResponse remindersResponse() const;
+    static FamilyLinkHttpResponse jsonResponse(int statusCode,
+                                               const QByteArray& reasonPhrase,
+                                               const QJsonObject& object);
+    static FamilyLinkHttpResponse errorResponse(int statusCode,
+                                                const QByteArray& reasonPhrase,
+                                                const QString& code,
+                                                const QString& message);
+
+    FamilyLinkService* m_service = nullptr;
+    FamilyLinkHttpAdapter* m_httpAdapter = nullptr;
+    QByteArray m_bearerToken;
+};

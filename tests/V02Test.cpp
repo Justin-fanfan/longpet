@@ -1,5 +1,6 @@
 #include "app\AppController.h"
 #include "app\Application.h"
+#include "app\FamilyLinkController.h"
 #include "data\CareEventRepository.h"
 #include "data\DatabaseManager.h"
 #include "data\ReminderRepository.h"
@@ -13,10 +14,12 @@
 #include "pages\SettingsPage.h"
 #include "platform\AudioVolumeAdapter.h"
 #include "platform\BacklightAdapter.h"
+#include "platform\FamilyLinkHttpAdapter.h"
 #include "platform\NetworkStatusAdapter.h"
 #include "platform\NetworkManagerAdapter.h"
 #include "platform\PowerStatusAdapter.h"
 #include "services\CareService.h"
+#include "services\FamilyLinkService.h"
 #include "services\ReminderService.h"
 #include "services\NetworkService.h"
 #include "services\SettingsService.h"
@@ -27,10 +30,17 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QEventLoop>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QNetworkAccessManager>
+#include <QNetworkReply>
+#include <QNetworkRequest>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSlider>
@@ -55,6 +65,7 @@ private slots:
     void reminderCrudPersistsAndRejectsStaleRevision();
     void reminderSchedulerDoesNotRedeliverToday();
     void careAndSettingsArePersistentServices();
+    void familyLinkReadOnlyApiServesServiceData();
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
     void statusBarRemains64AndShowsSystemInput();
@@ -97,6 +108,47 @@ ReminderDraft medicineDraft()
     draft.timeOfDay = QTime(20, 0);
     draft.repeatRule = ReminderRepeatRule::Daily;
     return draft;
+}
+
+struct HttpTestResult {
+    int statusCode = 0;
+    QJsonObject body;
+    QString error;
+};
+
+HttpTestResult requestJson(QNetworkAccessManager* manager, const QUrl& url,
+                           const QByteArray& method = QByteArrayLiteral("GET"),
+                           const QByteArray& bearerToken = {})
+{
+    QNetworkRequest request(url);
+    request.setRawHeader(QByteArrayLiteral("Accept"), QByteArrayLiteral("application/json"));
+    if (!bearerToken.isEmpty())
+        request.setRawHeader(QByteArrayLiteral("Authorization"),
+                             QByteArrayLiteral("Bearer ") + bearerToken);
+    QNetworkReply* reply = manager->sendCustomRequest(request, method);
+    QEventLoop loop;
+    QTimer timeout;
+    timeout.setSingleShot(true);
+    QObject::connect(reply, &QNetworkReply::finished, &loop, &QEventLoop::quit);
+    QObject::connect(&timeout, &QTimer::timeout, &loop, [&] {
+        reply->abort();
+        loop.quit();
+    });
+    timeout.start(2'000);
+    if (!reply->isFinished())
+        loop.exec();
+
+    HttpTestResult result;
+    result.statusCode = reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
+    const QByteArray payload = reply->readAll();
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(payload, &parseError);
+    if (parseError.error != QJsonParseError::NoError || !document.isObject())
+        result.error = parseError.errorString();
+    else
+        result.body = document.object();
+    reply->deleteLater();
+    return result;
 }
 }
 
@@ -161,6 +213,8 @@ void V02Test::applicationCompositionRootInitializes()
     QVERIFY(directory.isValid());
     const QString databasePath = QDir(directory.path()).filePath(QStringLiteral("app.db"));
     QVERIFY(qputenv("LONGPET_DATABASE_PATH", databasePath.toUtf8()));
+    QVERIFY(qputenv("LONGPET_FAMILY_LINK_PORT", QByteArrayLiteral("0")));
+    QVERIFY(qputenv("LONGPET_FAMILY_LINK_ADDRESS", QByteArrayLiteral("127.0.0.1")));
     {
         Application application;
         QString error;
@@ -169,6 +223,8 @@ void V02Test::applicationCompositionRootInitializes()
         QCOMPARE(application.databasePath(), databasePath);
     }
     qunsetenv("LONGPET_DATABASE_PATH");
+    qunsetenv("LONGPET_FAMILY_LINK_PORT");
+    qunsetenv("LONGPET_FAMILY_LINK_ADDRESS");
 }
 
 void V02Test::networkStatusAdapterMapsAndDegrades()
@@ -447,6 +503,80 @@ void V02Test::careAndSettingsArePersistentServices()
     QCOMPARE(settings.brightness, 80);
     QCOMPARE(settings.petStyle, QStringLiteral("活泼陪伴"));
     QVERIFY(!fixture.settingsService->setVolume(101, &error));
+}
+
+void V02Test::familyLinkReadOnlyApiServesServiceData()
+{
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error), qPrintable(error));
+    QVERIFY(fixture.reminderService->save(medicineDraft()).success);
+    QVERIFY(fixture.careService->recordWater().success);
+    QVERIFY(fixture.settingsService->setVolume(47, &error));
+    QVERIFY(fixture.settingsService->setPetStyle(QStringLiteral("活泼陪伴"), &error));
+
+    SystemService systemService;
+    systemService.setNetworkState(true, true, QStringLiteral("Wi-Fi · 已联网"));
+    systemService.setAudioControlState(true, QStringLiteral("USB 声卡可用"));
+    systemService.setBacklightControlState(false, 0, QStringLiteral("未检测到可调背光"));
+    systemService.setPowerSummary(QStringLiteral("外接电源"));
+
+    FamilyLinkService service(fixture.reminderService.get(), fixture.careService.get(),
+                              fixture.settingsService.get(), &systemService);
+    FamilyLinkHttpAdapter httpAdapter;
+    const QByteArray token = QByteArrayLiteral("test-family-token");
+    FamilyLinkController controller(&service, &httpAdapter, token);
+    QVERIFY2(controller.start(0, QHostAddress(QHostAddress::LocalHost), &error),
+             qPrintable(error));
+    QVERIFY(controller.port() > 0);
+
+    const QString baseUrl = QStringLiteral("http://127.0.0.1:%1/api/v1/")
+        .arg(controller.port());
+    QNetworkAccessManager manager;
+
+    const HttpTestResult unauthorized = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("status")));
+    QCOMPARE(unauthorized.statusCode, 401);
+    QCOMPARE(unauthorized.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(),
+             QStringLiteral("AUTHENTICATION_REQUIRED"));
+
+    const HttpTestResult status = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("status")), QByteArrayLiteral("GET"), token);
+    QCOMPARE(status.statusCode, 200);
+    QVERIFY2(status.error.isEmpty(), qPrintable(status.error));
+    QVERIFY(status.body.value(QStringLiteral("device")).toObject()
+                .value(QStringLiteral("online")).toBool());
+    QVERIFY(status.body.value(QStringLiteral("system")).toObject()
+                .value(QStringLiteral("networkAvailable")).toBool());
+    QVERIFY(status.body.value(QStringLiteral("system")).toObject()
+                .value(QStringLiteral("currentDateTime")).toString().endsWith(QLatin1Char('Z')));
+    QCOMPARE(status.body.value(QStringLiteral("care")).toObject()
+                 .value(QStringLiteral("waterCompleted")).toInt(), 1);
+    QVERIFY(!status.body.value(QStringLiteral("capabilities")).toObject()
+                 .value(QStringLiteral("settingsWrite")).toBool(true));
+
+    const HttpTestResult settings = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("settings")), QByteArrayLiteral("GET"), token);
+    QCOMPARE(settings.statusCode, 200);
+    QVERIFY2(settings.error.isEmpty(), qPrintable(settings.error));
+    QCOMPARE(settings.body.value(QStringLiteral("volume")).toInt(), 47);
+    QCOMPARE(settings.body.value(QStringLiteral("petStyle")).toString(),
+             QStringLiteral("活泼陪伴"));
+    QVERIFY(!settings.body.value(QStringLiteral("remoteWritable")).toBool(true));
+
+    const HttpTestResult reminders = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("reminders")), QByteArrayLiteral("GET"), token);
+    QCOMPARE(reminders.statusCode, 200);
+    QVERIFY2(reminders.error.isEmpty(), qPrintable(reminders.error));
+    QCOMPARE(reminders.body.value(QStringLiteral("items")).toArray().size(), 1);
+
+    const HttpTestResult writeAttempt = requestJson(
+        &manager, QUrl(baseUrl + QStringLiteral("settings")), QByteArrayLiteral("PATCH"), token);
+    QCOMPARE(writeAttempt.statusCode, 405);
+    QCOMPARE(writeAttempt.body.value(QStringLiteral("error")).toObject()
+                 .value(QStringLiteral("code")).toString(), QStringLiteral("READ_ONLY_API"));
+    controller.stop();
 }
 
 void V02Test::pagesExposeSemanticSignalsAndModels()

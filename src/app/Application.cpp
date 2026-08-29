@@ -1,6 +1,7 @@
 #include "Application.h"
 
 #include "AppController.h"
+#include "FamilyLinkController.h"
 #include "data/CareEventRepository.h"
 #include "data/DatabaseManager.h"
 #include "data/ReminderRepository.h"
@@ -8,10 +9,12 @@
 #include "mainwindow.h"
 #include "platform/AudioVolumeAdapter.h"
 #include "platform/BacklightAdapter.h"
+#include "platform/FamilyLinkHttpAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
 #include "platform/PowerStatusAdapter.h"
 #include "services/CareService.h"
+#include "services/FamilyLinkService.h"
 #include "services/ReminderService.h"
 #include "services/NetworkService.h"
 #include "services/SettingsService.h"
@@ -20,7 +23,28 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QHostAddress>
 #include <QStandardPaths>
+
+namespace {
+quint16 configuredFamilyLinkPort()
+{
+    bool valid = false;
+    const int configured = qEnvironmentVariableIntValue("LONGPET_FAMILY_LINK_PORT", &valid);
+    if (!valid || configured < 0 || configured > 65'535)
+        return 8'787;
+    return static_cast<quint16>(configured);
+}
+
+QHostAddress configuredFamilyLinkAddress()
+{
+    const QString configured = qEnvironmentVariable("LONGPET_FAMILY_LINK_ADDRESS").trimmed();
+    QHostAddress address;
+    if (!configured.isEmpty() && address.setAddress(configured))
+        return address;
+    return QHostAddress(QHostAddress::LocalHost);
+}
+}
 
 Application::Application(QObject* parent)
     : QObject(parent)
@@ -76,6 +100,27 @@ bool Application::initialize(QString* error)
     const UserSettings currentSettings = m_settingsService->settings();
     m_audioVolumeAdapter->applyVolume(currentSettings.volume);
     m_backlightAdapter->applyBrightness(currentSettings.brightness);
+    m_familyLinkService = std::make_unique<FamilyLinkService>(
+        m_reminderService.get(), m_careService.get(), m_settingsService.get(),
+        m_systemService.get());
+    m_familyLinkHttpAdapter = std::make_unique<FamilyLinkHttpAdapter>();
+    const QByteArray familyLinkToken = qEnvironmentVariable("LONGPET_FAMILY_LINK_TOKEN").toUtf8();
+    const QHostAddress familyLinkAddress = configuredFamilyLinkAddress();
+    m_familyLinkController = std::make_unique<FamilyLinkController>(
+        m_familyLinkService.get(), m_familyLinkHttpAdapter.get(), familyLinkToken);
+    QString familyLinkError;
+    const bool remoteAddress = familyLinkAddress != QHostAddress(QHostAddress::LocalHost)
+        && familyLinkAddress != QHostAddress(QHostAddress::LocalHostIPv6);
+    if (remoteAddress && familyLinkToken.isEmpty()) {
+        qWarning("FamilyLink remote listener disabled: LONGPET_FAMILY_LINK_TOKEN is required");
+    } else if (!m_familyLinkController->start(configuredFamilyLinkPort(), familyLinkAddress,
+                                               &familyLinkError)) {
+        qWarning("FamilyLink HTTP service unavailable: %s", qPrintable(familyLinkError));
+    } else {
+        qInfo("FamilyLink read-only API listening on %s:%u",
+              qPrintable(familyLinkAddress.toString()),
+              static_cast<unsigned>(m_familyLinkController->port()));
+    }
     m_window = std::make_unique<MainWindow>();
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
@@ -99,6 +144,8 @@ void Application::show()
 
 void Application::shutdown()
 {
+    if (m_familyLinkController)
+        m_familyLinkController->stop();
     if (m_reminderService)
         m_reminderService->stop();
     if (m_networkStatusAdapter)
@@ -111,6 +158,9 @@ void Application::shutdown()
         m_powerStatusAdapter->stop();
     m_controller.reset();
     m_window.reset();
+    m_familyLinkController.reset();
+    m_familyLinkHttpAdapter.reset();
+    m_familyLinkService.reset();
     m_networkService.reset();
     m_networkManagerAdapter.reset();
     m_powerStatusAdapter.reset();

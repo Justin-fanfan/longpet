@@ -35,6 +35,8 @@ set(
     src/app/Application.h
     src/app/AppController.cpp
     src/app/AppController.h
+    src/app/FamilyLinkController.cpp
+    src/app/FamilyLinkController.h
     src/model/ReminderModels.h
     src/model/NetworkModels.h
     src/model/SettingsModels.h
@@ -49,6 +51,8 @@ set(
     src/platform/BacklightAdapter.h
     src/platform/PowerStatusAdapter.cpp
     src/platform/PowerStatusAdapter.h
+    src/platform/FamilyLinkHttpAdapter.cpp
+    src/platform/FamilyLinkHttpAdapter.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp
@@ -67,6 +71,8 @@ set(
     src/services/SettingsService.h
     src/services/SystemService.cpp
     src/services/SystemService.h
+    src/services/FamilyLinkService.cpp
+    src/services/FamilyLinkService.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp
