@@ -37,6 +37,36 @@ int environmentInteger(const char* environmentName, int fallback)
     return valid ? value : fallback;
 }
 
+double boundedDouble(QSettings& settings, const QString& key, double fallback)
+{
+    bool valid = false;
+    const double value = settings.value(key, fallback).toDouble(&valid);
+    return valid ? value : fallback;
+}
+
+double environmentDouble(const char* environmentName, double fallback)
+{
+    bool valid = false;
+    const double value = qEnvironmentVariable(environmentName).toDouble(&valid);
+    return valid ? value : fallback;
+}
+
+bool environmentBoolean(const char* environmentName, bool fallback)
+{
+    const QString value = qEnvironmentVariable(environmentName).trimmed().toLower();
+    if (value.isEmpty())
+        return fallback;
+    if (value == QStringLiteral("1") || value == QStringLiteral("true")
+        || value == QStringLiteral("yes") || value == QStringLiteral("on")) {
+        return true;
+    }
+    if (value == QStringLiteral("0") || value == QStringLiteral("false")
+        || value == QStringLiteral("no") || value == QStringLiteral("off")) {
+        return false;
+    }
+    return fallback;
+}
+
 bool hasGroup(const QSettings& settings, const QString& group)
 {
     return settings.childGroups().contains(group, Qt::CaseInsensitive);
@@ -145,9 +175,39 @@ AiConfiguration AiConfigRepository::load(QString* error) const
     configuration.voice.requestTimeoutMs = environmentInteger(
         "LONGPET_VOICE_REQUEST_TIMEOUT_MS", boundedInteger(
             settings, voicePrefix + QStringLiteral("request_timeout_ms"), 30'000));
+    configuration.voice.vadEnabled = environmentBoolean(
+        "LONGPET_VOICE_VAD_ENABLED", settings.value(
+            voicePrefix + QStringLiteral("vad_enabled"), true).toBool());
+    configuration.voice.vadThresholdDb = environmentDouble(
+        "LONGPET_VOICE_VAD_THRESHOLD_DB", boundedDouble(
+            settings, voicePrefix + QStringLiteral("vad_threshold_db"), -42.0));
+    configuration.voice.vadSilenceTimeoutMs = environmentInteger(
+        "LONGPET_VOICE_VAD_SILENCE_TIMEOUT_MS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("vad_silence_timeout_ms"), 900));
+    configuration.voice.recordingMinimumMs = environmentInteger(
+        "LONGPET_VOICE_RECORDING_MINIMUM_MS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("recording_minimum_ms"), 600));
+    configuration.voice.vadMinimumSpeechMs = environmentInteger(
+        "LONGPET_VOICE_VAD_MINIMUM_SPEECH_MS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("vad_minimum_speech_ms"), 160));
     configuration.voice.recordingMaximumMs = environmentInteger(
         "LONGPET_VOICE_RECORDING_MAXIMUM_MS", boundedInteger(
             settings, voicePrefix + QStringLiteral("recording_maximum_ms"), 12'000));
+    configuration.voice.llmStreamEnabled = environmentBoolean(
+        "LONGPET_VOICE_LLM_STREAM_ENABLED", settings.value(
+            voicePrefix + QStringLiteral("llm_stream_enabled"), true).toBool());
+    configuration.voice.sentenceTtsEnabled = environmentBoolean(
+        "LONGPET_VOICE_SENTENCE_TTS_ENABLED", settings.value(
+            voicePrefix + QStringLiteral("sentence_tts_enabled"), true).toBool());
+    configuration.voice.sentenceMinimumCharacters = environmentInteger(
+        "LONGPET_VOICE_SENTENCE_MINIMUM_CHARACTERS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("sentence_minimum_characters"), 6));
+    configuration.voice.sentenceMaximumCharacters = environmentInteger(
+        "LONGPET_VOICE_SENTENCE_MAXIMUM_CHARACTERS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("sentence_maximum_characters"), 120));
+    configuration.voice.ttsPrebufferSegments = environmentInteger(
+        "LONGPET_VOICE_TTS_PREBUFFER_SEGMENTS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("tts_prebuffer_segments"), 2));
     configuration.voice.historyTurns = environmentInteger(
         "LONGPET_VOICE_HISTORY_TURNS", boundedInteger(
             settings, voicePrefix + QStringLiteral("history_turns"), 4));

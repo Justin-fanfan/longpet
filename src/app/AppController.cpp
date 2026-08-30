@@ -272,9 +272,16 @@ void AppController::handleVoicePrimary()
         return;
     const VoiceInteractionSnapshot snapshot =
         m_voiceInteractionService->snapshot();
-    if (snapshot.state == VoiceInteractionState::Recording) {
+    if (snapshot.state == VoiceInteractionState::Listening) {
         const VoiceInteractionResult result =
             m_voiceInteractionService->finishRecording();
+        if (!result.success)
+            m_window->showToast(result.error);
+        return;
+    }
+    if (snapshot.isActive()) {
+        const VoiceInteractionResult result =
+            m_voiceInteractionService->restartInteraction();
         if (!result.success)
             m_window->showToast(result.error);
         return;

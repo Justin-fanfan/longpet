@@ -32,6 +32,24 @@ QJsonObject parseObject(const QByteArray& body, QJsonParseError* error)
     const QJsonDocument document = QJsonDocument::fromJson(body, error);
     return document.isObject() ? document.object() : QJsonObject();
 }
+
+QByteArray chatRequestBody(const LlmProviderConfiguration& configuration,
+                           const QList<AiChatMessage>& messages,
+                           bool stream)
+{
+    QJsonArray messageArray;
+    for (const AiChatMessage& message : messages) {
+        messageArray.append(QJsonObject {
+            {QStringLiteral("role"), message.role},
+            {QStringLiteral("content"), message.content}
+        });
+    }
+    return QJsonDocument(QJsonObject {
+        {QStringLiteral("model"), configuration.model},
+        {QStringLiteral("messages"), messageArray},
+        {QStringLiteral("stream"), stream}
+    }).toJson(QJsonDocument::Compact);
+}
 }
 
 OpenAiAsrProvider::OpenAiAsrProvider(
@@ -106,36 +124,66 @@ OpenAiCompatibleLlmProvider::OpenAiCompatibleLlmProvider(
             this, &OpenAiCompatibleLlmProvider::handleResponse);
     connect(&m_http, &ProviderHttpClient::failed,
             this, &LlmProviderPort::requestFailed);
+    connect(&m_http, &ProviderHttpClient::streamChunkReceived,
+            this, &OpenAiCompatibleLlmProvider::handleStreamChunk);
 }
 
 void OpenAiCompatibleLlmProvider::completeChat(
     quint64 sessionId, const QList<AiChatMessage>& messages)
 {
-    QJsonArray messageArray;
-    for (const AiChatMessage& message : messages) {
-        messageArray.append(QJsonObject {
-            {QStringLiteral("role"), message.role},
-            {QStringLiteral("content"), message.content}
-        });
-    }
-    const QJsonObject body {
-        {QStringLiteral("model"), m_configuration.model},
-        {QStringLiteral("messages"), messageArray},
-        {QStringLiteral("stream"), false}
-    };
+    resetStream();
     m_http.postJson(sessionId, providerEndpoint(
         m_configuration.apiBaseUrl, QStringLiteral("chat/completions")),
-        m_configuration.apiKey, QJsonDocument(body).toJson(QJsonDocument::Compact));
+        m_configuration.apiKey,
+        chatRequestBody(m_configuration, messages, false));
+}
+
+void OpenAiCompatibleLlmProvider::streamChat(
+    quint64 sessionId, const QList<AiChatMessage>& messages)
+{
+    resetStream();
+    m_streamSessionId = sessionId;
+    m_http.postJsonStream(sessionId, providerEndpoint(
+        m_configuration.apiBaseUrl, QStringLiteral("chat/completions")),
+        m_configuration.apiKey,
+        chatRequestBody(m_configuration, messages, true));
 }
 
 void OpenAiCompatibleLlmProvider::cancel(quint64 sessionId)
 {
     m_http.cancel(sessionId);
+    if (sessionId == m_streamSessionId)
+        resetStream();
 }
 
 void OpenAiCompatibleLlmProvider::handleResponse(
     quint64 sessionId, const ProviderHttpResponse& response)
 {
+    if (sessionId == m_streamSessionId) {
+        if (!processStreamEvents(sessionId, m_sseParser.finish()))
+            return;
+        const QString responseText = m_streamText.trimmed();
+        const bool endedNormally = m_streamDone || m_streamFinishReasonSeen;
+        if (!endedNormally) {
+            resetStream();
+            emit requestFailed(sessionId, invalidResponse(
+                QStringLiteral("openai-compatible/llm"),
+                QStringLiteral("SSE stream ended without [DONE] or finish_reason")));
+            return;
+        }
+        if (responseText.isEmpty()) {
+            resetStream();
+            emit requestFailed(sessionId, invalidResponse(
+                QStringLiteral("openai-compatible/llm"),
+                QStringLiteral("SSE stream has no content"),
+                AiProviderErrorCode::EmptyResult));
+            return;
+        }
+        resetStream();
+        emit chatCompletionReady(sessionId, responseText);
+        return;
+    }
+
     QJsonParseError parseError;
     const QJsonObject root = parseObject(response.body, &parseError);
     if (parseError.error != QJsonParseError::NoError || root.isEmpty()) {
@@ -156,6 +204,63 @@ void OpenAiCompatibleLlmProvider::handleResponse(
         return;
     }
     emit chatCompletionReady(sessionId, content);
+}
+
+void OpenAiCompatibleLlmProvider::handleStreamChunk(
+    quint64 sessionId, const QByteArray& chunk)
+{
+    if (sessionId != m_streamSessionId)
+        return;
+    processStreamEvents(sessionId, m_sseParser.append(chunk));
+}
+
+bool OpenAiCompatibleLlmProvider::processStreamEvents(
+    quint64 sessionId, const QList<QByteArray>& events)
+{
+    for (const QByteArray& event : events) {
+        if (event.trimmed() == QByteArrayLiteral("[DONE]")) {
+            m_streamDone = true;
+            continue;
+        }
+
+        QJsonParseError parseError;
+        const QJsonObject root = parseObject(event, &parseError);
+        if (parseError.error != QJsonParseError::NoError || root.isEmpty()) {
+            const QString diagnostic = QStringLiteral("SSE JSON error: %1 payload=%2")
+                .arg(parseError.errorString(),
+                     QString::fromUtf8(event.left(160)));
+            m_http.cancel(sessionId);
+            resetStream();
+            emit requestFailed(sessionId, invalidResponse(
+                QStringLiteral("openai-compatible/llm"), diagnostic));
+            return false;
+        }
+
+        const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
+        if (choices.isEmpty())
+            continue; // Some providers send a final usage-only SSE event.
+        const QJsonObject choice = choices.first().toObject();
+        if (!choice.value(QStringLiteral("finish_reason")).isNull()
+            && !choice.value(QStringLiteral("finish_reason")).isUndefined()) {
+            m_streamFinishReasonSeen = true;
+        }
+        const QString delta = choice.value(QStringLiteral("delta"))
+            .toObject().value(QStringLiteral("content")).toString();
+        if (delta.isEmpty())
+            continue;
+        m_streamText.append(delta);
+        emit chatDelta(sessionId, delta);
+    }
+    return true;
+}
+
+void OpenAiCompatibleLlmProvider::resetStream()
+{
+    m_sseParser.reset();
+    m_streamSessionId = 0;
+    m_streamText.clear();
+    m_streamDone = false;
+    m_streamFinishReasonSeen = false;
 }
 
 OpenAiTtsProvider::OpenAiTtsProvider(

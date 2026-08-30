@@ -12,11 +12,13 @@ namespace {
 PetExpression expressionFor(VoiceInteractionState state)
 {
     switch (state) {
-    case VoiceInteractionState::Recording: return PetExpression::Listening;
+    case VoiceInteractionState::Listening: return PetExpression::Listening;
     case VoiceInteractionState::Recognizing:
     case VoiceInteractionState::Thinking: return PetExpression::Thinking;
     case VoiceInteractionState::Speaking: return PetExpression::Speaking;
-    case VoiceInteractionState::Failed: return PetExpression::Worried;
+    case VoiceInteractionState::Error:
+    case VoiceInteractionState::Offline: return PetExpression::Worried;
+    case VoiceInteractionState::Cancelled: return PetExpression::DefaultOpen;
     case VoiceInteractionState::Idle: return PetExpression::DefaultOpen;
     }
     return PetExpression::DefaultOpen;
@@ -26,11 +28,13 @@ QString fallbackStatus(VoiceInteractionState state)
 {
     switch (state) {
     case VoiceInteractionState::Idle: return QStringLiteral("可以继续和我说话");
-    case VoiceInteractionState::Recording: return QStringLiteral("正在聆听");
+    case VoiceInteractionState::Listening: return QStringLiteral("正在聆听");
     case VoiceInteractionState::Recognizing: return QStringLiteral("正在识别");
     case VoiceInteractionState::Thinking: return QStringLiteral("正在思考");
     case VoiceInteractionState::Speaking: return QStringLiteral("正在回答");
-    case VoiceInteractionState::Failed: return QStringLiteral("这次没有连接成功");
+    case VoiceInteractionState::Error: return QStringLiteral("这次没有完成");
+    case VoiceInteractionState::Offline: return QStringLiteral("网络暂时不可用");
+    case VoiceInteractionState::Cancelled: return QStringLiteral("已停止本次对话");
     }
     return {};
 }
@@ -120,12 +124,16 @@ void ConversationPage::setSnapshot(const VoiceInteractionSnapshot& snapshot)
     m_errorLabel->setText(snapshot.errorMessage);
     m_errorLabel->setVisible(!snapshot.errorMessage.isEmpty());
 
-    const bool recording = snapshot.state == VoiceInteractionState::Recording;
+    const bool recording = snapshot.state == VoiceInteractionState::Listening;
     const bool restartable = snapshot.state == VoiceInteractionState::Idle
-        || snapshot.state == VoiceInteractionState::Failed;
-    m_primaryButton->setVisible(recording || restartable);
+        || snapshot.state == VoiceInteractionState::Error
+        || snapshot.state == VoiceInteractionState::Offline
+        || snapshot.state == VoiceInteractionState::Cancelled;
+    m_primaryButton->setVisible(snapshot.isActive() || restartable);
     m_primaryButton->setText(recording ? QStringLiteral("我说完了")
-        : snapshot.state == VoiceInteractionState::Failed
+        : snapshot.isActive() ? QStringLiteral("重新说话")
+        : snapshot.state == VoiceInteractionState::Error
+            || snapshot.state == VoiceInteractionState::Offline
             ? QStringLiteral("再试一次") : QStringLiteral("继续说话"));
     m_secondaryButton->setText(snapshot.isActive()
         ? QStringLiteral("停止") : QStringLiteral("返回首页"));

@@ -2,6 +2,8 @@
 
 #include <QDataStream>
 
+#include <cmath>
+
 namespace {
 QString captureDevice()
 {
@@ -38,7 +40,14 @@ VoiceAudioAdapter::VoiceAudioAdapter(QObject* parent)
         emit recordingStarted(m_captureSessionId);
     });
     connect(&m_captureProcess, &QProcess::readyReadStandardOutput, this, [this] {
-        m_pcm.append(m_captureProcess.readAllStandardOutput());
+        const QByteArray chunk = m_captureProcess.readAllStandardOutput();
+        m_pcm.append(chunk);
+        if (m_captureSessionId != 0 && !chunk.isEmpty()) {
+            constexpr qint64 bytesPerSecond = 16'000 * 2;
+            const qint64 capturedMs = m_pcm.size() * 1'000 / bytesPerSecond;
+            emit recordingProgress(m_captureSessionId, capturedMs,
+                                   pcmS16LeLevelDb(chunk));
+        }
     });
     connect(&m_captureProcess,
             qOverload<int, QProcess::ExitStatus>(&QProcess::finished),
@@ -173,8 +182,11 @@ void VoiceAudioAdapter::play(quint64 sessionId, const QByteArray& audio)
 
 void VoiceAudioAdapter::cancel(quint64 sessionId)
 {
+    m_pendingCancelSessionId = sessionId;
+    bool stopping = false;
     if (sessionId == m_captureSessionId
         && m_captureProcess.state() != QProcess::NotRunning) {
+        stopping = true;
         m_cancelingCapture = true;
         m_finishingCapture = false;
         m_captureProcess.terminate();
@@ -182,10 +194,13 @@ void VoiceAudioAdapter::cancel(quint64 sessionId)
     }
     if (sessionId == m_playbackSessionId
         && m_playbackProcess.state() != QProcess::NotRunning) {
+        stopping = true;
         m_cancelingPlayback = true;
         m_playbackProcess.terminate();
         m_playbackKillTimer.start();
     }
+    if (!stopping)
+        QTimer::singleShot(0, this, &VoiceAudioAdapter::maybeCompleteCancellation);
 }
 
 QByteArray VoiceAudioAdapter::pcmS16LeMonoToWav(const QByteArray& pcm,
@@ -205,6 +220,27 @@ QByteArray VoiceAudioAdapter::pcmS16LeMonoToWav(const QByteArray& pcm,
     stream << quint32(pcm.size());
     stream.writeRawData(pcm.constData(), pcm.size());
     return wav;
+}
+
+double VoiceAudioAdapter::pcmS16LeLevelDb(const QByteArray& pcm)
+{
+    const qsizetype sampleCount = pcm.size() / 2;
+    if (sampleCount <= 0)
+        return -96.0;
+
+    long double sumSquares = 0.0;
+    for (qsizetype i = 0; i < sampleCount; ++i) {
+        const int offset = static_cast<int>(i * 2);
+        const quint16 raw = static_cast<quint8>(pcm.at(offset))
+            | (static_cast<quint16>(static_cast<quint8>(pcm.at(offset + 1))) << 8);
+        const qint16 sample = static_cast<qint16>(raw);
+        const long double normalized = static_cast<long double>(sample) / 32'768.0L;
+        sumSquares += normalized * normalized;
+    }
+    const long double rms = std::sqrt(sumSquares / sampleCount);
+    if (rms <= 0.0000158489L)
+        return -96.0;
+    return qMax(-96.0, 20.0 * std::log10(static_cast<double>(rms)));
 }
 
 void VoiceAudioAdapter::configureProcess(QProcess* process)
@@ -227,6 +263,7 @@ void VoiceAudioAdapter::handleCaptureFinished(int exitCode,
         const QByteArray wav = pcmS16LeMonoToWav(m_pcm);
         resetCapture();
         emit recordingReady(sessionId, wav);
+        maybeCompleteCancellation();
         return;
     }
     if (!canceled && !m_captureFailureReported) {
@@ -236,6 +273,7 @@ void VoiceAudioAdapter::handleCaptureFinished(int exitCode,
             : diagnostic);
     }
     resetCapture();
+    maybeCompleteCancellation();
 }
 
 void VoiceAudioAdapter::handlePlaybackFinished(int exitCode,
@@ -251,6 +289,7 @@ void VoiceAudioAdapter::handlePlaybackFinished(int exitCode,
     if (success) {
         resetPlayback();
         emit playbackFinished(sessionId);
+        maybeCompleteCancellation();
         return;
     }
     if (!canceled && !m_playbackFailureReported) {
@@ -260,6 +299,7 @@ void VoiceAudioAdapter::handlePlaybackFinished(int exitCode,
             : diagnostic);
     }
     resetPlayback();
+    maybeCompleteCancellation();
 }
 
 void VoiceAudioAdapter::reportCaptureFailure(const QString& diagnostic)
@@ -297,4 +337,16 @@ void VoiceAudioAdapter::resetPlayback()
     m_playbackSessionId = 0;
     m_cancelingPlayback = false;
     m_playbackFailureReported = false;
+}
+
+void VoiceAudioAdapter::maybeCompleteCancellation()
+{
+    if (m_pendingCancelSessionId == 0
+        || m_captureProcess.state() != QProcess::NotRunning
+        || m_playbackProcess.state() != QProcess::NotRunning) {
+        return;
+    }
+    const quint64 sessionId = m_pendingCancelSessionId;
+    m_pendingCancelSessionId = 0;
+    emit cancellationFinished(sessionId);
 }

@@ -29,9 +29,15 @@ public:
 
     virtual void completeChat(quint64 sessionId,
                               const QList<AiChatMessage>& messages) = 0;
+    virtual void streamChat(quint64 sessionId,
+                            const QList<AiChatMessage>& messages)
+    {
+        completeChat(sessionId, messages);
+    }
     virtual void cancel(quint64 sessionId) = 0;
 
 signals:
+    void chatDelta(quint64 sessionId, const QString& delta);
     void chatCompletionReady(quint64 sessionId, const QString& text);
     void requestFailed(quint64 sessionId, const AiProviderError& error);
 };
@@ -65,9 +71,11 @@ public:
 
 signals:
     void recordingStarted(quint64 sessionId);
+    void recordingProgress(quint64 sessionId, qint64 capturedMs, double levelDb);
     void recordingReady(quint64 sessionId, const QByteArray& wavAudio);
     void playbackStarted(quint64 sessionId);
     void playbackFinished(quint64 sessionId);
+    void cancellationFinished(quint64 sessionId);
     void audioFailed(quint64 sessionId, VoiceAudioStage stage,
                      const QString& userMessage, const QString& diagnostic);
 };

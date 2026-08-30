@@ -7,11 +7,13 @@
 
 enum class VoiceInteractionState {
     Idle,
-    Recording,
+    Listening,
     Recognizing,
     Thinking,
     Speaking,
-    Failed
+    Error,
+    Offline,
+    Cancelled
 };
 
 enum class VoiceAudioStage {
@@ -77,7 +79,17 @@ struct TtsProviderConfiguration {
 struct VoiceInteractionConfiguration {
     QString systemPrompt;
     int requestTimeoutMs = 30'000;
+    bool vadEnabled = true;
+    double vadThresholdDb = -42.0;
+    int vadSilenceTimeoutMs = 900;
+    int recordingMinimumMs = 600;
+    int vadMinimumSpeechMs = 160;
     int recordingMaximumMs = 12'000;
+    bool llmStreamEnabled = true;
+    bool sentenceTtsEnabled = true;
+    int sentenceMinimumCharacters = 6;
+    int sentenceMaximumCharacters = 120;
+    int ttsPrebufferSegments = 2;
     int historyTurns = 4;
 
     QString validationError() const;
@@ -100,10 +112,13 @@ struct VoiceInteractionSnapshot {
     QString response;
     QString statusMessage;
     QString errorMessage;
+    bool generationActive = false;
+    bool playbackActive = false;
+    bool speechDetected = false;
 
     bool isActive() const
     {
-        return state == VoiceInteractionState::Recording
+        return state == VoiceInteractionState::Listening
             || state == VoiceInteractionState::Recognizing
             || state == VoiceInteractionState::Thinking
             || state == VoiceInteractionState::Speaking;

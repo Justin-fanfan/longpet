@@ -98,6 +98,22 @@ void ProviderHttpClient::postJson(quint64 sessionId, const QUrl& url,
     watch(m_network.post(request, json), sessionId);
 }
 
+void ProviderHttpClient::postJsonStream(
+    quint64 sessionId, const QUrl& url, const QString& apiKey,
+    const QByteArray& json, const Headers& extraHeaders)
+{
+    if (m_reply)
+        cancel(m_sessionId);
+    Headers headers = extraHeaders;
+    headers.append({QByteArrayLiteral("Cache-Control"),
+                    QByteArrayLiteral("no-cache")});
+    QNetworkRequest request = requestFor(
+        url, apiKey, QByteArrayLiteral("text/event-stream"), headers);
+    request.setHeader(QNetworkRequest::ContentTypeHeader,
+                      QStringLiteral("application/json"));
+    watch(m_network.post(request, json), sessionId, true);
+}
+
 void ProviderHttpClient::postMultipart(quint64 sessionId, const QUrl& url,
                                        const QString& apiKey,
                                        QHttpMultiPart* multipart,
@@ -131,6 +147,8 @@ void ProviderHttpClient::cancel(quint64 sessionId)
     m_reply->deleteLater();
     m_reply.clear();
     m_timedOut = false;
+    m_streaming = false;
+    m_responseBody.clear();
 }
 
 QNetworkRequest ProviderHttpClient::requestFor(
@@ -152,12 +170,33 @@ QNetworkRequest ProviderHttpClient::requestFor(
     return request;
 }
 
-void ProviderHttpClient::watch(QNetworkReply* reply, quint64 sessionId)
+void ProviderHttpClient::watch(QNetworkReply* reply, quint64 sessionId,
+                               bool streaming)
 {
     m_reply = reply;
     m_sessionId = sessionId;
     m_timedOut = false;
+    m_streaming = streaming;
+    m_responseBody.clear();
     m_timeout.start();
+    if (streaming) {
+        connect(reply, &QNetworkReply::readyRead, this, [this, reply] {
+            if (reply != m_reply)
+                return;
+            const QByteArray chunk = reply->readAll();
+            if (chunk.isEmpty())
+                return;
+            m_responseBody.append(chunk);
+            const int status = reply->attribute(
+                QNetworkRequest::HttpStatusCodeAttribute).toInt();
+            if (status >= 200 && status < 300) {
+                // Streaming requests use the configured timeout as an inactivity
+                // timeout. Every received chunk proves that the provider is alive.
+                m_timeout.start();
+                emit streamChunkReceived(m_sessionId, chunk);
+            }
+        });
+    }
     connect(reply, &QNetworkReply::finished,
             this, [this, reply] { handleFinished(reply); });
 }
@@ -169,6 +208,7 @@ void ProviderHttpClient::handleFinished(QNetworkReply* reply)
     m_timeout.stop();
     const quint64 sessionId = m_sessionId;
     const bool timedOut = m_timedOut;
+    const bool streaming = m_streaming;
     const QNetworkReply::NetworkError networkError = reply->error();
     const QString networkErrorText = reply->errorString();
     ProviderHttpResponse response;
@@ -176,9 +216,23 @@ void ProviderHttpClient::handleFinished(QNetworkReply* reply)
         QNetworkRequest::HttpStatusCodeAttribute).toInt();
     response.contentType = reply->rawHeader(
         QByteArrayLiteral("Content-Type")).toLower();
-    response.body = reply->isOpen() ? reply->readAll() : QByteArray();
+    const QByteArray remainder = reply->isOpen() ? reply->readAll() : QByteArray();
+    if (streaming) {
+        m_responseBody.append(remainder);
+        response.body = m_responseBody;
+        if (!remainder.isEmpty() && response.statusCode >= 200
+            && response.statusCode < 300) {
+            emit streamChunkReceived(sessionId, remainder);
+            if (reply != m_reply)
+                return;
+        }
+    } else {
+        response.body = remainder;
+    }
     m_reply.clear();
     m_timedOut = false;
+    m_streaming = false;
+    m_responseBody.clear();
     reply->deleteLater();
 
     if (timedOut) {

@@ -55,6 +55,8 @@ set(
     src/platform/NetworkManagerAdapter.h
     src/platform/ProviderHttpClient.cpp
     src/platform/ProviderHttpClient.h
+    src/platform/SseEventParser.cpp
+    src/platform/SseEventParser.h
     src/platform/OpenAiCompatibleProviders.cpp
     src/platform/OpenAiCompatibleProviders.h
     src/platform/AliyunProviders.cpp
@@ -112,6 +114,10 @@ set(
     src/services/WeatherService.cpp
     src/services/WeatherService.h
     src/services/VoiceInteractionPorts.h
+    src/services/SentenceBuffer.cpp
+    src/services/SentenceBuffer.h
+    src/services/VoiceActivityDetector.cpp
+    src/services/VoiceActivityDetector.h
     src/services/VoiceInteractionService.cpp
     src/services/VoiceInteractionService.h
     src/mainwindow.cpp

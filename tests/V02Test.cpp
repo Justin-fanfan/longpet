@@ -26,6 +26,7 @@
 #include "platform\OpenAiCompatibleProviders.h"
 #include "platform\PowerStatusAdapter.h"
 #include "platform\QWeatherProvider.h"
+#include "platform\SseEventParser.h"
 #include "platform\WeatherProviderFactory.h"
 #include "platform\VoiceAudioAdapter.h"
 #include "services\CareService.h"
@@ -34,6 +35,7 @@
 #include "services\NetworkService.h"
 #include "services\MediaSessionCoordinator.h"
 #include "services\SettingsService.h"
+#include "services\SentenceBuffer.h"
 #include "services\SystemService.h"
 #include "services\VideoCallService.h"
 #include "services\VideoCallPorts.h"
@@ -41,6 +43,7 @@
 #include "services\WeatherService.h"
 #include "services\VoiceInteractionPorts.h"
 #include "services\VoiceInteractionService.h"
+#include "services\VoiceActivityDetector.h"
 #include "data\WeatherConfigRepository.h"
 #include "widgets\PetFaceWidget.h"
 #include "widgets\VisualComponents.h"
@@ -92,6 +95,7 @@ private slots:
     void videoCallStateAndApiTransition();
     void mediaFrameProtocolAndIncomingCallLifecycle();
     void aiConfigurationAndWavEncoding();
+    void sentenceBufferAndVadHandleStreamingInput();
     void weatherConfigurationParsesValidatesAndOverrides();
     void weatherDeploymentExampleComplies();
     void weatherProviderParsesQWeatherJson();
@@ -99,7 +103,9 @@ private slots:
     void voiceInteractionInjectsWeatherContext();
     void voiceInteractionCompletesAndRetainsContext();
     void voiceInteractionFailuresCancelAndRecover();
+    void voiceInteractionStreamsQueuesAndInterrupts();
     void openAiCompatibleProviderHandlesSuccessErrorsAndTimeout();
+    void openAiCompatibleLlmParsesFragmentedSse();
     void aliyunProvidersUseNativeProtocols();
     void providerFactorySupportsMixedProviders();
     void networkVoiceInteractionRunsEndToEnd();
@@ -198,6 +204,12 @@ public:
         messages = chatMessages;
         ++chatCount;
     }
+    void streamChat(quint64 sessionId,
+                    const QList<AiChatMessage>& chatMessages) override
+    {
+        ++streamCount;
+        completeChat(sessionId, chatMessages);
+    }
     void cancel(quint64 sessionId) override
     {
         canceledSessionId = sessionId;
@@ -205,6 +217,8 @@ public:
     }
     void succeed(quint64 sessionId, const QString& text)
     { emit chatCompletionReady(sessionId, text); }
+    void delta(quint64 sessionId, const QString& text)
+    { emit chatDelta(sessionId, text); }
     void fail(quint64 sessionId, const QString& message)
     {
         emit requestFailed(sessionId, providerResponseError(
@@ -216,6 +230,7 @@ public:
     quint64 canceledSessionId = 0;
     QList<AiChatMessage> messages;
     int chatCount = 0;
+    int streamCount = 0;
     int cancelCount = 0;
 };
 
@@ -227,6 +242,7 @@ public:
     {
         activeSessionId = sessionId;
         synthesizedText = text;
+        synthesizedTexts.append(text);
         ++ttsCount;
     }
     void cancel(quint64 sessionId) override
@@ -246,6 +262,7 @@ public:
     quint64 activeSessionId = 0;
     quint64 canceledSessionId = 0;
     QString synthesizedText;
+    QStringList synthesizedTexts;
     int ttsCount = 0;
     int cancelCount = 0;
 };
@@ -269,6 +286,7 @@ public:
     {
         activeSessionId = sessionId;
         playedAudio = audio;
+        playedAudios.append(audio);
         ++playCount;
         emit playbackStarted(sessionId);
     }
@@ -276,10 +294,13 @@ public:
     {
         canceledSessionId = sessionId;
         ++cancelCount;
+        emit cancellationFinished(sessionId);
     }
 
     void completeRecording(quint64 sessionId, const QByteArray& wav)
     { emit recordingReady(sessionId, wav); }
+    void progress(quint64 sessionId, qint64 capturedMs, double levelDb)
+    { emit recordingProgress(sessionId, capturedMs, levelDb); }
     void completePlayback(quint64 sessionId)
     { emit playbackFinished(sessionId); }
     void fail(quint64 sessionId, VoiceAudioStage stage, const QString& message)
@@ -288,6 +309,7 @@ public:
     quint64 activeSessionId = 0;
     quint64 canceledSessionId = 0;
     QByteArray playedAudio;
+    QList<QByteArray> playedAudios;
     int startCount = 0;
     int finishCount = 0;
     int playCount = 0;
@@ -344,6 +366,7 @@ AiConfiguration validAiConfiguration()
     configuration.tts.voice = QStringLiteral("test-voice");
     configuration.voice.systemPrompt = QStringLiteral("请简短回答");
     configuration.voice.requestTimeoutMs = 1'000;
+    configuration.voice.llmStreamEnabled = false;
     configuration.voice.recordingMaximumMs = 5'000;
     configuration.voice.historyTurns = 2;
     return configuration;
@@ -351,7 +374,16 @@ AiConfiguration validAiConfiguration()
 
 class AiHttpStub final : public QObject {
 public:
-    enum class Mode { Success, HttpError, Unauthorized, RateLimited, InvalidJson, Hang };
+    enum class Mode {
+        Success,
+        HttpError,
+        Unauthorized,
+        RateLimited,
+        InvalidJson,
+        FragmentedSse,
+        BrokenSse,
+        Hang
+    };
 
     explicit AiHttpStub(QObject* parent = nullptr)
         : QObject(parent)
@@ -381,6 +413,11 @@ public:
                     authorizations.append(headerValue(headers, "authorization:"));
                     if (mode == Mode::Hang)
                         return;
+                    if ((mode == Mode::FragmentedSse || mode == Mode::BrokenSse)
+                        && paths.last().endsWith("/chat/completions")) {
+                        sendFragmentedSse(socket, mode == Mode::BrokenSse);
+                        return;
+                    }
                     sendResponse(socket, responseFor(paths.last(), bodies.last()));
                 });
                 connect(socket, &QTcpSocket::disconnected, this, [this, socket] {
@@ -482,6 +519,34 @@ private:
     {
         socket->write(response);
         socket->disconnectFromHost();
+    }
+
+    static void sendFragmentedSse(QTcpSocket* socket, bool broken)
+    {
+        const QByteArray body = broken
+            ? QByteArrayLiteral(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"前半句\"}}]}\r\n\r\n"
+                "data: {broken-json}\r\n\r\n")
+            : QByteArrayLiteral(
+                "data: {\"choices\":[{\"delta\":{\"role\":\"assistant\"}}]}\r\n\r\n"
+                "data: {\"choices\":[{\"delta\":{\"content\":\"你好\"}}]}\r\n\r\n"
+                "data: {\"choices\":[{\"delta\":{\"content\":\"，LongPet。\"},\"finish_reason\":null}]}\r\n\r\n"
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\r\n\r\n"
+                "data: [DONE]\r\n\r\n");
+        const QByteArray headers = QByteArrayLiteral(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n")
+            + QByteArrayLiteral("Content-Length: ") + QByteArray::number(body.size())
+            + QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
+        const qsizetype first = qMin<qsizetype>(17, body.size());
+        const qsizetype second = qMin<qsizetype>(43, body.size() - first);
+        socket->write(headers + body.left(first));
+        QTimer::singleShot(10, socket, [socket, body, first, second] {
+            socket->write(body.mid(first, second));
+        });
+        QTimer::singleShot(20, socket, [socket, body, first, second] {
+            socket->write(body.mid(first + second));
+            socket->disconnectFromHost();
+        });
     }
 
     QTcpServer m_server;
@@ -1271,7 +1336,17 @@ void V02Test::aiConfigurationAndWavEncoding()
         "[voice]\n"
         "system_prompt=be kind\n"
         "request_timeout_ms=4500\n"
+        "vad_enabled=true\n"
+        "vad_threshold_db=-38.5\n"
+        "vad_silence_timeout_ms=850\n"
+        "recording_minimum_ms=700\n"
+        "vad_minimum_speech_ms=180\n"
         "recording_maximum_ms=9000\n"
+        "llm_stream_enabled=true\n"
+        "sentence_tts_enabled=true\n"
+        "sentence_minimum_characters=5\n"
+        "sentence_maximum_characters=80\n"
+        "tts_prebuffer_segments=2\n"
         "history_turns=3\n");
     file.close();
 
@@ -1291,6 +1366,16 @@ void V02Test::aiConfigurationAndWavEncoding()
     QCOMPARE(configuration.tts.apiKey, QStringLiteral("tts-secret"));
     QCOMPARE(configuration.tts.voice, QStringLiteral("warm"));
     QCOMPARE(configuration.voice.requestTimeoutMs, 4'500);
+    QVERIFY(configuration.voice.vadEnabled);
+    QCOMPARE(configuration.voice.vadThresholdDb, -38.5);
+    QCOMPARE(configuration.voice.vadSilenceTimeoutMs, 850);
+    QCOMPARE(configuration.voice.recordingMinimumMs, 700);
+    QCOMPARE(configuration.voice.vadMinimumSpeechMs, 180);
+    QVERIFY(configuration.voice.llmStreamEnabled);
+    QVERIFY(configuration.voice.sentenceTtsEnabled);
+    QCOMPARE(configuration.voice.sentenceMinimumCharacters, 5);
+    QCOMPARE(configuration.voice.sentenceMaximumCharacters, 80);
+    QCOMPARE(configuration.voice.ttsPrebufferSegments, 2);
     QCOMPARE(configuration.voice.historyTurns, 3);
 
     qputenv("LONGPET_ASR_API_KEY", QByteArrayLiteral("environment-asr-key"));
@@ -1331,6 +1416,59 @@ void V02Test::aiConfigurationAndWavEncoding()
     QCOMPARE(legacy.asr.provider, QStringLiteral("openai-compatible"));
     QCOMPARE(legacy.llm.apiKey, QStringLiteral("legacy"));
     QCOMPARE(legacy.tts.model, QStringLiteral("old-tts"));
+
+    QFile example(QStringLiteral(LONGPET_REPO_DIR
+        "/deploy/longpet-ai.ini.example"));
+    QVERIFY(example.open(QIODevice::ReadOnly | QIODevice::Text));
+    const QByteArray exampleData = example.readAll();
+    for (const QByteArray& key : {
+             QByteArrayLiteral("vad_enabled=true"),
+             QByteArrayLiteral("vad_silence_timeout_ms="),
+             QByteArrayLiteral("recording_minimum_ms="),
+             QByteArrayLiteral("llm_stream_enabled=true"),
+             QByteArrayLiteral("sentence_tts_enabled=true"),
+             QByteArrayLiteral("tts_prebuffer_segments=")}) {
+        QVERIFY2(exampleData.contains(key), key.constData());
+    }
+}
+
+void V02Test::sentenceBufferAndVadHandleStreamingInput()
+{
+    SentenceBuffer sentences(3, 12);
+    QVERIFY(sentences.append(QStringLiteral("你好。")).isEmpty());
+    QCOMPARE(sentences.append(QStringLiteral("”接下来")),
+             QStringList({QStringLiteral("你好。”")}));
+    QVERIFY(sentences.append(QStringLiteral("是一段没有标点的长文本内容")).size() >= 1);
+    QVERIFY(!sentences.flush().isEmpty());
+    QVERIFY(sentences.pendingText().isEmpty());
+
+    SseEventParser sse;
+    QVERIFY(sse.append(QByteArrayLiteral("data: {\"value\":")).isEmpty());
+    QVERIFY(sse.append(QByteArrayLiteral("1}\r\n\r")).isEmpty());
+    QCOMPARE(sse.append(QByteArrayLiteral("\n")),
+             QList<QByteArray>({QByteArrayLiteral("{\"value\":1}")}));
+    QVERIFY(sse.finish().isEmpty());
+
+    VoiceActivityDetector vad(-40.0, 500, 300, 100);
+    VoiceActivityUpdate update = vad.process(100, -20.0);
+    QVERIFY(update.speechDetected);
+    QVERIFY(!update.shouldStop);
+    update = vad.process(300, -20.0);
+    QVERIFY(!update.shouldStop);
+    update = vad.process(700, -80.0);
+    QVERIFY(!update.shouldStop);
+    update = vad.process(900, -80.0);
+    QVERIFY(update.shouldStop);
+
+    QByteArray loudPcm;
+    loudPcm.reserve(320);
+    for (int i = 0; i < 160; ++i) {
+        loudPcm.append(char(0x00));
+        loudPcm.append(char(0x40));
+    }
+    const double loudDb = VoiceAudioAdapter::pcmS16LeLevelDb(loudPcm);
+    QVERIFY(loudDb > -7.0 && loudDb < -5.0);
+    QCOMPARE(VoiceAudioAdapter::pcmS16LeLevelDb(QByteArray(320, '\0')), -96.0);
 }
 
 void V02Test::weatherConfigurationParsesValidatesAndOverrides()
@@ -1805,7 +1943,7 @@ void V02Test::voiceInteractionCompletesAndRetainsContext()
     const VoiceInteractionResult started = service.startInteraction();
     QVERIFY(started.success);
     const quint64 firstSession = started.snapshot.sessionId;
-    QCOMPARE(service.snapshot().state, VoiceInteractionState::Recording);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Listening);
     QCOMPARE(mediaSessions.owner(), QStringLiteral("voice_interaction"));
     QCOMPARE(audio.startCount, 1);
 
@@ -1875,21 +2013,21 @@ void V02Test::voiceInteractionFailuresCancelAndRecover()
     quint64 sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
     asr.fail(sessionId, QStringLiteral("网络连接失败，请检查 Wi-Fi"));
-    QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Offline);
     QVERIFY(mediaSessions.owner().isEmpty());
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
     asr.succeedAsr(sessionId, QStringLiteral("你好"));
     llm.fail(sessionId, QStringLiteral("AI 对话服务暂时不可用"));
-    QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Error);
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
     asr.succeedAsr(sessionId, QStringLiteral("你好"));
     llm.succeed(sessionId, QStringLiteral("你好呀"));
     tts.fail(sessionId, QStringLiteral("语音生成服务暂时不可用"));
-    QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Idle);
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
@@ -1899,7 +2037,7 @@ void V02Test::voiceInteractionFailuresCancelAndRecover()
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Speaking);
     audio.fail(sessionId, VoiceAudioStage::Playback,
                QStringLiteral("扬声器播放失败"));
-    QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Error);
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
@@ -1921,6 +2059,112 @@ void V02Test::voiceInteractionFailuresCancelAndRecover()
     const VideoCallResult busy = videoCall.startIncomingCall(VideoCallMode::Voice);
     QVERIFY(!busy.success);
     QCOMPARE(busy.code, VideoCallErrorCode::Busy);
+}
+
+void V02Test::voiceInteractionStreamsQueuesAndInterrupts()
+{
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
+    FakeVoiceAudioPort audio;
+    MediaSessionCoordinator mediaSessions;
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.voice.llmStreamEnabled = true;
+    configuration.voice.vadEnabled = true;
+    configuration.voice.vadThresholdDb = -40.0;
+    configuration.voice.vadSilenceTimeoutMs = 500;
+    configuration.voice.recordingMinimumMs = 300;
+    configuration.voice.vadMinimumSpeechMs = 100;
+    configuration.voice.sentenceMinimumCharacters = 3;
+    configuration.voice.sentenceMaximumCharacters = 40;
+    configuration.voice.ttsPrebufferSegments = 1;
+    VoiceInteractionService service(configuration, &asr, &llm, &tts,
+                                    &audio, &mediaSessions);
+    const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
+        QByteArray(640, '\1'));
+    const QByteArray firstAudio = VoiceAudioAdapter::pcmS16LeMonoToWav(
+        QByteArray(320, '\2'));
+    const QByteArray secondAudio = VoiceAudioAdapter::pcmS16LeMonoToWav(
+        QByteArray(480, '\3'));
+
+    const VoiceInteractionResult started = service.startInteraction();
+    QVERIFY(started.success);
+    const quint64 sessionId = started.snapshot.sessionId;
+    audio.progress(sessionId, 100, -20.0);
+    audio.progress(sessionId, 300, -20.0);
+    audio.progress(sessionId, 900, -80.0);
+    QCOMPARE(audio.finishCount, 1);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Recognizing);
+
+    audio.completeRecording(sessionId, wav);
+    asr.succeedAsr(sessionId, QStringLiteral("请讲两句话"));
+    QCOMPARE(llm.streamCount, 1);
+    llm.delta(sessionId, QStringLiteral("第一句话。"));
+    QCOMPARE(tts.ttsCount, 0); // 等一个后续 delta，以便吸收可能到来的闭引号。
+    llm.delta(sessionId, QStringLiteral("第二"));
+    QCOMPARE(tts.ttsCount, 1);
+    QCOMPARE(tts.synthesizedTexts.first(), QStringLiteral("第一句话。"));
+    QVERIFY(service.snapshot().generationActive);
+
+    tts.succeed(sessionId, firstAudio);
+    QCOMPARE(audio.playCount, 1);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Speaking);
+    QVERIFY(service.snapshot().generationActive);
+    llm.delta(sessionId, QStringLiteral("句话！"));
+    llm.succeed(sessionId, QStringLiteral("第一句话。第二句话！"));
+    QCOMPARE(tts.ttsCount, 2);
+    QCOMPARE(tts.synthesizedTexts.at(1), QStringLiteral("第二句话！"));
+    tts.succeed(sessionId, secondAudio);
+    QCOMPARE(audio.playCount, 1); // 第二段已合成，但必须等待第一段播放结束。
+    audio.completePlayback(sessionId);
+    QCOMPARE(audio.playCount, 2);
+    QCOMPARE(audio.playedAudios.at(0), firstAudio);
+    QCOMPARE(audio.playedAudios.at(1), secondAudio);
+    audio.completePlayback(sessionId);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Idle);
+    QCOMPARE(service.snapshot().response, QStringLiteral("第一句话。第二句话！"));
+
+    // 正常完成的上一轮进入上下文；清空后下一轮不再携带它。
+    VoiceInteractionResult next = service.startInteraction();
+    QVERIFY(next.success);
+    QVERIFY(service.finishRecording().success);
+    audio.completeRecording(next.snapshot.sessionId, wav);
+    asr.succeedAsr(next.snapshot.sessionId, QStringLiteral("还有吗"));
+    QCOMPARE(llm.messages.size(), 4);
+    service.cancelInteraction();
+    QVERIFY(service.clearConversationHistory());
+    next = service.startInteraction();
+    QVERIFY(service.finishRecording().success);
+    audio.completeRecording(next.snapshot.sessionId, wav);
+    asr.succeedAsr(next.snapshot.sessionId, QStringLiteral("重新开始"));
+    QCOMPARE(llm.messages.size(), 2);
+    service.cancelInteraction();
+
+    // Speaking 时重新说话：先等旧播放真正释放，再创建新 session。
+    next = service.startInteraction();
+    QVERIFY(service.finishRecording().success);
+    const quint64 oldSession = next.snapshot.sessionId;
+    audio.completeRecording(oldSession, wav);
+    asr.succeedAsr(oldSession, QStringLiteral("打断测试"));
+    llm.delta(oldSession, QStringLiteral("准备播放。"));
+    llm.delta(oldSession, QStringLiteral("后文"));
+    tts.succeed(oldSession, firstAudio);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Speaking);
+    const int playCountBeforeRestart = audio.playCount;
+    QVERIFY(service.restartInteraction().success);
+    QTRY_COMPARE(service.snapshot().state, VoiceInteractionState::Listening);
+    const quint64 newSession = service.snapshot().sessionId;
+    QVERIFY(newSession > oldSession);
+
+    llm.delta(oldSession, QStringLiteral("旧结果"));
+    llm.succeed(oldSession, QStringLiteral("准备播放。后文旧结果"));
+    tts.succeed(oldSession, secondAudio);
+    audio.completePlayback(oldSession);
+    QCOMPARE(service.snapshot().sessionId, newSession);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Listening);
+    QVERIFY(service.snapshot().response.isEmpty());
+    QCOMPARE(audio.playCount, playCountBeforeRestart);
+    service.cancelInteraction();
 }
 
 void V02Test::openAiCompatibleProviderHandlesSuccessErrorsAndTimeout()
@@ -2036,6 +2280,38 @@ void V02Test::openAiCompatibleProviderHandlesSuccessErrorsAndTimeout()
         offlineSpy.first().at(1));
     QVERIFY(offlineError.code == AiProviderErrorCode::NetworkError
             || offlineError.code == AiProviderErrorCode::Timeout);
+}
+
+void V02Test::openAiCompatibleLlmParsesFragmentedSse()
+{
+    AiHttpStub server;
+    QVERIFY(server.listen());
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.llm.apiBaseUrl = server.baseUrl();
+    OpenAiCompatibleLlmProvider llm(configuration.llm, 1'000);
+    QSignalSpy deltaSpy(&llm, &LlmProviderPort::chatDelta);
+    QSignalSpy completionSpy(&llm, &LlmProviderPort::chatCompletionReady);
+    QSignalSpy failureSpy(&llm, &LlmProviderPort::requestFailed);
+
+    server.mode = AiHttpStub::Mode::FragmentedSse;
+    llm.streamChat(31, {{QStringLiteral("user"), QStringLiteral("你好")}});
+    QVERIFY(completionSpy.wait(2'000));
+    QCOMPARE(failureSpy.count(), 0);
+    QCOMPARE(completionSpy.first().at(0).toULongLong(), 31ULL);
+    QCOMPARE(completionSpy.first().at(1).toString(),
+             QStringLiteral("你好，LongPet。"));
+    QCOMPARE(deltaSpy.count(), 2);
+    QVERIFY(server.bodies.last().contains("\"stream\":true"));
+
+    server.mode = AiHttpStub::Mode::BrokenSse;
+    const int completions = completionSpy.count();
+    llm.streamChat(32, {{QStringLiteral("user"), QStringLiteral("再次测试")}});
+    QVERIFY(failureSpy.wait(2'000));
+    QCOMPARE(completionSpy.count(), completions);
+    const AiProviderError error = qvariant_cast<AiProviderError>(
+        failureSpy.last().at(1));
+    QCOMPARE(error.code, AiProviderErrorCode::InvalidResponse);
+    QVERIFY(error.diagnostic.contains(QStringLiteral("SSE JSON error")));
 }
 
 void V02Test::aliyunProvidersUseNativeProtocols()
@@ -2163,7 +2439,7 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
 
     ConversationPage conversationPage;
     VoiceInteractionSnapshot voiceSnapshot;
-    voiceSnapshot.state = VoiceInteractionState::Recording;
+    voiceSnapshot.state = VoiceInteractionState::Listening;
     voiceSnapshot.statusMessage = QStringLiteral("正在聆听，请说话");
     conversationPage.setSnapshot(voiceSnapshot);
     QSignalSpy finishVoiceSpy(&conversationPage,
@@ -2284,7 +2560,7 @@ void V02Test::applicationControllerOwnsNavigation()
     QTest::mouseClick(window.findChild<QPushButton*>(QStringLiteral("talkButton")),
                       Qt::LeftButton);
     QCOMPARE(window.currentPage(), MainWindow::PageId::Conversation);
-    QCOMPARE(voiceService.snapshot().state, VoiceInteractionState::Recording);
+    QCOMPARE(voiceService.snapshot().state, VoiceInteractionState::Listening);
     QTest::mouseClick(window.findChild<QPushButton*>(
                           QStringLiteral("conversationSecondaryButton")),
                       Qt::LeftButton);

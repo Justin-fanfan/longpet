@@ -24,5 +24,20 @@ voice=Cherry
 [voice]
 system_prompt=你是 LongPet，一位耐心、温和、回答简短的陪伴助手。请使用中文回答，避免使用复杂术语。
 request_timeout_ms=30000
+# 轻量能量 VAD：阈值单位为 dBFS。环境噪声较大时可逐步调高到 -38 左右，
+# 总是误判为静音时可逐步调低到 -48 左右。
+vad_enabled=true
+vad_threshold_db=-42.0
+vad_silence_timeout_ms=900
+recording_minimum_ms=600
+vad_minimum_speech_ms=160
 recording_maximum_ms=12000
+# LLM 使用 OpenAI-compatible SSE；关闭后退回 V1 非流式回答。
+llm_stream_enabled=true
+# 完整句形成后立即加入顺序 TTS 队列。
+sentence_tts_enabled=true
+sentence_minimum_characters=6
+sentence_maximum_characters=120
+# 当前播放段之外最多预先保留的已合成语音段数，建议板端保持 1~2。
+tts_prebuffer_segments=2
 history_turns=4

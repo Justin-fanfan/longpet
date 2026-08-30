@@ -32,6 +32,9 @@ public:
 
     void postJson(quint64 sessionId, const QUrl& url, const QString& apiKey,
                   const QByteArray& json, const Headers& extraHeaders = {});
+    void postJsonStream(quint64 sessionId, const QUrl& url,
+                        const QString& apiKey, const QByteArray& json,
+                        const Headers& extraHeaders = {});
     void postMultipart(quint64 sessionId, const QUrl& url, const QString& apiKey,
                        QHttpMultiPart* multipart,
                        const Headers& extraHeaders = {});
@@ -40,6 +43,7 @@ public:
     void cancel(quint64 sessionId);
 
 signals:
+    void streamChunkReceived(quint64 sessionId, const QByteArray& chunk);
     void succeeded(quint64 sessionId, const ProviderHttpResponse& response);
     void failed(quint64 sessionId, const AiProviderError& error);
 
@@ -47,7 +51,7 @@ private:
     QNetworkRequest requestFor(const QUrl& url, const QString& apiKey,
                                const QByteArray& accept,
                                const Headers& extraHeaders) const;
-    void watch(QNetworkReply* reply, quint64 sessionId);
+    void watch(QNetworkReply* reply, quint64 sessionId, bool streaming = false);
     void handleFinished(QNetworkReply* reply);
     AiProviderError httpFailure(int status, const QByteArray& body) const;
 
@@ -58,6 +62,8 @@ private:
     QTimer m_timeout;
     quint64 m_sessionId = 0;
     bool m_timedOut = false;
+    bool m_streaming = false;
+    QByteArray m_responseBody;
 };
 
 QUrl providerEndpoint(const QUrl& baseUrl, const QString& relativePath);

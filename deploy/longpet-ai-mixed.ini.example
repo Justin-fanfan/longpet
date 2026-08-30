@@ -24,5 +24,15 @@ voice=vendor-c-voice
 [voice]
 system_prompt=你是 LongPet，一位耐心、温和、回答简短的陪伴助手。请使用中文回答。
 request_timeout_ms=30000
+vad_enabled=true
+vad_threshold_db=-42.0
+vad_silence_timeout_ms=900
+recording_minimum_ms=600
+vad_minimum_speech_ms=160
 recording_maximum_ms=12000
+llm_stream_enabled=true
+sentence_tts_enabled=true
+sentence_minimum_characters=6
+sentence_maximum_characters=120
+tts_prebuffer_segments=2
 history_turns=4

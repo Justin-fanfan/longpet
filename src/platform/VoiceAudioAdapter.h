@@ -20,6 +20,7 @@ public:
 
     static QByteArray pcmS16LeMonoToWav(const QByteArray& pcm,
                                         quint32 sampleRate = 16'000);
+    static double pcmS16LeLevelDb(const QByteArray& pcm);
 
 private:
     void configureProcess(QProcess* process);
@@ -27,6 +28,7 @@ private:
     void handlePlaybackFinished(int exitCode, QProcess::ExitStatus exitStatus);
     void reportCaptureFailure(const QString& diagnostic);
     void reportPlaybackFailure(const QString& diagnostic);
+    void maybeCompleteCancellation();
     void resetCapture();
     void resetPlayback();
 
@@ -38,6 +40,7 @@ private:
     QByteArray m_playbackAudio;
     quint64 m_captureSessionId = 0;
     quint64 m_playbackSessionId = 0;
+    quint64 m_pendingCancelSessionId = 0;
     bool m_finishingCapture = false;
     bool m_cancelingCapture = false;
     bool m_cancelingPlayback = false;
