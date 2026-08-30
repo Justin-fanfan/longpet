@@ -39,6 +39,7 @@ set(
     src/app/FamilyLinkController.cpp
     src/app/FamilyLinkController.h
     src/model/ReminderModels.h
+    src/model/AiModels.cpp
     src/model/AiModels.h
     src/model/NetworkModels.h
     src/model/SettingsModels.h
@@ -50,8 +51,14 @@ set(
     src/platform/NetworkStatusAdapter.h
     src/platform/NetworkManagerAdapter.cpp
     src/platform/NetworkManagerAdapter.h
-    src/platform/OpenAiCompatibleProvider.cpp
-    src/platform/OpenAiCompatibleProvider.h
+    src/platform/ProviderHttpClient.cpp
+    src/platform/ProviderHttpClient.h
+    src/platform/OpenAiCompatibleProviders.cpp
+    src/platform/OpenAiCompatibleProviders.h
+    src/platform/AliyunProviders.cpp
+    src/platform/AliyunProviders.h
+    src/platform/AiProviderFactory.cpp
+    src/platform/AiProviderFactory.h
     src/platform/VoiceAudioAdapter.cpp
     src/platform/VoiceAudioAdapter.h
     src/platform/AudioVolumeAdapter.cpp

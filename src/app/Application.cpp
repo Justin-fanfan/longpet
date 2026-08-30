@@ -14,7 +14,7 @@
 #include "platform/FamilyLinkHttpAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
-#include "platform/OpenAiCompatibleProvider.h"
+#include "platform/AiProviderFactory.h"
 #include "platform/PowerStatusAdapter.h"
 #include "platform/VideoCallMediaAdapter.h"
 #include "platform/VoiceAudioAdapter.h"
@@ -27,6 +27,7 @@
 #include "services/SystemService.h"
 #include "services/VideoCallService.h"
 #include "services/VoiceInteractionService.h"
+#include "services/VoiceInteractionPorts.h"
 #include "widgets/VisualTokens.h"
 
 #include <QCoreApplication>
@@ -85,10 +86,16 @@ bool Application::initialize(QString* error)
         &aiConfigurationError);
     if (!aiConfigurationError.isEmpty())
         qWarning().noquote() << aiConfigurationError;
-    m_aiProvider = std::make_unique<OpenAiCompatibleProvider>(aiConfiguration);
+    m_asrProvider = AiProviderFactory::createAsr(
+        aiConfiguration.asr, aiConfiguration.voice.requestTimeoutMs);
+    m_llmProvider = AiProviderFactory::createLlm(
+        aiConfiguration.llm, aiConfiguration.voice.requestTimeoutMs);
+    m_ttsProvider = AiProviderFactory::createTts(
+        aiConfiguration.tts, aiConfiguration.voice.requestTimeoutMs);
     m_voiceAudioAdapter = std::make_unique<VoiceAudioAdapter>();
     m_voiceInteractionService = std::make_unique<VoiceInteractionService>(
-        aiConfiguration, m_aiProvider.get(), m_voiceAudioAdapter.get(),
+        aiConfiguration, m_asrProvider.get(), m_llmProvider.get(),
+        m_ttsProvider.get(), m_voiceAudioAdapter.get(),
         m_mediaSessionCoordinator.get());
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>();
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
@@ -195,7 +202,9 @@ void Application::shutdown()
     m_networkStatusAdapter.reset();
     m_voiceInteractionService.reset();
     m_voiceAudioAdapter.reset();
-    m_aiProvider.reset();
+    m_ttsProvider.reset();
+    m_llmProvider.reset();
+    m_asrProvider.reset();
     m_videoCallService.reset();
     m_callPromptPlayerAdapter.reset();
     m_videoCallMediaAdapter.reset();

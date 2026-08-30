@@ -9,18 +9,22 @@ const QString VoiceInteractionService::MediaOwner = QStringLiteral("voice_intera
 
 VoiceInteractionService::VoiceInteractionService(
     const AiConfiguration& configuration,
-    AiProviderPort* provider,
+    AsrProviderPort* asrProvider,
+    LlmProviderPort* llmProvider,
+    TtsProviderPort* ttsProvider,
     VoiceAudioPort* audio,
     MediaSessionCoordinator* mediaSessions,
     QObject* parent)
     : QObject(parent),
       m_configuration(configuration),
-      m_provider(provider),
+      m_asrProvider(asrProvider),
+      m_llmProvider(llmProvider),
+      m_ttsProvider(ttsProvider),
       m_audio(audio),
       m_mediaSessions(mediaSessions)
 {
     m_recordingDeadline.setSingleShot(true);
-    m_recordingDeadline.setInterval(qMax(1'000, configuration.recordingMaximumMs));
+    m_recordingDeadline.setInterval(qMax(1'000, configuration.voice.recordingMaximumMs));
     connect(&m_recordingDeadline, &QTimer::timeout,
             this, [this] { finishRecording(); });
 
@@ -36,14 +40,22 @@ VoiceInteractionService::VoiceInteractionService(
         connect(m_audio, &VoiceAudioPort::audioFailed,
                 this, &VoiceInteractionService::handleAudioFailure);
     }
-    if (m_provider) {
-        connect(m_provider, &AiProviderPort::transcriptionReady,
+    if (m_asrProvider) {
+        connect(m_asrProvider, &AsrProviderPort::transcriptionReady,
                 this, &VoiceInteractionService::handleTranscription);
-        connect(m_provider, &AiProviderPort::chatCompletionReady,
+        connect(m_asrProvider, &AsrProviderPort::requestFailed,
+                this, &VoiceInteractionService::handleProviderFailure);
+    }
+    if (m_llmProvider) {
+        connect(m_llmProvider, &LlmProviderPort::chatCompletionReady,
                 this, &VoiceInteractionService::handleChatCompletion);
-        connect(m_provider, &AiProviderPort::speechReady,
+        connect(m_llmProvider, &LlmProviderPort::requestFailed,
+                this, &VoiceInteractionService::handleProviderFailure);
+    }
+    if (m_ttsProvider) {
+        connect(m_ttsProvider, &TtsProviderPort::speechReady,
                 this, &VoiceInteractionService::handleSpeech);
-        connect(m_provider, &AiProviderPort::requestFailed,
+        connect(m_ttsProvider, &TtsProviderPort::requestFailed,
                 this, &VoiceInteractionService::handleProviderFailure);
     }
 }
@@ -51,8 +63,12 @@ VoiceInteractionService::VoiceInteractionService(
 VoiceInteractionService::~VoiceInteractionService()
 {
     if (m_snapshot.isActive()) {
-        if (m_provider)
-            m_provider->cancel(m_snapshot.sessionId);
+        if (m_asrProvider)
+            m_asrProvider->cancel(m_snapshot.sessionId);
+        if (m_llmProvider)
+            m_llmProvider->cancel(m_snapshot.sessionId);
+        if (m_ttsProvider)
+            m_ttsProvider->cancel(m_snapshot.sessionId);
         if (m_audio)
             m_audio->cancel(m_snapshot.sessionId);
     }
@@ -74,7 +90,7 @@ VoiceInteractionResult VoiceInteractionService::startInteraction()
     const QString configurationError = m_configuration.validationError();
     if (!configurationError.isEmpty())
         return fail(configurationError);
-    if (!m_provider || !m_audio)
+    if (!m_asrProvider || !m_llmProvider || !m_ttsProvider || !m_audio)
         return fail(QStringLiteral("语音服务尚未准备好"));
     if (m_mediaSessions && !m_mediaSessions->tryAcquire(MediaOwner))
         return fail(QStringLiteral("设备正在通话，请稍后再试"));
@@ -105,8 +121,12 @@ VoiceInteractionResult VoiceInteractionService::cancelInteraction()
 
     const quint64 sessionId = m_snapshot.sessionId;
     m_recordingDeadline.stop();
-    if (m_provider)
-        m_provider->cancel(sessionId);
+    if (m_asrProvider)
+        m_asrProvider->cancel(sessionId);
+    if (m_llmProvider)
+        m_llmProvider->cancel(sessionId);
+    if (m_ttsProvider)
+        m_ttsProvider->cancel(sessionId);
     if (m_audio)
         m_audio->cancel(sessionId);
     releaseResources();
@@ -143,7 +163,7 @@ void VoiceInteractionService::handleRecordingReady(
     }
     m_snapshot.statusMessage = QStringLiteral("正在识别");
     emit snapshotChanged(m_snapshot);
-    m_provider->transcribe(sessionId, wavAudio);
+    m_asrProvider->transcribe(sessionId, wavAudio);
 }
 
 void VoiceInteractionService::handleTranscription(quint64 sessionId,
@@ -159,7 +179,7 @@ void VoiceInteractionService::handleTranscription(quint64 sessionId,
     }
     m_snapshot.transcript = transcript;
     publish(VoiceInteractionState::Thinking, QStringLiteral("正在思考"));
-    m_provider->completeChat(sessionId, messagesFor(transcript));
+    m_llmProvider->completeChat(sessionId, messagesFor(transcript));
 }
 
 void VoiceInteractionService::handleChatCompletion(quint64 sessionId,
@@ -177,7 +197,7 @@ void VoiceInteractionService::handleChatCompletion(quint64 sessionId,
     appendHistory(m_snapshot.transcript, response);
     m_snapshot.statusMessage = QStringLiteral("正在生成语音");
     emit snapshotChanged(m_snapshot);
-    m_provider->synthesize(sessionId, response);
+    m_ttsProvider->synthesize(sessionId, response);
 }
 
 void VoiceInteractionService::handleSpeech(quint64 sessionId,
@@ -211,12 +231,13 @@ void VoiceInteractionService::handlePlaybackFinished(quint64 sessionId)
 }
 
 void VoiceInteractionService::handleProviderFailure(
-    quint64 sessionId, AiRequestStage, const QString& userMessage,
-    const QString& diagnostic)
+    quint64 sessionId, const AiProviderError& error)
 {
     if (sessionId != m_snapshot.sessionId || !m_snapshot.isActive())
         return;
-    fail(userMessage, diagnostic);
+    const QString diagnostic = QStringLiteral("code=%1 provider=%2 %3")
+        .arg(aiProviderErrorCodeName(error.code), error.provider, error.diagnostic);
+    fail(error.userMessage, diagnostic);
 }
 
 void VoiceInteractionService::handleAudioFailure(
@@ -232,9 +253,9 @@ QList<AiChatMessage> VoiceInteractionService::messagesFor(
     const QString& userText) const
 {
     QList<AiChatMessage> messages;
-    if (!m_configuration.systemPrompt.trimmed().isEmpty()) {
+    if (!m_configuration.voice.systemPrompt.trimmed().isEmpty()) {
         messages.append({QStringLiteral("system"),
-                         m_configuration.systemPrompt.trimmed()});
+                         m_configuration.voice.systemPrompt.trimmed()});
     }
     messages.append(m_history);
     messages.append({QStringLiteral("user"), userText});
@@ -244,11 +265,11 @@ QList<AiChatMessage> VoiceInteractionService::messagesFor(
 void VoiceInteractionService::appendHistory(const QString& userText,
                                             const QString& assistantText)
 {
-    if (m_configuration.historyTurns <= 0)
+    if (m_configuration.voice.historyTurns <= 0)
         return;
     m_history.append({QStringLiteral("user"), userText});
     m_history.append({QStringLiteral("assistant"), assistantText});
-    const int maximumMessages = m_configuration.historyTurns * 2;
+    const int maximumMessages = m_configuration.voice.historyTurns * 2;
     while (m_history.size() > maximumMessages)
         m_history.removeFirst();
 }
@@ -267,8 +288,12 @@ VoiceInteractionResult VoiceInteractionService::fail(
 {
     const quint64 sessionId = m_snapshot.sessionId;
     m_recordingDeadline.stop();
-    if (m_provider)
-        m_provider->cancel(sessionId);
+    if (m_asrProvider)
+        m_asrProvider->cancel(sessionId);
+    if (m_llmProvider)
+        m_llmProvider->cancel(sessionId);
+    if (m_ttsProvider)
+        m_ttsProvider->cancel(sessionId);
     if (m_audio)
         m_audio->cancel(sessionId);
     releaseResources();

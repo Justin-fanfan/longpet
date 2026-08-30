@@ -21,7 +21,9 @@
 #include "platform\FamilyLinkHttpAdapter.h"
 #include "platform\NetworkStatusAdapter.h"
 #include "platform\NetworkManagerAdapter.h"
-#include "platform\OpenAiCompatibleProvider.h"
+#include "platform\AiProviderFactory.h"
+#include "platform\AliyunProviders.h"
+#include "platform\OpenAiCompatibleProviders.h"
 #include "platform\PowerStatusAdapter.h"
 #include "platform\VoiceAudioAdapter.h"
 #include "services\CareService.h"
@@ -86,6 +88,8 @@ private slots:
     void voiceInteractionCompletesAndRetainsContext();
     void voiceInteractionFailuresCancelAndRecover();
     void openAiCompatibleProviderHandlesSuccessErrorsAndTimeout();
+    void aliyunProvidersUseNativeProtocols();
+    void providerFactorySupportsMixedProviders();
     void networkVoiceInteractionRunsEndToEnd();
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
@@ -138,9 +142,9 @@ public:
     int stopCount = 0;
 };
 
-class FakeAiProvider final : public AiProviderPort {
+class FakeAsrProvider final : public AsrProviderPort {
 public:
-    using AiProviderPort::AiProviderPort;
+    using AsrProviderPort::AsrProviderPort;
 
     void transcribe(quint64 sessionId, const QByteArray& wavAudio) override
     {
@@ -148,6 +152,32 @@ public:
         transcribedAudio = wavAudio;
         ++transcribeCount;
     }
+    void cancel(quint64 sessionId) override
+    {
+        canceledSessionId = sessionId;
+        ++cancelCount;
+    }
+
+    void succeedAsr(quint64 sessionId, const QString& text)
+    { emit transcriptionReady(sessionId, text); }
+    void fail(quint64 sessionId, const QString& message)
+    {
+        emit requestFailed(sessionId, providerResponseError(
+            AiProviderErrorCode::NetworkError, QStringLiteral("fake/asr"),
+            message, QStringLiteral("fake failure")));
+    }
+
+    quint64 activeSessionId = 0;
+    quint64 canceledSessionId = 0;
+    QByteArray transcribedAudio;
+    int transcribeCount = 0;
+    int cancelCount = 0;
+};
+
+class FakeLlmProvider final : public LlmProviderPort {
+public:
+    using LlmProviderPort::LlmProviderPort;
+
     void completeChat(quint64 sessionId,
                       const QList<AiChatMessage>& chatMessages) override
     {
@@ -155,6 +185,31 @@ public:
         messages = chatMessages;
         ++chatCount;
     }
+    void cancel(quint64 sessionId) override
+    {
+        canceledSessionId = sessionId;
+        ++cancelCount;
+    }
+    void succeed(quint64 sessionId, const QString& text)
+    { emit chatCompletionReady(sessionId, text); }
+    void fail(quint64 sessionId, const QString& message)
+    {
+        emit requestFailed(sessionId, providerResponseError(
+            AiProviderErrorCode::ServerError, QStringLiteral("fake/llm"),
+            message, QStringLiteral("fake failure")));
+    }
+
+    quint64 activeSessionId = 0;
+    quint64 canceledSessionId = 0;
+    QList<AiChatMessage> messages;
+    int chatCount = 0;
+    int cancelCount = 0;
+};
+
+class FakeTtsProvider final : public TtsProviderPort {
+public:
+    using TtsProviderPort::TtsProviderPort;
+
     void synthesize(quint64 sessionId, const QString& text) override
     {
         activeSessionId = sessionId;
@@ -166,23 +221,18 @@ public:
         canceledSessionId = sessionId;
         ++cancelCount;
     }
-
-    void succeedAsr(quint64 sessionId, const QString& text)
-    { emit transcriptionReady(sessionId, text); }
-    void succeedLlm(quint64 sessionId, const QString& text)
-    { emit chatCompletionReady(sessionId, text); }
-    void succeedTts(quint64 sessionId, const QByteArray& audio)
+    void succeed(quint64 sessionId, const QByteArray& audio)
     { emit speechReady(sessionId, audio); }
-    void fail(quint64 sessionId, AiRequestStage stage, const QString& message)
-    { emit requestFailed(sessionId, stage, message, QStringLiteral("fake failure")); }
+    void fail(quint64 sessionId, const QString& message)
+    {
+        emit requestFailed(sessionId, providerResponseError(
+            AiProviderErrorCode::RateLimited, QStringLiteral("fake/tts"),
+            message, QStringLiteral("fake failure")));
+    }
 
     quint64 activeSessionId = 0;
     quint64 canceledSessionId = 0;
-    QByteArray transcribedAudio;
-    QList<AiChatMessage> messages;
     QString synthesizedText;
-    int transcribeCount = 0;
-    int chatCount = 0;
     int ttsCount = 0;
     int cancelCount = 0;
 };
@@ -234,22 +284,29 @@ public:
 AiConfiguration validAiConfiguration()
 {
     AiConfiguration configuration;
-    configuration.apiBaseUrl = QUrl(QStringLiteral("http://127.0.0.1/v1"));
-    configuration.apiKey = QStringLiteral("test-token");
-    configuration.asrModel = QStringLiteral("test-asr");
-    configuration.llmModel = QStringLiteral("test-llm");
-    configuration.ttsModel = QStringLiteral("test-tts");
-    configuration.ttsVoice = QStringLiteral("test-voice");
-    configuration.systemPrompt = QStringLiteral("请简短回答");
-    configuration.requestTimeoutMs = 1'000;
-    configuration.recordingMaximumMs = 5'000;
-    configuration.historyTurns = 2;
+    configuration.asr.provider = QStringLiteral("openai-compatible");
+    configuration.asr.apiBaseUrl = QUrl(QStringLiteral("http://127.0.0.1/v1"));
+    configuration.asr.apiKey = QStringLiteral("asr-token");
+    configuration.asr.model = QStringLiteral("test-asr");
+    configuration.llm.provider = QStringLiteral("openai-compatible");
+    configuration.llm.apiBaseUrl = QUrl(QStringLiteral("http://127.0.0.1/v1"));
+    configuration.llm.apiKey = QStringLiteral("llm-token");
+    configuration.llm.model = QStringLiteral("test-llm");
+    configuration.tts.provider = QStringLiteral("openai-compatible");
+    configuration.tts.apiBaseUrl = QUrl(QStringLiteral("http://127.0.0.1/v1"));
+    configuration.tts.apiKey = QStringLiteral("tts-token");
+    configuration.tts.model = QStringLiteral("test-tts");
+    configuration.tts.voice = QStringLiteral("test-voice");
+    configuration.voice.systemPrompt = QStringLiteral("请简短回答");
+    configuration.voice.requestTimeoutMs = 1'000;
+    configuration.voice.recordingMaximumMs = 5'000;
+    configuration.voice.historyTurns = 2;
     return configuration;
 }
 
 class AiHttpStub final : public QObject {
 public:
-    enum class Mode { Success, HttpError, InvalidJson, Hang };
+    enum class Mode { Success, HttpError, Unauthorized, RateLimited, InvalidJson, Hang };
 
     explicit AiHttpStub(QObject* parent = nullptr)
         : QObject(parent)
@@ -279,10 +336,13 @@ public:
                     authorizations.append(headerValue(headers, "authorization:"));
                     if (mode == Mode::Hang)
                         return;
-                    sendResponse(socket, responseFor(paths.last()));
+                    sendResponse(socket, responseFor(paths.last(), bodies.last()));
                 });
-                connect(socket, &QTcpSocket::disconnected,
-                        socket, &QTcpSocket::deleteLater);
+                connect(socket, &QTcpSocket::disconnected, this, [this, socket] {
+                    m_buffers.remove(socket);
+                    m_handled.remove(socket);
+                    socket->deleteLater();
+                });
             }
         });
     }
@@ -295,6 +355,12 @@ public:
     QUrl baseUrl() const
     {
         return QUrl(QStringLiteral("http://127.0.0.1:%1/v1")
+                        .arg(m_server.serverPort()));
+    }
+
+    QUrl aliyunBaseUrl() const
+    {
+        return QUrl(QStringLiteral("http://127.0.0.1:%1/api/v1")
                         .arg(m_server.serverPort()));
     }
 
@@ -315,11 +381,19 @@ private:
         return {};
     }
 
-    QByteArray responseFor(const QByteArray& path) const
+    QByteArray responseFor(const QByteArray& path, const QByteArray& requestBody) const
     {
         if (mode == Mode::HttpError)
             return QByteArrayLiteral("HTTP/1.1 503 Service Unavailable\r\nContent-Type: application/json\r\n")
                 + contentLength(QByteArrayLiteral("{\"error\":{\"message\":\"offline\"}}"));
+        if (mode == Mode::Unauthorized)
+            return QByteArrayLiteral("HTTP/1.1 401 Unauthorized\r\nContent-Type: application/json\r\n")
+                + contentLength(QByteArrayLiteral(
+                    "{\"code\":\"InvalidApiKey\",\"message\":\"invalid key\"}"));
+        if (mode == Mode::RateLimited)
+            return QByteArrayLiteral("HTTP/1.1 429 Too Many Requests\r\nContent-Type: application/json\r\n")
+                + contentLength(QByteArrayLiteral(
+                    "{\"error\":{\"code\":\"rate_limit\",\"message\":\"slow down\"}}"));
         if (mode == Mode::InvalidJson)
             return QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
                 + contentLength(QByteArrayLiteral("not-json"));
@@ -331,6 +405,21 @@ private:
             return QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
                 + contentLength(QByteArrayLiteral(
                     "{\"choices\":[{\"message\":{\"content\":\"你好呀\"}}]}"));
+        }
+        if (path.endsWith("/services/aigc/multimodal-generation/generation")
+            || path.endsWith("/services/audio/tts/SpeechSynthesizer")) {
+            if (requestBody.contains("asr")) {
+                return QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
+                    + contentLength(QByteArrayLiteral(
+                        "{\"output\":{\"text\":\"阿里云识别成功\"},\"request_id\":\"asr-test\"}"));
+            }
+            const QByteArray audioUrl = QStringLiteral(
+                "http://127.0.0.1:%1/generated.wav").arg(m_server.serverPort()).toUtf8();
+            const QByteArray json = QByteArrayLiteral(
+                "{\"output\":{\"audio\":{\"data\":\"\",\"url\":\"")
+                + audioUrl + QByteArrayLiteral("\"}},\"request_id\":\"tts-test\"}");
+            return QByteArrayLiteral("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n")
+                + contentLength(json);
         }
         const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
             QByteArray(320, '\0'));
@@ -443,6 +532,7 @@ void V02Test::initTestCase()
     qRegisterMetaType<WifiNetwork>();
     qRegisterMetaType<QList<WifiNetwork>>();
     qRegisterMetaType<VideoCallSnapshot>();
+    qRegisterMetaType<AiProviderError>();
     QFile styleFile(QStringLiteral(":/styles/app.qss"));
     QVERIFY(styleFile.open(QIODevice::ReadOnly | QIODevice::Text));
     qApp->setStyleSheet(QString::fromUtf8(styleFile.readAll()));
@@ -1116,13 +1206,24 @@ void V02Test::aiConfigurationAndWavEncoding()
     QFile file(path);
     QVERIFY(file.open(QIODevice::WriteOnly));
     file.write(
-        "[ai]\n"
-        "api_base_url=http://ai.local:8000/v1\n"
-        "api_key=secret\n"
-        "asr_model=asr-one\n"
-        "llm_model=llm-one\n"
-        "tts_model=tts-one\n"
-        "tts_voice=warm\n"
+        "[asr]\n"
+        "provider=aliyun\n"
+        "api_base_url=http://asr.local/api/v1\n"
+        "api_key=asr-secret\n"
+        "model=asr-one\n"
+        "language=zh\n"
+        "[llm]\n"
+        "provider=openai-compatible\n"
+        "api_base_url=http://llm.local/v1\n"
+        "api_key=llm-secret\n"
+        "model=llm-one\n"
+        "[tts]\n"
+        "provider=aliyun\n"
+        "api_base_url=http://tts.local/api/v1\n"
+        "api_key=tts-secret\n"
+        "model=tts-one\n"
+        "voice=warm\n"
+        "[voice]\n"
         "system_prompt=be kind\n"
         "request_timeout_ms=4500\n"
         "recording_maximum_ms=9000\n"
@@ -1134,11 +1235,29 @@ void V02Test::aiConfigurationAndWavEncoding()
     const AiConfiguration configuration = repository.load(&error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
     QVERIFY(configuration.isValid());
-    QCOMPARE(configuration.apiBaseUrl,
-             QUrl(QStringLiteral("http://ai.local:8000/v1")));
-    QCOMPARE(configuration.asrModel, QStringLiteral("asr-one"));
-    QCOMPARE(configuration.requestTimeoutMs, 4'500);
-    QCOMPARE(configuration.historyTurns, 3);
+    QCOMPARE(configuration.asr.provider, QStringLiteral("aliyun"));
+    QCOMPARE(configuration.asr.apiBaseUrl,
+             QUrl(QStringLiteral("http://asr.local/api/v1")));
+    QCOMPARE(configuration.asr.apiKey, QStringLiteral("asr-secret"));
+    QCOMPARE(configuration.asr.model, QStringLiteral("asr-one"));
+    QCOMPARE(configuration.llm.apiBaseUrl,
+             QUrl(QStringLiteral("http://llm.local/v1")));
+    QCOMPARE(configuration.llm.apiKey, QStringLiteral("llm-secret"));
+    QCOMPARE(configuration.tts.apiKey, QStringLiteral("tts-secret"));
+    QCOMPARE(configuration.tts.voice, QStringLiteral("warm"));
+    QCOMPARE(configuration.voice.requestTimeoutMs, 4'500);
+    QCOMPARE(configuration.voice.historyTurns, 3);
+
+    qputenv("LONGPET_ASR_API_KEY", QByteArrayLiteral("environment-asr-key"));
+    qputenv("LONGPET_LLM_BASE_URL", QByteArrayLiteral("http://environment-llm/v1"));
+    const AiConfiguration overridden = repository.load(&error);
+    qunsetenv("LONGPET_ASR_API_KEY");
+    qunsetenv("LONGPET_LLM_BASE_URL");
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(overridden.asr.apiKey, QStringLiteral("environment-asr-key"));
+    QCOMPARE(overridden.llm.apiBaseUrl,
+             QUrl(QStringLiteral("http://environment-llm/v1")));
+    QCOMPARE(overridden.tts.apiKey, QStringLiteral("tts-secret"));
 
     const QByteArray pcm = QByteArray::fromHex("0102030405060708");
     const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(pcm);
@@ -1150,16 +1269,34 @@ void V02Test::aiConfigurationAndWavEncoding()
 
     AiConfiguration invalid;
     QVERIFY(!invalid.isValid());
-    QVERIFY(invalid.validationError().contains(QStringLiteral("Gateway")));
+    QVERIFY(invalid.validationError().contains(QStringLiteral("Provider")));
+
+    const QString legacyPath = QDir(directory.path()).filePath(
+        QStringLiteral("legacy-ai.ini"));
+    QFile legacyFile(legacyPath);
+    QVERIFY(legacyFile.open(QIODevice::WriteOnly));
+    legacyFile.write(
+        "[ai]\napi_base_url=http://legacy.local/v1\napi_key=legacy\n"
+        "asr_model=old-asr\nllm_model=old-llm\ntts_model=old-tts\n"
+        "tts_voice=old-voice\nrequest_timeout_ms=5000\n");
+    legacyFile.close();
+    const AiConfiguration legacy = AiConfigRepository(legacyPath).load(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(legacy.isValid());
+    QCOMPARE(legacy.asr.provider, QStringLiteral("openai-compatible"));
+    QCOMPARE(legacy.llm.apiKey, QStringLiteral("legacy"));
+    QCOMPARE(legacy.tts.model, QStringLiteral("old-tts"));
 }
 
 void V02Test::voiceInteractionCompletesAndRetainsContext()
 {
-    FakeAiProvider provider;
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
     FakeVoiceAudioPort audio;
     MediaSessionCoordinator mediaSessions;
-    VoiceInteractionService service(validAiConfiguration(), &provider, &audio,
-                                    &mediaSessions);
+    VoiceInteractionService service(validAiConfiguration(), &asr, &llm, &tts,
+                                    &audio, &mediaSessions);
     QSignalSpy activitySpy(&service, &VoiceInteractionService::activityChanged);
     const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
         QByteArray(640, '\1'));
@@ -1176,21 +1313,21 @@ void V02Test::voiceInteractionCompletesAndRetainsContext()
     QVERIFY(service.finishRecording().success);
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Recognizing);
     audio.completeRecording(firstSession, wav);
-    QCOMPARE(provider.transcribeCount, 1);
-    QCOMPARE(provider.transcribedAudio, wav);
+    QCOMPARE(asr.transcribeCount, 1);
+    QCOMPARE(asr.transcribedAudio, wav);
 
-    provider.succeedAsr(firstSession, QStringLiteral("今天天气好吗"));
+    asr.succeedAsr(firstSession, QStringLiteral("今天天气好吗"));
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Thinking);
     QCOMPARE(service.snapshot().transcript, QStringLiteral("今天天气好吗"));
-    QCOMPARE(provider.chatCount, 1);
-    QCOMPARE(provider.messages.size(), 2);
-    QCOMPARE(provider.messages.first().role, QStringLiteral("system"));
-    QCOMPARE(provider.messages.last().content, QStringLiteral("今天天气好吗"));
+    QCOMPARE(llm.chatCount, 1);
+    QCOMPARE(llm.messages.size(), 2);
+    QCOMPARE(llm.messages.first().role, QStringLiteral("system"));
+    QCOMPARE(llm.messages.last().content, QStringLiteral("今天天气好吗"));
 
-    provider.succeedLlm(firstSession, QStringLiteral("今天适合出去散散步。"));
-    QCOMPARE(provider.ttsCount, 1);
-    QCOMPARE(provider.synthesizedText, QStringLiteral("今天适合出去散散步。"));
-    provider.succeedTts(firstSession, speech);
+    llm.succeed(firstSession, QStringLiteral("今天适合出去散散步。"));
+    QCOMPARE(tts.ttsCount, 1);
+    QCOMPARE(tts.synthesizedText, QStringLiteral("今天适合出去散散步。"));
+    tts.succeed(firstSession, speech);
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Speaking);
     QCOMPARE(audio.playedAudio, speech);
     audio.completePlayback(firstSession);
@@ -1204,21 +1341,23 @@ void V02Test::voiceInteractionCompletesAndRetainsContext()
     QVERIFY(second.snapshot.sessionId > firstSession);
     QVERIFY(service.finishRecording().success);
     audio.completeRecording(second.snapshot.sessionId, wav);
-    provider.succeedAsr(second.snapshot.sessionId, QStringLiteral("那明天呢"));
-    QCOMPARE(provider.messages.size(), 4);
-    QCOMPARE(provider.messages.at(1).role, QStringLiteral("user"));
-    QCOMPARE(provider.messages.at(2).role, QStringLiteral("assistant"));
-    QCOMPARE(provider.messages.last().content, QStringLiteral("那明天呢"));
+    asr.succeedAsr(second.snapshot.sessionId, QStringLiteral("那明天呢"));
+    QCOMPARE(llm.messages.size(), 4);
+    QCOMPARE(llm.messages.at(1).role, QStringLiteral("user"));
+    QCOMPARE(llm.messages.at(2).role, QStringLiteral("assistant"));
+    QCOMPARE(llm.messages.last().content, QStringLiteral("那明天呢"));
     service.cancelInteraction();
 }
 
 void V02Test::voiceInteractionFailuresCancelAndRecover()
 {
-    FakeAiProvider provider;
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
     FakeVoiceAudioPort audio;
     MediaSessionCoordinator mediaSessions;
-    VoiceInteractionService service(validAiConfiguration(), &provider, &audio,
-                                    &mediaSessions);
+    VoiceInteractionService service(validAiConfiguration(), &asr, &llm, &tts,
+                                    &audio, &mediaSessions);
     const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
         QByteArray(640, '\1'));
     const QByteArray speech = VoiceAudioAdapter::pcmS16LeMonoToWav(
@@ -1236,31 +1375,28 @@ void V02Test::voiceInteractionFailuresCancelAndRecover()
 
     quint64 sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
-    provider.fail(sessionId, AiRequestStage::Asr,
-                  QStringLiteral("网络连接失败，请检查 Wi-Fi"));
+    asr.fail(sessionId, QStringLiteral("网络连接失败，请检查 Wi-Fi"));
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
     QVERIFY(mediaSessions.owner().isEmpty());
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
-    provider.succeedAsr(sessionId, QStringLiteral("你好"));
-    provider.fail(sessionId, AiRequestStage::Llm,
-                  QStringLiteral("AI 对话服务暂时不可用"));
+    asr.succeedAsr(sessionId, QStringLiteral("你好"));
+    llm.fail(sessionId, QStringLiteral("AI 对话服务暂时不可用"));
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
-    provider.succeedAsr(sessionId, QStringLiteral("你好"));
-    provider.succeedLlm(sessionId, QStringLiteral("你好呀"));
-    provider.fail(sessionId, AiRequestStage::Tts,
-                  QStringLiteral("语音生成服务暂时不可用"));
+    asr.succeedAsr(sessionId, QStringLiteral("你好"));
+    llm.succeed(sessionId, QStringLiteral("你好呀"));
+    tts.fail(sessionId, QStringLiteral("语音生成服务暂时不可用"));
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Failed);
 
     sessionId = beginRecognizing();
     QVERIFY(sessionId != 0);
-    provider.succeedAsr(sessionId, QStringLiteral("你好"));
-    provider.succeedLlm(sessionId, QStringLiteral("你好呀"));
-    provider.succeedTts(sessionId, speech);
+    asr.succeedAsr(sessionId, QStringLiteral("你好"));
+    llm.succeed(sessionId, QStringLiteral("你好呀"));
+    tts.succeed(sessionId, speech);
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Speaking);
     audio.fail(sessionId, VoiceAudioStage::Playback,
                QStringLiteral("扬声器播放失败"));
@@ -1271,10 +1407,13 @@ void V02Test::voiceInteractionFailuresCancelAndRecover()
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Recognizing);
     QVERIFY(service.cancelInteraction().success);
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Idle);
-    const int chatCount = provider.chatCount;
-    provider.succeedAsr(sessionId, QStringLiteral("这个结果应被忽略"));
+    const int chatCount = llm.chatCount;
+    asr.succeedAsr(sessionId, QStringLiteral("这个结果应被忽略"));
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Idle);
-    QCOMPARE(provider.chatCount, chatCount);
+    QCOMPARE(llm.chatCount, chatCount);
+    QVERIFY(asr.cancelCount > 0);
+    QVERIFY(llm.cancelCount > 0);
+    QVERIFY(tts.cancelCount > 0);
     QVERIFY(mediaSessions.owner().isEmpty());
 
     MediaSessionCoordinator busySessions;
@@ -1290,22 +1429,27 @@ void V02Test::openAiCompatibleProviderHandlesSuccessErrorsAndTimeout()
     AiHttpStub server;
     QVERIFY(server.listen());
     AiConfiguration configuration = validAiConfiguration();
-    configuration.apiBaseUrl = server.baseUrl();
-    OpenAiCompatibleProvider provider(configuration);
-    QSignalSpy asrSpy(&provider, &AiProviderPort::transcriptionReady);
-    QSignalSpy chatSpy(&provider, &AiProviderPort::chatCompletionReady);
-    QSignalSpy speechSpy(&provider, &AiProviderPort::speechReady);
-    QSignalSpy failureSpy(&provider, &AiProviderPort::requestFailed);
+    configuration.asr.apiBaseUrl = server.baseUrl();
+    configuration.llm.apiBaseUrl = server.baseUrl();
+    configuration.tts.apiBaseUrl = server.baseUrl();
+    OpenAiAsrProvider asr(configuration.asr, 1'000);
+    OpenAiCompatibleLlmProvider llm(configuration.llm, 1'000);
+    OpenAiTtsProvider tts(configuration.tts, 1'000);
+    QSignalSpy asrSpy(&asr, &AsrProviderPort::transcriptionReady);
+    QSignalSpy chatSpy(&llm, &LlmProviderPort::chatCompletionReady);
+    QSignalSpy speechSpy(&tts, &TtsProviderPort::speechReady);
+    QSignalSpy asrFailureSpy(&asr, &AsrProviderPort::requestFailed);
+    QSignalSpy llmFailureSpy(&llm, &LlmProviderPort::requestFailed);
     const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
         QByteArray(320, '\1'));
 
-    provider.transcribe(11, wav);
+    asr.transcribe(11, wav);
     QVERIFY(asrSpy.wait(2'000));
     QCOMPARE(asrSpy.first().at(0).toULongLong(), 11ULL);
     QCOMPARE(asrSpy.first().at(1).toString(), QStringLiteral("你好 LongPet"));
     QVERIFY(server.bodies.first().contains("name=\"model\""));
 
-    provider.completeChat(11, {
+    llm.completeChat(11, {
         {QStringLiteral("system"), QStringLiteral("简短回答")},
         {QStringLiteral("user"), QStringLiteral("你好")}
     });
@@ -1313,7 +1457,7 @@ void V02Test::openAiCompatibleProviderHandlesSuccessErrorsAndTimeout()
     QCOMPARE(chatSpy.first().at(1).toString(), QStringLiteral("你好呀"));
     QVERIFY(server.bodies.at(1).contains("test-llm"));
 
-    provider.synthesize(11, QStringLiteral("你好呀"));
+    tts.synthesize(11, QStringLiteral("你好呀"));
     QVERIFY(speechSpy.wait(2'000));
     QVERIFY(speechSpy.first().at(1).toByteArray().startsWith("RIFF"));
     QCOMPARE(server.paths, QList<QByteArray>({
@@ -1321,47 +1465,154 @@ void V02Test::openAiCompatibleProviderHandlesSuccessErrorsAndTimeout()
         QByteArrayLiteral("/v1/chat/completions"),
         QByteArrayLiteral("/v1/audio/speech")
     }));
-    for (const QByteArray& authorization : server.authorizations)
-        QCOMPARE(authorization, QByteArrayLiteral("Bearer test-token"));
+    QCOMPARE(server.authorizations.at(0), QByteArrayLiteral("Bearer asr-token"));
+    QCOMPARE(server.authorizations.at(1), QByteArrayLiteral("Bearer llm-token"));
+    QCOMPARE(server.authorizations.at(2), QByteArrayLiteral("Bearer tts-token"));
 
     server.mode = AiHttpStub::Mode::HttpError;
-    provider.transcribe(12, wav);
-    QVERIFY(failureSpy.wait(2'000));
-    QCOMPARE(failureSpy.last().at(0).toULongLong(), 12ULL);
-    QVERIFY(failureSpy.last().at(3).toString().contains(QStringLiteral("HTTP 503")));
+    asr.transcribe(12, wav);
+    QVERIFY(asrFailureSpy.wait(2'000));
+    QCOMPARE(asrFailureSpy.last().at(0).toULongLong(), 12ULL);
+    const AiProviderError serverError = qvariant_cast<AiProviderError>(
+        asrFailureSpy.last().at(1));
+    QCOMPARE(serverError.code, AiProviderErrorCode::ServerError);
+    QCOMPARE(serverError.httpStatus, 503);
+    QVERIFY(serverError.diagnostic.contains(QStringLiteral("HTTP 503")));
+
+    server.mode = AiHttpStub::Mode::Unauthorized;
+    int llmFailures = llmFailureSpy.count();
+    llm.completeChat(12, {{QStringLiteral("user"), QStringLiteral("auth")}});
+    QTRY_COMPARE_WITH_TIMEOUT(llmFailureSpy.count(), llmFailures + 1, 2'000);
+    const AiProviderError unauthorized = qvariant_cast<AiProviderError>(
+        llmFailureSpy.last().at(1));
+    QCOMPARE(unauthorized.code, AiProviderErrorCode::Unauthorized);
+    QCOMPARE(unauthorized.apiCode, QStringLiteral("InvalidApiKey"));
+
+    server.mode = AiHttpStub::Mode::RateLimited;
+    llmFailures = llmFailureSpy.count();
+    llm.completeChat(12, {{QStringLiteral("user"), QStringLiteral("rate")}});
+    QTRY_COMPARE_WITH_TIMEOUT(llmFailureSpy.count(), llmFailures + 1, 2'000);
+    QCOMPARE(qvariant_cast<AiProviderError>(llmFailureSpy.last().at(1)).code,
+             AiProviderErrorCode::RateLimited);
 
     server.mode = AiHttpStub::Mode::InvalidJson;
-    provider.completeChat(13, {{QStringLiteral("user"), QStringLiteral("test")}});
-    QVERIFY(failureSpy.wait(2'000));
-    QVERIFY(failureSpy.last().at(2).toString().contains(QStringLiteral("无法读取")));
+    llmFailures = llmFailureSpy.count();
+    llm.completeChat(13, {{QStringLiteral("user"), QStringLiteral("test")}});
+    QTRY_COMPARE_WITH_TIMEOUT(llmFailureSpy.count(), llmFailures + 1, 2'000);
+    QCOMPARE(qvariant_cast<AiProviderError>(llmFailureSpy.last().at(1)).code,
+             AiProviderErrorCode::InvalidResponse);
 
     AiHttpStub hangingServer;
     QVERIFY(hangingServer.listen());
-    configuration.apiBaseUrl = hangingServer.baseUrl();
-    configuration.requestTimeoutMs = 1'000;
-    OpenAiCompatibleProvider timeoutProvider(configuration);
-    QSignalSpy timeoutSpy(&timeoutProvider, &AiProviderPort::requestFailed);
+    configuration.llm.apiBaseUrl = hangingServer.baseUrl();
+    OpenAiCompatibleLlmProvider timeoutProvider(configuration.llm, 1'000);
+    QSignalSpy timeoutSpy(&timeoutProvider, &LlmProviderPort::requestFailed);
     hangingServer.mode = AiHttpStub::Mode::Hang;
     timeoutProvider.completeChat(14,
         {{QStringLiteral("user"), QStringLiteral("timeout")}});
     QVERIFY(timeoutSpy.wait(2'000));
-    QVERIFY(timeoutSpy.first().at(2).toString().contains(QStringLiteral("超时")));
+    QCOMPARE(qvariant_cast<AiProviderError>(timeoutSpy.first().at(1)).code,
+             AiProviderErrorCode::Timeout);
+
+    OpenAiCompatibleLlmProvider cancelledProvider(configuration.llm, 1'000);
+    QSignalSpy cancelledSpy(&cancelledProvider, &LlmProviderPort::requestFailed);
+    cancelledProvider.completeChat(16,
+        {{QStringLiteral("user"), QStringLiteral("cancel")}});
+    cancelledProvider.cancel(16);
+    QTest::qWait(100);
+    QCOMPARE(cancelledSpy.count(), 0);
 
     QTcpServer portReservation;
     QVERIFY(portReservation.listen(QHostAddress::LocalHost, 0));
     const quint16 closedPort = portReservation.serverPort();
     portReservation.close();
-    configuration.apiBaseUrl = QUrl(QStringLiteral("http://127.0.0.1:%1/v1")
-                                         .arg(closedPort));
-    OpenAiCompatibleProvider offlineProvider(configuration);
-    QSignalSpy offlineSpy(&offlineProvider, &AiProviderPort::requestFailed);
+    configuration.llm.apiBaseUrl = QUrl(QStringLiteral("http://127.0.0.1:%1/v1")
+                                             .arg(closedPort));
+    OpenAiCompatibleLlmProvider offlineProvider(configuration.llm, 1'000);
+    QSignalSpy offlineSpy(&offlineProvider, &LlmProviderPort::requestFailed);
     offlineProvider.completeChat(15,
         {{QStringLiteral("user"), QStringLiteral("offline")}});
     QVERIFY(offlineSpy.wait(2'000));
-    const QString offlineMessage = offlineSpy.first().at(2).toString();
-    QVERIFY2(offlineMessage.contains(QStringLiteral("网络连接失败"))
-                 || offlineMessage.contains(QStringLiteral("超时")),
-             qPrintable(offlineMessage));
+    const AiProviderError offlineError = qvariant_cast<AiProviderError>(
+        offlineSpy.first().at(1));
+    QVERIFY(offlineError.code == AiProviderErrorCode::NetworkError
+            || offlineError.code == AiProviderErrorCode::Timeout);
+}
+
+void V02Test::aliyunProvidersUseNativeProtocols()
+{
+    AiHttpStub server;
+    QVERIFY(server.listen());
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.asr.provider = QStringLiteral("aliyun");
+    configuration.asr.apiBaseUrl = server.aliyunBaseUrl();
+    configuration.asr.apiKey = QStringLiteral("aliyun-asr-key");
+    configuration.asr.model = QStringLiteral("qwen-audio-3.0-asr-flash");
+    configuration.tts.provider = QStringLiteral("aliyun");
+    configuration.tts.apiBaseUrl = server.aliyunBaseUrl();
+    configuration.tts.apiKey = QStringLiteral("aliyun-tts-key");
+    configuration.tts.model = QStringLiteral("qwen3-tts-flash");
+    configuration.tts.voice = QStringLiteral("Cherry");
+
+    AliyunAsrProvider asr(configuration.asr, 1'000);
+    AliyunTtsProvider tts(configuration.tts, 1'000);
+    QSignalSpy asrSpy(&asr, &AsrProviderPort::transcriptionReady);
+    QSignalSpy speechSpy(&tts, &TtsProviderPort::speechReady);
+    const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
+        QByteArray(320, '\1'));
+
+    asr.transcribe(21, wav);
+    QVERIFY(asrSpy.wait(2'000));
+    QCOMPARE(asrSpy.first().at(1).toString(), QStringLiteral("阿里云识别成功"));
+    QVERIFY(server.bodies.at(0).contains("data:audio/wav;base64,"));
+    QVERIFY(server.bodies.at(0).contains("input_audio"));
+    QVERIFY(server.bodies.at(0).contains("language_hints"));
+
+    tts.synthesize(21, QStringLiteral("你好 LongPet"));
+    QVERIFY(speechSpy.wait(2'000));
+    QVERIFY(speechSpy.first().at(1).toByteArray().startsWith("RIFF"));
+    QCOMPARE(server.paths, QList<QByteArray>({
+        QByteArrayLiteral("/api/v1/services/aigc/multimodal-generation/generation"),
+        QByteArrayLiteral("/api/v1/services/aigc/multimodal-generation/generation"),
+        QByteArrayLiteral("/generated.wav")
+    }));
+    QVERIFY(server.bodies.at(1).contains("qwen3-tts-flash"));
+    QVERIFY(server.bodies.at(1).contains("Cherry"));
+    QCOMPARE(server.authorizations.at(0), QByteArrayLiteral("Bearer aliyun-asr-key"));
+    QCOMPARE(server.authorizations.at(1), QByteArrayLiteral("Bearer aliyun-tts-key"));
+    QVERIFY(server.authorizations.at(2).isEmpty());
+
+    configuration.tts.model = QStringLiteral("qwen-audio-3.0-tts-flash");
+    configuration.tts.voice = QStringLiteral("longanhuan_v3.6");
+    AliyunTtsProvider currentTts(configuration.tts, 1'000);
+    QSignalSpy currentSpeechSpy(&currentTts, &TtsProviderPort::speechReady);
+    currentTts.synthesize(22, QStringLiteral("当前接口"));
+    QVERIFY(currentSpeechSpy.wait(2'000));
+    QCOMPARE(server.paths.at(3),
+             QByteArrayLiteral("/api/v1/services/audio/tts/SpeechSynthesizer"));
+    QVERIFY(server.bodies.at(3).contains("sample_rate"));
+}
+
+void V02Test::providerFactorySupportsMixedProviders()
+{
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.asr.provider = QStringLiteral("aliyun");
+    configuration.llm.provider = QStringLiteral("openai-compatible");
+    configuration.tts.provider = QStringLiteral("openai");
+    const auto asr = AiProviderFactory::createAsr(configuration.asr, 1'000);
+    const auto llm = AiProviderFactory::createLlm(configuration.llm, 1'000);
+    const auto tts = AiProviderFactory::createTts(configuration.tts, 1'000);
+    QVERIFY(dynamic_cast<AliyunAsrProvider*>(asr.get()));
+    QVERIFY(dynamic_cast<OpenAiCompatibleLlmProvider*>(llm.get()));
+    QVERIFY(dynamic_cast<OpenAiTtsProvider*>(tts.get()));
+
+    configuration.asr.provider = QStringLiteral("unknown-asr");
+    const auto unsupported = AiProviderFactory::createAsr(configuration.asr, 1'000);
+    QSignalSpy failureSpy(unsupported.get(), &AsrProviderPort::requestFailed);
+    unsupported->transcribe(99, QByteArrayLiteral("wav"));
+    QCOMPARE(failureSpy.count(), 1);
+    QCOMPARE(qvariant_cast<AiProviderError>(failureSpy.first().at(1)).code,
+             AiProviderErrorCode::UnsupportedProvider);
 }
 
 void V02Test::networkVoiceInteractionRunsEndToEnd()
@@ -1369,11 +1620,15 @@ void V02Test::networkVoiceInteractionRunsEndToEnd()
     AiHttpStub server;
     QVERIFY(server.listen());
     AiConfiguration configuration = validAiConfiguration();
-    configuration.apiBaseUrl = server.baseUrl();
-    OpenAiCompatibleProvider provider(configuration);
+    configuration.asr.apiBaseUrl = server.baseUrl();
+    configuration.llm.apiBaseUrl = server.baseUrl();
+    configuration.tts.apiBaseUrl = server.baseUrl();
+    OpenAiAsrProvider asr(configuration.asr, 1'000);
+    OpenAiCompatibleLlmProvider llm(configuration.llm, 1'000);
+    OpenAiTtsProvider tts(configuration.tts, 1'000);
     FakeVoiceAudioPort audio;
     MediaSessionCoordinator mediaSessions;
-    VoiceInteractionService service(configuration, &provider, &audio,
+    VoiceInteractionService service(configuration, &asr, &llm, &tts, &audio,
                                     &mediaSessions);
     const QByteArray recording = VoiceAudioAdapter::pcmS16LeMonoToWav(
         QByteArray(640, '\1'));
@@ -1495,10 +1750,12 @@ void V02Test::applicationControllerOwnsNavigation()
     MainWindow window;
     SystemService systemService;
     VideoCallService videoCallService;
-    FakeAiProvider aiProvider;
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
     FakeVoiceAudioPort voiceAudio;
     VoiceInteractionService voiceService(validAiConfiguration(),
-                                         &aiProvider, &voiceAudio);
+                                         &asr, &llm, &tts, &voiceAudio);
     AppController controller(&window, fixture.reminderService.get(), fixture.careService.get(),
                              fixture.settingsService.get(), &systemService, 15'000,
                              nullptr, &videoCallService, &voiceService);

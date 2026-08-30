@@ -1,0 +1,28 @@
+# 混合 Provider 架构示例。以下地址、模型和 Token 都是占位符。
+# A 厂 ASR、B 厂 LLM、C 厂 TTS 可以使用完全不同的服务器和密钥。
+
+[asr]
+provider=aliyun
+api_base_url=https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1
+api_key=replace-with-vendor-a-key
+model=qwen-audio-3.0-asr-flash
+language=zh
+
+[llm]
+provider=openai-compatible
+api_base_url=https://llm.vendor-b.example/v1
+api_key=replace-with-vendor-b-key
+model=vendor-b-chat-model
+
+[tts]
+provider=openai-compatible
+api_base_url=https://tts.vendor-c.example/v1
+api_key=replace-with-vendor-c-key
+model=vendor-c-tts-model
+voice=vendor-c-voice
+
+[voice]
+system_prompt=你是 LongPet，一位耐心、温和、回答简短的陪伴助手。请使用中文回答。
+request_timeout_ms=30000
+recording_maximum_ms=12000
+history_turns=4

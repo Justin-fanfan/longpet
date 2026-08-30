@@ -7,6 +7,7 @@
 
 class AppController;
 class AiConfigRepository;
+class AsrProviderPort;
 class AudioVolumeAdapter;
 class BacklightAdapter;
 class CareEventRepository;
@@ -21,7 +22,7 @@ class NetworkStatusAdapter;
 class NetworkManagerAdapter;
 class NetworkService;
 class PowerStatusAdapter;
-class OpenAiCompatibleProvider;
+class LlmProviderPort;
 class ReminderRepository;
 class ReminderService;
 class SettingsRepository;
@@ -32,6 +33,7 @@ class VideoCallMediaAdapter;
 class CallPromptPlayerAdapter;
 class VoiceAudioAdapter;
 class VoiceInteractionService;
+class TtsProviderPort;
 
 class Application final : public QObject {
     Q_OBJECT
@@ -61,7 +63,9 @@ private:
     std::unique_ptr<SettingsService> m_settingsService;
     std::unique_ptr<SystemService> m_systemService;
     std::unique_ptr<MediaSessionCoordinator> m_mediaSessionCoordinator;
-    std::unique_ptr<OpenAiCompatibleProvider> m_aiProvider;
+    std::unique_ptr<AsrProviderPort> m_asrProvider;
+    std::unique_ptr<LlmProviderPort> m_llmProvider;
+    std::unique_ptr<TtsProviderPort> m_ttsProvider;
     std::unique_ptr<VoiceAudioAdapter> m_voiceAudioAdapter;
     std::unique_ptr<VoiceInteractionService> m_voiceInteractionService;
     std::unique_ptr<VideoCallMediaAdapter> m_videoCallMediaAdapter;

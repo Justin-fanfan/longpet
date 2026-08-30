@@ -6,8 +6,10 @@
 #include <QObject>
 #include <QTimer>
 
-class AiProviderPort;
+class AsrProviderPort;
+class LlmProviderPort;
 class MediaSessionCoordinator;
+class TtsProviderPort;
 class VoiceAudioPort;
 
 class VoiceInteractionService final : public QObject {
@@ -15,7 +17,9 @@ class VoiceInteractionService final : public QObject {
 
 public:
     VoiceInteractionService(const AiConfiguration& configuration,
-                            AiProviderPort* provider,
+                            AsrProviderPort* asrProvider,
+                            LlmProviderPort* llmProvider,
+                            TtsProviderPort* ttsProvider,
                             VoiceAudioPort* audio,
                             MediaSessionCoordinator* mediaSessions = nullptr,
                             QObject* parent = nullptr);
@@ -39,8 +43,7 @@ private:
     void handleSpeech(quint64 sessionId, const QByteArray& audio);
     void handlePlaybackStarted(quint64 sessionId);
     void handlePlaybackFinished(quint64 sessionId);
-    void handleProviderFailure(quint64 sessionId, AiRequestStage stage,
-                               const QString& userMessage, const QString& diagnostic);
+    void handleProviderFailure(quint64 sessionId, const AiProviderError& error);
     void handleAudioFailure(quint64 sessionId, VoiceAudioStage stage,
                             const QString& userMessage, const QString& diagnostic);
     QList<AiChatMessage> messagesFor(const QString& userText) const;
@@ -51,7 +54,9 @@ private:
 
     static const QString MediaOwner;
     AiConfiguration m_configuration;
-    AiProviderPort* m_provider = nullptr;
+    AsrProviderPort* m_asrProvider = nullptr;
+    LlmProviderPort* m_llmProvider = nullptr;
+    TtsProviderPort* m_ttsProvider = nullptr;
     VoiceAudioPort* m_audio = nullptr;
     MediaSessionCoordinator* m_mediaSessions = nullptr;
     VoiceInteractionSnapshot m_snapshot;

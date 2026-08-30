@@ -1,15 +1,27 @@
-[ai]
-# Base URL 应包含兼容接口的公共前缀；程序会在后面追加
-# audio/transcriptions、chat/completions 和 audio/speech。
-api_base_url=https://api.example.com/v1
-api_key=replace-with-real-token
-
-asr_model=whisper-1
-llm_model=your-chat-model
-tts_model=your-tts-model
-tts_voice=alloy
+[asr]
+# 华北 2（北京）专属域名需将 {WorkspaceId} 替换为百炼业务空间 ID。
+provider=aliyun
+api_base_url=https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/api/v1
+api_key=replace-with-bailian-api-key
+model=qwen-audio-3.0-asr-flash
 language=zh
 
+[llm]
+# 百炼 Chat Completions 使用 OpenAI-compatible 协议。
+provider=openai-compatible
+api_base_url=https://{WorkspaceId}.cn-beijing.maas.aliyuncs.com/compatible-mode/v1
+api_key=replace-with-bailian-api-key
+model=qwen-plus
+
+[tts]
+# qwen3-tts-flash 使用 DashScope multimodal-generation HTTP 接口。
+provider=aliyun
+api_base_url=https://dashscope.aliyuncs.com/api/v1
+api_key=replace-with-bailian-api-key
+model=qwen3-tts-flash
+voice=Cherry
+
+[voice]
 system_prompt=你是 LongPet，一位耐心、温和、回答简短的陪伴助手。请使用中文回答，避免使用复杂术语。
 request_timeout_ms=30000
 recording_maximum_ms=12000
