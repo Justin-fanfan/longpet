@@ -165,7 +165,7 @@ void VoiceAudioAdapter::play(quint64 sessionId, const QByteArray& audio)
         QStringLiteral("!"), QStringLiteral("audioresample"),
         QStringLiteral("!"), QStringLiteral("alsasink"),
         QStringLiteral("device=%1").arg(playbackDevice()),
-        QStringLiteral("sync=false")
+        QStringLiteral("sync=true")
     });
     m_playbackProcess.start();
 #endif
