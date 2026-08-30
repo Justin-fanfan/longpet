@@ -2,6 +2,7 @@
 
 #include "pages/CarePage.h"
 #include "pages/CompanionPage.h"
+#include "pages/ConversationPage.h"
 #include "pages/HomePage.h"
 #include "pages/NetworkSetupPage.h"
 #include "pages/ReminderEditPage.h"
@@ -34,6 +35,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_stack->setObjectName(QStringLiteral("pageStack"));
     m_companionPage = new CompanionPage(m_stack);
     m_homePage = new HomePage(m_stack);
+    m_conversationPage = new ConversationPage(m_stack);
     m_carePage = new CarePage(m_stack);
     m_reminderPage = new ReminderPage(m_stack);
     m_reminderEditPage = new ReminderEditPage(m_stack);
@@ -42,6 +44,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_networkSetupPage = new NetworkSetupPage(m_stack);
     for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
                           static_cast<QWidget*>(m_homePage),
+                          static_cast<QWidget*>(m_conversationPage),
                           static_cast<QWidget*>(m_carePage),
                           static_cast<QWidget*>(m_reminderPage),
                           static_cast<QWidget*>(m_reminderEditPage),
@@ -58,6 +61,10 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::controlRequested);
     connect(m_homePage, &HomePage::talkRequested,
             this, &MainWindow::talkRequested);
+    connect(m_conversationPage, &ConversationPage::primaryRequested,
+            this, &MainWindow::voicePrimaryRequested);
+    connect(m_conversationPage, &ConversationPage::secondaryRequested,
+            this, &MainWindow::voiceSecondaryRequested);
     connect(m_homePage, &HomePage::careRequested,
             this, &MainWindow::careRequested);
     connect(m_homePage, &HomePage::videoCallRequested,
@@ -176,6 +183,12 @@ void MainWindow::setVideoCallSnapshot(const VideoCallSnapshot& snapshot)
     m_videoCallPage->setSnapshot(snapshot);
 }
 
+void MainWindow::setVoiceInteractionSnapshot(
+    const VoiceInteractionSnapshot& snapshot)
+{
+    m_conversationPage->setSnapshot(snapshot);
+}
+
 void MainWindow::setRemoteVideoFrame(const QImage& frame)
 {
     m_videoCallPage->setRemoteVideoFrame(frame);
@@ -239,6 +252,7 @@ QWidget* MainWindow::pageWidget(PageId page) const
     switch (page) {
     case PageId::Companion: return m_companionPage;
     case PageId::Home: return m_homePage;
+    case PageId::Conversation: return m_conversationPage;
     case PageId::Care: return m_carePage;
     case PageId::Reminder: return m_reminderPage;
     case PageId::ReminderEdit: return m_reminderEditPage;

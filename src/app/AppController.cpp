@@ -7,6 +7,7 @@
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
 #include "services/VideoCallService.h"
+#include "services/VoiceInteractionService.h"
 
 AppController::AppController(MainWindow* window,
                              ReminderService* reminderService,
@@ -16,6 +17,7 @@ AppController::AppController(MainWindow* window,
                              int controlTimeoutMs,
                              NetworkService* networkService,
                              VideoCallService* videoCallService,
+                             VoiceInteractionService* voiceInteractionService,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
@@ -24,7 +26,8 @@ AppController::AppController(MainWindow* window,
       m_settingsService(settingsService),
       m_systemService(systemService),
       m_networkService(networkService),
-      m_videoCallService(videoCallService)
+      m_videoCallService(videoCallService),
+      m_voiceInteractionService(voiceInteractionService)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -53,16 +56,22 @@ void AppController::connectUi()
             this, &AppController::showHome);
     connect(m_window, &MainWindow::userActivity, this,
             [this](MainWindow::PageId page) {
+        const bool voiceActive = m_voiceInteractionService
+            && m_voiceInteractionService->snapshot().isActive();
         if (page != MainWindow::PageId::Companion
-            && page != MainWindow::PageId::VideoCall) {
+            && page != MainWindow::PageId::VideoCall
+            && !(page == MainWindow::PageId::Conversation && voiceActive)) {
             m_controlTimeout.start();
         }
     });
     connect(m_window, &MainWindow::homeRequested,
             this, &AppController::showHome);
-    connect(m_window, &MainWindow::talkRequested, this, [this] {
-        m_window->showToast(QStringLiteral("语音能力将在 V0.3 接入"));
-    });
+    connect(m_window, &MainWindow::talkRequested,
+            this, &AppController::startVoiceInteraction);
+    connect(m_window, &MainWindow::voicePrimaryRequested,
+            this, &AppController::handleVoicePrimary);
+    connect(m_window, &MainWindow::voiceSecondaryRequested,
+            this, &AppController::handleVoiceSecondary);
     connect(m_window, &MainWindow::careRequested,
             this, &AppController::showCare);
     connect(m_window, &MainWindow::videoCallRequested,
@@ -210,6 +219,20 @@ void AppController::connectServices()
             }
         });
     }
+    if (m_voiceInteractionService) {
+        connect(m_voiceInteractionService, &VoiceInteractionService::snapshotChanged,
+                m_window, &MainWindow::setVoiceInteractionSnapshot);
+        connect(m_voiceInteractionService, &VoiceInteractionService::snapshotChanged,
+                this, [this](const VoiceInteractionSnapshot& snapshot) {
+            if (snapshot.isActive()) {
+                m_controlTimeout.stop();
+                if (m_window->currentPage() != MainWindow::PageId::Conversation)
+                    showPage(MainWindow::PageId::Conversation);
+            } else if (m_window->currentPage() == MainWindow::PageId::Conversation) {
+                m_controlTimeout.start();
+            }
+        });
+    }
 }
 
 void AppController::showHome()
@@ -221,11 +244,52 @@ void AppController::showPage(MainWindow::PageId page)
 {
     m_window->showPage(page);
     if (page == MainWindow::PageId::Companion
-        || page == MainWindow::PageId::VideoCall) {
+        || page == MainWindow::PageId::VideoCall
+        || page == MainWindow::PageId::Conversation) {
         m_controlTimeout.stop();
     } else {
         m_controlTimeout.start();
     }
+}
+
+void AppController::startVoiceInteraction()
+{
+    if (!m_voiceInteractionService) {
+        m_window->showToast(QStringLiteral("语音交互服务不可用"));
+        return;
+    }
+    const VoiceInteractionResult result =
+        m_voiceInteractionService->startInteraction();
+    m_window->setVoiceInteractionSnapshot(result.snapshot);
+    showPage(MainWindow::PageId::Conversation);
+    if (!result.success)
+        m_window->showToast(result.error);
+}
+
+void AppController::handleVoicePrimary()
+{
+    if (!m_voiceInteractionService)
+        return;
+    const VoiceInteractionSnapshot snapshot =
+        m_voiceInteractionService->snapshot();
+    if (snapshot.state == VoiceInteractionState::Recording) {
+        const VoiceInteractionResult result =
+            m_voiceInteractionService->finishRecording();
+        if (!result.success)
+            m_window->showToast(result.error);
+        return;
+    }
+    if (!snapshot.isActive())
+        startVoiceInteraction();
+}
+
+void AppController::handleVoiceSecondary()
+{
+    if (m_voiceInteractionService
+        && m_voiceInteractionService->snapshot().isActive()) {
+        m_voiceInteractionService->cancelInteraction();
+    }
+    showHome();
 }
 
 void AppController::showCare()

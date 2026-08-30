@@ -6,6 +6,7 @@
 #include <QObject>
 
 class CallPromptPlayerPort;
+class MediaSessionCoordinator;
 class VideoCallMediaPort;
 
 class VideoCallService final : public QObject {
@@ -14,6 +15,7 @@ class VideoCallService final : public QObject {
 public:
     explicit VideoCallService(VideoCallMediaPort* mediaPort = nullptr,
                               CallPromptPlayerPort* promptPlayer = nullptr,
+                              MediaSessionCoordinator* mediaSessions = nullptr,
                               QObject* parent = nullptr);
     ~VideoCallService() override;
 
@@ -42,6 +44,8 @@ private:
     VideoCallSnapshot m_snapshot;
     VideoCallMediaPort* m_mediaPort = nullptr;
     CallPromptPlayerPort* m_promptPlayer = nullptr;
+    MediaSessionCoordinator* m_mediaSessions = nullptr;
     bool m_promptActive = false;
     bool m_callResourcesActive = false;
+    bool m_mediaSessionAcquired = false;
 };

@@ -3,95 +3,130 @@
 #include "widgets/PetFaceWidget.h"
 #include "widgets/VisualComponents.h"
 
-#include <QFrame>
 #include <QHBoxLayout>
+#include <QLabel>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 namespace {
-PetExpression expressionFor(ConversationMode mode)
+PetExpression expressionFor(VoiceInteractionState state)
 {
-    switch (mode) {
-    case ConversationMode::Listening: return PetExpression::Listening;
-    case ConversationMode::Thinking: return PetExpression::Thinking;
-    case ConversationMode::Speaking: return PetExpression::Speaking;
+    switch (state) {
+    case VoiceInteractionState::Recording: return PetExpression::Listening;
+    case VoiceInteractionState::Recognizing:
+    case VoiceInteractionState::Thinking: return PetExpression::Thinking;
+    case VoiceInteractionState::Speaking: return PetExpression::Speaking;
+    case VoiceInteractionState::Failed: return PetExpression::Worried;
+    case VoiceInteractionState::Idle: return PetExpression::DefaultOpen;
     }
-    return PetExpression::Default;
+    return PetExpression::DefaultOpen;
 }
 
-QString stateTextFor(ConversationMode mode)
+QString fallbackStatus(VoiceInteractionState state)
 {
-    switch (mode) {
-    case ConversationMode::Listening: return QStringLiteral("我在听");
-    case ConversationMode::Thinking: return QStringLiteral("让我想一想……");
-    case ConversationMode::Speaking: return QStringLiteral("我在说");
+    switch (state) {
+    case VoiceInteractionState::Idle: return QStringLiteral("可以继续和我说话");
+    case VoiceInteractionState::Recording: return QStringLiteral("正在聆听");
+    case VoiceInteractionState::Recognizing: return QStringLiteral("正在识别");
+    case VoiceInteractionState::Thinking: return QStringLiteral("正在思考");
+    case VoiceInteractionState::Speaking: return QStringLiteral("正在回答");
+    case VoiceInteractionState::Failed: return QStringLiteral("这次没有连接成功");
     }
     return {};
 }
 }
 
-ConversationPage::ConversationPage(ConversationMode mode, QWidget* parent)
-    : QWidget(parent), m_mode(mode)
+ConversationPage::ConversationPage(QWidget* parent)
+    : QWidget(parent)
 {
     setProperty("page", true);
+    setObjectName(QStringLiteral("conversationPage"));
     setAttribute(Qt::WA_StyledBackground, true);
+
     auto* root = new QVBoxLayout(this);
-    root->setContentsMargins(32, 24, 32, 24);
-    root->setSpacing(0);
+    root->setContentsMargins(32, 20, 32, 24);
+    root->setSpacing(8);
 
-    m_nextButton = new QPushButton(this);
-    m_nextButton->hide();
-    m_backButton = new QPushButton(mode == ConversationMode::Speaking
-            ? QStringLiteral("回到陪伴") : QStringLiteral("结束对话"), this);
-    m_backButton->setProperty("role", "immersiveAction");
-    m_backButton->setFixedSize(176, 64);
+    m_face = new PetFaceWidget(PetExpression::Listening, this);
+    m_face->setObjectName(QStringLiteral("conversationPetFace"));
+    m_face->setMinimumHeight(245);
+    root->addWidget(m_face, 1);
 
-    root->addStretch(1);
-    auto* face = new PetFaceWidget(expressionFor(mode), this);
-    face->setFixedSize(mode == ConversationMode::Speaking ? QSize(600, 250) : QSize(640, 270));
-    root->addWidget(face, 0, Qt::AlignHCenter);
-    root->addSpacing(8);
+    m_stateLabel = makeLabel(QStringLiteral("正在聆听"), "petState", this);
+    m_stateLabel->setObjectName(QStringLiteral("conversationState"));
+    m_stateLabel->setAlignment(Qt::AlignCenter);
+    m_stateLabel->setFixedHeight(48);
+    root->addWidget(m_stateLabel);
 
-    auto* state = makeLabel(stateTextFor(mode), "petState", this);
-    state->setAlignment(Qt::AlignCenter);
-    state->setFixedHeight(44);
-    root->addWidget(state);
+    m_transcriptLabel = makeLabel({}, "body", this);
+    m_transcriptLabel->setObjectName(QStringLiteral("conversationTranscript"));
+    m_transcriptLabel->setAlignment(Qt::AlignCenter);
+    m_transcriptLabel->setWordWrap(true);
+    m_transcriptLabel->setMaximumHeight(58);
+    root->addWidget(m_transcriptLabel);
 
-    if (mode == ConversationMode::Listening) {
-        root->addSpacing(16);
-        auto* example = new QFrame(this);
-        example->setProperty("card", true);
-        example->setFixedSize(704, 88);
-        auto* exampleLayout = new QHBoxLayout(example);
-        exampleLayout->setContentsMargins(24, 0, 24, 0);
-        exampleLayout->setSpacing(16);
-        auto* dot = makeLabel(QStringLiteral("●"), "accent", example);
-        exampleLayout->addWidget(dot);
-        exampleLayout->addWidget(makeLabel(QStringLiteral("“提醒我晚上八点吃药”"), "body", example), 1);
-        exampleLayout->addWidget(makeLabel(QStringLiteral("UI 示例"), "assist", example));
-        root->addWidget(example, 0, Qt::AlignHCenter);
-    } else if (mode == ConversationMode::Thinking) {
-        root->addSpacing(12);
-        auto* hint = makeLabel(QStringLiteral("正在整理刚才的话   ·  ·  ·"), "assist", this);
-        hint->setAlignment(Qt::AlignCenter);
-        hint->setFixedHeight(36);
-        root->addWidget(hint);
-    } else {
-        root->addSpacing(12);
-        auto* reply = makeLabel(QStringLiteral("好的，晚上八点\n我会提醒您吃药。"),
-                                "companionReply", this);
-        reply->setAlignment(Qt::AlignCenter);
-        reply->setFixedHeight(80);
-        root->addWidget(reply);
-        auto* hint = makeLabel(QStringLiteral("●  ●●  ●    UI 示例 · 不包含语音播放"), "assist", this);
-        hint->setAlignment(Qt::AlignCenter);
-        hint->setFixedHeight(32);
-        root->addWidget(hint);
-    }
+    m_responseLabel = makeLabel({}, "companionReply", this);
+    m_responseLabel->setObjectName(QStringLiteral("conversationResponse"));
+    m_responseLabel->setAlignment(Qt::AlignCenter);
+    m_responseLabel->setWordWrap(true);
+    m_responseLabel->setMaximumHeight(86);
+    root->addWidget(m_responseLabel);
 
-    root->addStretch(1);
-    root->addWidget(m_backButton, 0, Qt::AlignHCenter);
+    m_errorLabel = makeLabel({}, "assist", this);
+    m_errorLabel->setObjectName(QStringLiteral("conversationError"));
+    m_errorLabel->setAlignment(Qt::AlignCenter);
+    m_errorLabel->setWordWrap(true);
+    m_errorLabel->setStyleSheet(QStringLiteral("color: #d85b4a; font-weight: 700;"));
+    m_errorLabel->setMaximumHeight(54);
+    root->addWidget(m_errorLabel);
+
+    auto* actions = new QHBoxLayout;
+    actions->setSpacing(18);
+    actions->addStretch(1);
+    m_secondaryButton = new QPushButton(QStringLiteral("停止"), this);
+    m_secondaryButton->setObjectName(QStringLiteral("conversationSecondaryButton"));
+    m_secondaryButton->setProperty("role", "secondary");
+    m_secondaryButton->setFixedSize(220, 72);
+    m_primaryButton = new QPushButton(QStringLiteral("我说完了"), this);
+    m_primaryButton->setObjectName(QStringLiteral("conversationPrimaryButton"));
+    m_primaryButton->setProperty("role", "primary");
+    m_primaryButton->setFixedSize(260, 72);
+    actions->addWidget(m_secondaryButton);
+    actions->addWidget(m_primaryButton);
+    actions->addStretch(1);
+    root->addLayout(actions);
+
+    connect(m_primaryButton, &QPushButton::clicked,
+            this, &ConversationPage::primaryRequested);
+    connect(m_secondaryButton, &QPushButton::clicked,
+            this, &ConversationPage::secondaryRequested);
+    setSnapshot({});
 }
 
-QPushButton* ConversationPage::backButton() const { return m_backButton; }
-QPushButton* ConversationPage::nextButton() const { return m_nextButton; }
-ConversationMode ConversationPage::mode() const { return m_mode; }
+void ConversationPage::setSnapshot(const VoiceInteractionSnapshot& snapshot)
+{
+    m_snapshot = snapshot;
+    m_face->setExpression(expressionFor(snapshot.state));
+    m_face->setAnimationEnabled(snapshot.isActive());
+    m_stateLabel->setText(snapshot.statusMessage.isEmpty()
+        ? fallbackStatus(snapshot.state) : snapshot.statusMessage);
+
+    m_transcriptLabel->setText(snapshot.transcript.isEmpty()
+        ? QString() : QStringLiteral("我说：%1").arg(snapshot.transcript));
+    m_transcriptLabel->setVisible(!snapshot.transcript.isEmpty());
+    m_responseLabel->setText(snapshot.response.isEmpty()
+        ? QString() : QStringLiteral("LongPet：%1").arg(snapshot.response));
+    m_responseLabel->setVisible(!snapshot.response.isEmpty());
+    m_errorLabel->setText(snapshot.errorMessage);
+    m_errorLabel->setVisible(!snapshot.errorMessage.isEmpty());
+
+    const bool recording = snapshot.state == VoiceInteractionState::Recording;
+    const bool restartable = snapshot.state == VoiceInteractionState::Idle
+        || snapshot.state == VoiceInteractionState::Failed;
+    m_primaryButton->setVisible(recording || restartable);
+    m_primaryButton->setText(recording ? QStringLiteral("我说完了")
+        : snapshot.state == VoiceInteractionState::Failed
+            ? QStringLiteral("再试一次") : QStringLiteral("继续说话"));
+    m_secondaryButton->setText(snapshot.isActive()
+        ? QStringLiteral("停止") : QStringLiteral("返回首页"));
+}

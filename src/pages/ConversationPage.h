@@ -1,21 +1,32 @@
 #pragma once
 
+#include "model/AiModels.h"
+
 #include <QWidget>
 
+class QLabel;
+class PetFaceWidget;
 class QPushButton;
 
-enum class ConversationMode { Listening, Thinking, Speaking };
-
 class ConversationPage final : public QWidget {
-public:
-    explicit ConversationPage(ConversationMode mode, QWidget* parent = nullptr);
+    Q_OBJECT
 
-    QPushButton* backButton() const;
-    QPushButton* nextButton() const;
-    ConversationMode mode() const;
+public:
+    explicit ConversationPage(QWidget* parent = nullptr);
+
+    void setSnapshot(const VoiceInteractionSnapshot& snapshot);
+
+signals:
+    void primaryRequested();
+    void secondaryRequested();
 
 private:
-    ConversationMode m_mode;
-    QPushButton* m_backButton = nullptr;
-    QPushButton* m_nextButton = nullptr;
+    VoiceInteractionSnapshot m_snapshot;
+    PetFaceWidget* m_face = nullptr;
+    QLabel* m_stateLabel = nullptr;
+    QLabel* m_transcriptLabel = nullptr;
+    QLabel* m_responseLabel = nullptr;
+    QLabel* m_errorLabel = nullptr;
+    QPushButton* m_primaryButton = nullptr;
+    QPushButton* m_secondaryButton = nullptr;
 };

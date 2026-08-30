@@ -1,5 +1,6 @@
 #include "VideoCallService.h"
 
+#include "services/MediaSessionCoordinator.h"
 #include "services/VideoCallPorts.h"
 
 #include <QDebug>
@@ -7,10 +8,12 @@
 
 VideoCallService::VideoCallService(VideoCallMediaPort* mediaPort,
                                    CallPromptPlayerPort* promptPlayer,
+                                   MediaSessionCoordinator* mediaSessions,
                                    QObject* parent)
     : QObject(parent),
       m_mediaPort(mediaPort),
-      m_promptPlayer(promptPlayer)
+      m_promptPlayer(promptPlayer),
+      m_mediaSessions(mediaSessions)
 {
     if (m_mediaPort) {
         connect(m_mediaPort, &VideoCallMediaPort::mediaReady,
@@ -51,6 +54,12 @@ VideoCallResult VideoCallService::startOutgoingCall(VideoCallMode mode)
         return failure(VideoCallErrorCode::Busy,
                        QStringLiteral("当前已有正在进行的通话"));
     }
+    if (m_mediaSessions
+        && !m_mediaSessions->tryAcquire(QStringLiteral("video_call"))) {
+        return failure(VideoCallErrorCode::Busy,
+                       QStringLiteral("设备正在进行语音交互，请稍后再试"));
+    }
+    m_mediaSessionAcquired = m_mediaSessions != nullptr;
 
     initializeSnapshot(mode, VideoCallDirection::DeviceToFamily);
     transitionTo(VideoCallState::OutgoingRinging);
@@ -68,6 +77,12 @@ VideoCallResult VideoCallService::startIncomingCall(VideoCallMode mode)
         return failure(VideoCallErrorCode::Busy,
                        QStringLiteral("设备正在通话，请稍后再试"));
     }
+    if (m_mediaSessions
+        && !m_mediaSessions->tryAcquire(QStringLiteral("video_call"))) {
+        return failure(VideoCallErrorCode::Busy,
+                       QStringLiteral("设备正在进行语音交互，请稍后再试"));
+    }
+    m_mediaSessionAcquired = m_mediaSessions != nullptr;
 
     initializeSnapshot(mode, VideoCallDirection::FamilyToDevice);
     transitionTo(VideoCallState::NotifyingDevice);
@@ -222,6 +237,10 @@ void VideoCallService::releaseResources()
     if (m_callResourcesActive) {
         m_callResourcesActive = false;
         emit callActivityChanged(false);
+    }
+    if (m_mediaSessionAcquired && m_mediaSessions) {
+        m_mediaSessionAcquired = false;
+        m_mediaSessions->release(QStringLiteral("video_call"));
     }
 }
 

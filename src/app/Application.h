@@ -6,6 +6,7 @@
 #include <memory>
 
 class AppController;
+class AiConfigRepository;
 class AudioVolumeAdapter;
 class BacklightAdapter;
 class CareEventRepository;
@@ -15,10 +16,12 @@ class FamilyLinkController;
 class FamilyLinkHttpAdapter;
 class FamilyLinkService;
 class MainWindow;
+class MediaSessionCoordinator;
 class NetworkStatusAdapter;
 class NetworkManagerAdapter;
 class NetworkService;
 class PowerStatusAdapter;
+class OpenAiCompatibleProvider;
 class ReminderRepository;
 class ReminderService;
 class SettingsRepository;
@@ -27,6 +30,8 @@ class SystemService;
 class VideoCallService;
 class VideoCallMediaAdapter;
 class CallPromptPlayerAdapter;
+class VoiceAudioAdapter;
+class VoiceInteractionService;
 
 class Application final : public QObject {
     Q_OBJECT
@@ -44,15 +49,21 @@ public:
 
 private:
     QString resolveDatabasePath() const;
+    QString resolveAiConfigPath() const;
 
     std::unique_ptr<DatabaseManager> m_database;
     std::unique_ptr<ReminderRepository> m_reminderRepository;
     std::unique_ptr<CareEventRepository> m_careEventRepository;
     std::unique_ptr<SettingsRepository> m_settingsRepository;
+    std::unique_ptr<AiConfigRepository> m_aiConfigRepository;
     std::unique_ptr<ReminderService> m_reminderService;
     std::unique_ptr<CareService> m_careService;
     std::unique_ptr<SettingsService> m_settingsService;
     std::unique_ptr<SystemService> m_systemService;
+    std::unique_ptr<MediaSessionCoordinator> m_mediaSessionCoordinator;
+    std::unique_ptr<OpenAiCompatibleProvider> m_aiProvider;
+    std::unique_ptr<VoiceAudioAdapter> m_voiceAudioAdapter;
+    std::unique_ptr<VoiceInteractionService> m_voiceInteractionService;
     std::unique_ptr<VideoCallMediaAdapter> m_videoCallMediaAdapter;
     std::unique_ptr<CallPromptPlayerAdapter> m_callPromptPlayerAdapter;
     std::unique_ptr<VideoCallService> m_videoCallService;

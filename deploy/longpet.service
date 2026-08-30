@@ -19,6 +19,7 @@ RuntimeDirectoryMode=0700
 Environment="HOME=/home/longpet"
 Environment="XDG_RUNTIME_DIR=/run/longpet"
 Environment="LONGPET_DATABASE_PATH=/home/longpet/data/longpet.db"
+Environment="LONGPET_AI_CONFIG=/etc/longpet/ai.ini"
 
 Environment="QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0:tty=/dev/tty1"
 Environment="QT_QPA_GENERIC_PLUGINS=evdevtouch:/dev/input/event0"
@@ -30,6 +31,9 @@ Environment="QT_IM_MODULE=qtvirtualkeyboard"
 # 当前 main 的 AudioVolumeAdapter 只识别 PCM 控件，因此可能提示
 # USB 声卡没有 PCM；这不影响界面启动，下一轮再适配 Speaker 控件。
 Environment="LONGPET_ALSA_MIXER_DEVICE=hw:CARD=Device"
+# 语音交互与视频通话默认共用这组 USB 声卡设备。
+Environment="LONGPET_AI_CAPTURE_DEVICE=plughw:CARD=Device,DEV=0"
+Environment="LONGPET_AI_PLAYBACK_DEVICE=plughw:CARD=Device,DEV=0"
 
 Restart=always
 RestartSec=2

@@ -3,6 +3,7 @@
 #include "AppController.h"
 #include "FamilyLinkController.h"
 #include "data/CareEventRepository.h"
+#include "data/AiConfigRepository.h"
 #include "data/DatabaseManager.h"
 #include "data/ReminderRepository.h"
 #include "data/SettingsRepository.h"
@@ -13,15 +14,19 @@
 #include "platform/FamilyLinkHttpAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
+#include "platform/OpenAiCompatibleProvider.h"
 #include "platform/PowerStatusAdapter.h"
 #include "platform/VideoCallMediaAdapter.h"
+#include "platform/VoiceAudioAdapter.h"
 #include "services/CareService.h"
 #include "services/FamilyLinkService.h"
 #include "services/ReminderService.h"
 #include "services/NetworkService.h"
+#include "services/MediaSessionCoordinator.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
 #include "services/VideoCallService.h"
+#include "services/VoiceInteractionService.h"
 #include "widgets/VisualTokens.h"
 
 #include <QCoreApplication>
@@ -68,15 +73,28 @@ bool Application::initialize(QString* error)
     m_reminderRepository = std::make_unique<ReminderRepository>(m_database->database());
     m_careEventRepository = std::make_unique<CareEventRepository>(m_database->database());
     m_settingsRepository = std::make_unique<SettingsRepository>(m_database->database());
+    m_aiConfigRepository = std::make_unique<AiConfigRepository>(resolveAiConfigPath());
     m_reminderService = std::make_unique<ReminderService>(m_reminderRepository.get());
     m_careService = std::make_unique<CareService>(m_careEventRepository.get(),
                                                   m_reminderService.get());
     m_settingsService = std::make_unique<SettingsService>(m_settingsRepository.get());
     m_systemService = std::make_unique<SystemService>();
+    m_mediaSessionCoordinator = std::make_unique<MediaSessionCoordinator>();
+    QString aiConfigurationError;
+    const AiConfiguration aiConfiguration = m_aiConfigRepository->load(
+        &aiConfigurationError);
+    if (!aiConfigurationError.isEmpty())
+        qWarning().noquote() << aiConfigurationError;
+    m_aiProvider = std::make_unique<OpenAiCompatibleProvider>(aiConfiguration);
+    m_voiceAudioAdapter = std::make_unique<VoiceAudioAdapter>();
+    m_voiceInteractionService = std::make_unique<VoiceInteractionService>(
+        aiConfiguration, m_aiProvider.get(), m_voiceAudioAdapter.get(),
+        m_mediaSessionCoordinator.get());
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>();
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
     m_videoCallService = std::make_unique<VideoCallService>(
-        m_videoCallMediaAdapter.get(), m_callPromptPlayerAdapter.get());
+        m_videoCallMediaAdapter.get(), m_callPromptPlayerAdapter.get(),
+        m_mediaSessionCoordinator.get());
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
     m_networkManagerAdapter = std::make_unique<NetworkManagerAdapter>();
     m_networkService = std::make_unique<NetworkService>(m_networkManagerAdapter.get());
@@ -132,7 +150,7 @@ bool Application::initialize(QString* error)
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
         m_systemService.get(), 15'000, m_networkService.get(),
-        m_videoCallService.get());
+        m_videoCallService.get(), m_voiceInteractionService.get());
     m_controller->initialize();
     return true;
 }
@@ -175,14 +193,19 @@ void Application::shutdown()
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
+    m_voiceInteractionService.reset();
+    m_voiceAudioAdapter.reset();
+    m_aiProvider.reset();
     m_videoCallService.reset();
     m_callPromptPlayerAdapter.reset();
     m_videoCallMediaAdapter.reset();
     m_systemService.reset();
+    m_mediaSessionCoordinator.reset();
     m_settingsService.reset();
     m_careService.reset();
     m_reminderService.reset();
     m_settingsRepository.reset();
+    m_aiConfigRepository.reset();
     m_careEventRepository.reset();
     m_reminderRepository.reset();
     if (m_database)
@@ -207,4 +230,17 @@ QString Application::resolveDatabasePath() const
         return overridePath;
     const QString dataDirectory = QStandardPaths::writableLocation(QStandardPaths::AppLocalDataLocation);
     return QDir(dataDirectory).filePath(QStringLiteral("longpet.db"));
+}
+
+QString Application::resolveAiConfigPath() const
+{
+    const QString overridePath = qEnvironmentVariable("LONGPET_AI_CONFIG").trimmed();
+    if (!overridePath.isEmpty())
+        return overridePath;
+#ifdef Q_OS_LINUX
+    return QStringLiteral("/etc/longpet/ai.ini");
+#else
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+        .filePath(QStringLiteral("longpet-ai.ini"));
+#endif
 }

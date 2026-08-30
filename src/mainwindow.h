@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/ReminderModels.h"
+#include "model/AiModels.h"
 #include "model/NetworkModels.h"
 #include "model/SettingsModels.h"
 #include "model/SystemModels.h"
@@ -12,6 +13,7 @@ class QImage;
 
 class CarePage;
 class CompanionPage;
+class ConversationPage;
 class HomePage;
 class NetworkSetupPage;
 class QEvent;
@@ -32,6 +34,7 @@ public:
     enum class PageId {
         Companion,
         Home,
+        Conversation,
         Care,
         Reminder,
         ReminderEdit,
@@ -50,6 +53,7 @@ public:
     void setSystemStatus(const SystemStatus& status);
     void setDeviceSummary(const DeviceSummary& summary);
     void setVideoCallSnapshot(const VideoCallSnapshot& snapshot);
+    void setVoiceInteractionSnapshot(const VoiceInteractionSnapshot& snapshot);
     void setRemoteVideoFrame(const QImage& frame);
     void setWifiScanStarted();
     void setWifiNetworks(const QList<WifiNetwork>& networks);
@@ -62,6 +66,8 @@ signals:
     void controlRequested();
     void userActivity(PageId page);
     void talkRequested();
+    void voicePrimaryRequested();
+    void voiceSecondaryRequested();
     void careRequested();
     void reminderRequested();
     void videoCallRequested();
@@ -91,6 +97,7 @@ private:
     QStackedWidget* m_stack = nullptr;
     CompanionPage* m_companionPage = nullptr;
     HomePage* m_homePage = nullptr;
+    ConversationPage* m_conversationPage = nullptr;
     CarePage* m_carePage = nullptr;
     ReminderPage* m_reminderPage = nullptr;
     ReminderEditPage* m_reminderEditPage = nullptr;

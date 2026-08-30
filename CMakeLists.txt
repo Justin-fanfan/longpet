@@ -39,6 +39,7 @@ set(
     src/app/FamilyLinkController.cpp
     src/app/FamilyLinkController.h
     src/model/ReminderModels.h
+    src/model/AiModels.h
     src/model/NetworkModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
@@ -49,6 +50,10 @@ set(
     src/platform/NetworkStatusAdapter.h
     src/platform/NetworkManagerAdapter.cpp
     src/platform/NetworkManagerAdapter.h
+    src/platform/OpenAiCompatibleProvider.cpp
+    src/platform/OpenAiCompatibleProvider.h
+    src/platform/VoiceAudioAdapter.cpp
+    src/platform/VoiceAudioAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
     src/platform/BacklightAdapter.cpp
@@ -69,6 +74,8 @@ set(
     src/data/CareEventRepository.h
     src/data/SettingsRepository.cpp
     src/data/SettingsRepository.h
+    src/data/AiConfigRepository.cpp
+    src/data/AiConfigRepository.h
     src/services/ReminderService.cpp
     src/services/ReminderService.h
     src/services/NetworkService.cpp
@@ -84,6 +91,11 @@ set(
     src/services/VideoCallService.cpp
     src/services/VideoCallService.h
     src/services/VideoCallPorts.h
+    src/services/MediaSessionCoordinator.cpp
+    src/services/MediaSessionCoordinator.h
+    src/services/VoiceInteractionPorts.h
+    src/services/VoiceInteractionService.cpp
+    src/services/VoiceInteractionService.h
     src/mainwindow.cpp
     src/mainwindow.h
     src/pages/CompanionPage.cpp
