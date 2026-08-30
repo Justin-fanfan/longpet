@@ -1,10 +1,14 @@
 #pragma once
 
 #include "model/AiModels.h"
+#include "model/WeatherModels.h"
 
 #include <QByteArray>
 #include <QObject>
 #include <QTimer>
+
+#include <functional>
+#include <optional>
 
 class AsrProviderPort;
 class LlmProviderPort;
@@ -30,6 +34,10 @@ public:
     VoiceInteractionResult finishRecording();
     VoiceInteractionResult cancelInteraction();
 
+    // 注入一个只读的天气快照入口（一般来自 WeatherService::currentOrNone）。
+    // 为空时不注入天气上下文；VoiceInteractionService 不依赖具体天气 Provider。
+    void setWeatherProvider(std::function<std::optional<WeatherSnapshot>()> provider);
+
 signals:
     void snapshotChanged(const VoiceInteractionSnapshot& snapshot);
     void activityChanged(bool active);
@@ -47,6 +55,7 @@ private:
     void handleAudioFailure(quint64 sessionId, VoiceAudioStage stage,
                             const QString& userMessage, const QString& diagnostic);
     QList<AiChatMessage> messagesFor(const QString& userText) const;
+    QString weatherContextMessage(const WeatherSnapshot& snapshot) const;
     void appendHistory(const QString& userText, const QString& assistantText);
     void publish(VoiceInteractionState state, const QString& statusMessage);
     VoiceInteractionResult fail(const QString& userMessage, const QString& diagnostic = {});
@@ -59,6 +68,7 @@ private:
     TtsProviderPort* m_ttsProvider = nullptr;
     VoiceAudioPort* m_audio = nullptr;
     MediaSessionCoordinator* m_mediaSessions = nullptr;
+    std::function<std::optional<WeatherSnapshot>()> m_weatherProvider;
     VoiceInteractionSnapshot m_snapshot;
     QList<AiChatMessage> m_history;
     QTimer m_recordingDeadline;

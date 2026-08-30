@@ -25,6 +25,8 @@
 #include "platform\AliyunProviders.h"
 #include "platform\OpenAiCompatibleProviders.h"
 #include "platform\PowerStatusAdapter.h"
+#include "platform\QWeatherProvider.h"
+#include "platform\WeatherProviderFactory.h"
 #include "platform\VoiceAudioAdapter.h"
 #include "services\CareService.h"
 #include "services\FamilyLinkService.h"
@@ -35,8 +37,11 @@
 #include "services\SystemService.h"
 #include "services\VideoCallService.h"
 #include "services\VideoCallPorts.h"
+#include "services\WeatherPorts.h"
+#include "services\WeatherService.h"
 #include "services\VoiceInteractionPorts.h"
 #include "services\VoiceInteractionService.h"
+#include "data\WeatherConfigRepository.h"
 #include "widgets\PetFaceWidget.h"
 #include "widgets\VisualComponents.h"
 #include "widgets\VisualTokens.h"
@@ -67,6 +72,8 @@
 #include <QTest>
 #include <QTimer>
 
+#include <optional>
+
 class V02Test final : public QObject {
     Q_OBJECT
 
@@ -85,6 +92,11 @@ private slots:
     void videoCallStateAndApiTransition();
     void mediaFrameProtocolAndIncomingCallLifecycle();
     void aiConfigurationAndWavEncoding();
+    void weatherConfigurationParsesValidatesAndOverrides();
+    void weatherDeploymentExampleComplies();
+    void weatherProviderParsesQWeatherJson();
+    void weatherServiceRefreshesUpdatesAndDegrades();
+    void voiceInteractionInjectsWeatherContext();
     void voiceInteractionCompletesAndRetainsContext();
     void voiceInteractionFailuresCancelAndRecover();
     void openAiCompatibleProviderHandlesSuccessErrorsAndTimeout();
@@ -94,6 +106,7 @@ private slots:
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
     void statusBarRemains64AndShowsSystemInput();
+    void weatherIconMappingCoversQWeatherCodes();
     void controlTimeoutWorksAcrossBusinessPages();
     void renderV02Pages();
 };
@@ -280,6 +293,38 @@ public:
     int playCount = 0;
     int cancelCount = 0;
 };
+
+class FakeWeatherProvider final : public WeatherProviderPort {
+public:
+    using WeatherProviderPort::WeatherProviderPort;
+
+    void fetchCurrent() override { ++fetchCount; }
+    void cancel() override { ++cancelCount; }
+
+    void emitSuccess(const WeatherSnapshot& snapshot)
+    { emit currentWeatherReady(snapshot); }
+    void emitFailure(const WeatherError& error)
+    { emit fetchFailed(error); }
+
+    int fetchCount = 0;
+    int cancelCount = 0;
+};
+
+WeatherConfiguration validWeatherConfiguration()
+{
+    WeatherConfiguration configuration;
+    configuration.enabled = true;
+    configuration.provider = QStringLiteral("qweather");
+    configuration.apiHost = QStringLiteral("https://host.example.qweatherapi.com");
+    configuration.apiKey = QStringLiteral("weather-key");
+    configuration.latitude = 31.23;
+    configuration.longitude = 121.47;
+    configuration.language = QStringLiteral("zh");
+    configuration.refreshMinutes = 30;
+    configuration.requestTimeoutMs = 1'000;
+    configuration.staleAfterMinutes = 120;
+    return configuration;
+}
 
 AiConfiguration validAiConfiguration()
 {
@@ -1288,6 +1333,460 @@ void V02Test::aiConfigurationAndWavEncoding()
     QCOMPARE(legacy.tts.model, QStringLiteral("old-tts"));
 }
 
+void V02Test::weatherConfigurationParsesValidatesAndOverrides()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+
+    const QString path = QDir(directory.path()).filePath(QStringLiteral("weather.ini"));
+    QFile file(path);
+    QVERIFY(file.open(QIODevice::WriteOnly));
+    file.write(
+        "[weather]\n"
+        "enabled=true\n"
+        "provider=qweather\n"
+        "api_host=https://host.example\n"
+        "api_key=secret\n"
+        "latitude=31.23\n"
+        "longitude=121.47\n"
+        "language=en\n"
+        "refresh_minutes=45\n"
+        "request_timeout_ms=8000\n"
+        "stale_after_minutes=90\n");
+    file.close();
+
+    WeatherConfigRepository repository(path);
+    QString error;
+    const WeatherConfiguration configuration = repository.load(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QVERIFY(configuration.isValid());
+    QCOMPARE(configuration.enabled, true);
+    QCOMPARE(configuration.provider, QStringLiteral("qweather"));
+    QCOMPARE(configuration.apiHost, QStringLiteral("https://host.example"));
+    QCOMPARE(configuration.apiKey, QStringLiteral("secret"));
+    QCOMPARE(configuration.latitude, 31.23);
+    QCOMPARE(configuration.longitude, 121.47);
+    QCOMPARE(configuration.language, QStringLiteral("en"));
+    QCOMPARE(configuration.refreshMinutes, 45);
+    QCOMPARE(configuration.requestTimeoutMs, 8'000);
+    QCOMPARE(configuration.staleAfterMinutes, 90);
+
+    // 环境变量优先于 INI。
+    qputenv("LONGPET_WEATHER_API_KEY", QByteArrayLiteral("environment-key"));
+    qputenv("LONGPET_WEATHER_REFRESH_MINUTES", QByteArrayLiteral("5"));
+    const WeatherConfiguration overridden = repository.load(&error);
+    qunsetenv("LONGPET_WEATHER_API_KEY");
+    qunsetenv("LONGPET_WEATHER_REFRESH_MINUTES");
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(overridden.apiKey, QStringLiteral("environment-key"));
+    QCOMPARE(overridden.refreshMinutes, 5);
+    QCOMPARE(overridden.latitude, 31.23);
+
+    // 未启用 → 不判为配置错误。
+    const QString disabledPath = QDir(directory.path()).filePath(
+        QStringLiteral("disabled.ini"));
+    QFile disabledFile(disabledPath);
+    QVERIFY(disabledFile.open(QIODevice::WriteOnly));
+    disabledFile.write("[weather]\nenabled=false\n");
+    disabledFile.close();
+    const WeatherConfiguration disabled =
+        WeatherConfigRepository(disabledPath).load(&error);
+    QVERIFY(!disabled.enabled);
+    QVERIFY(disabled.validationError().isEmpty());
+    QVERIFY(error.contains(QStringLiteral("未启用")));
+
+    // 缺少 api_host。
+    const QString noHostPath = QDir(directory.path()).filePath(
+        QStringLiteral("nohost.ini"));
+    QFile noHostFile(noHostPath);
+    QVERIFY(noHostFile.open(QIODevice::WriteOnly));
+    noHostFile.write(
+        "[weather]\nenabled=true\napi_key=key\nlatitude=31.23\nlongitude=121.47\n");
+    noHostFile.close();
+    const WeatherConfiguration noHost =
+        WeatherConfigRepository(noHostPath).load(&error);
+    QVERIFY(noHost.validationError().contains(QStringLiteral("API Host")));
+
+    // 缺少 api_key。
+    const QString noKeyPath = QDir(directory.path()).filePath(
+        QStringLiteral("nokey.ini"));
+    QFile noKeyFile(noKeyPath);
+    QVERIFY(noKeyFile.open(QIODevice::WriteOnly));
+    noKeyFile.write(
+        "[weather]\nenabled=true\napi_host=https://host.example\nlatitude=31.23\nlongitude=121.47\n");
+    noKeyFile.close();
+    const WeatherConfiguration noKey =
+        WeatherConfigRepository(noKeyPath).load(&error);
+    QVERIFY(noKey.validationError().contains(QStringLiteral("API Key")));
+
+    // 经纬度错误。
+    const QString badLocationPath = QDir(directory.path()).filePath(
+        QStringLiteral("badloc.ini"));
+    QFile badLocationFile(badLocationPath);
+    QVERIFY(badLocationFile.open(QIODevice::WriteOnly));
+    badLocationFile.write(
+        "[weather]\nenabled=true\napi_host=https://host.example\napi_key=key\nlatitude=100\nlongitude=121.47\n");
+    badLocationFile.close();
+    const WeatherConfiguration badLocation =
+        WeatherConfigRepository(badLocationPath).load(&error);
+    QVERIFY(badLocation.validationError().contains(QStringLiteral("经纬度")));
+}
+
+void V02Test::weatherDeploymentExampleComplies()
+{
+    // 部署示例必须使用明显的专属 Host 占位符，且不得再出现旧共享域名。
+    const QString examplePath = QStringLiteral(
+        LONGPET_REPO_DIR "/deploy/longpet-weather.ini.example");
+    QFile example(examplePath);
+    QVERIFY2(example.open(QIODevice::ReadOnly), qPrintable(examplePath));
+    const QByteArray content = example.readAll();
+    QVERIFY(!content.contains("devapi.qweather.com"));
+    QVERIFY(content.contains("YOUR_QWEATHER_API_HOST"));
+    QVERIFY(content.contains("[weather]"));
+}
+
+void V02Test::weatherProviderParsesQWeatherJson()
+{
+    const WeatherConfiguration configuration = validWeatherConfiguration();
+
+    // 新版 /weather/v1/current 响应：没有 v7 的 obsTime/updateTime 字段，
+    // humidity 是 [0,1] 小数（0.69 = 69%）。
+    const QByteArray good =
+        "{\"code\":\"200\","
+        "\"now\":{\"temp\":\"26\",\"feelsLike\":\"27\",\"icon\":\"150\","
+        "\"text\":\"晴\",\"humidity\":\"0.69\"}}";
+    WeatherSnapshot snapshot;
+    WeatherError error;
+    QVERIFY(QWeatherProvider::parseCurrent(good, configuration, &snapshot, &error));
+    QVERIFY(snapshot.valid);
+    QCOMPARE(snapshot.condition, QStringLiteral("晴"));
+    QCOMPARE(snapshot.conditionCode, QStringLiteral("150"));
+    QCOMPARE(snapshot.temperatureC, 26.0);
+    QCOMPARE(snapshot.feelsLikeC, 27.0);
+    QCOMPARE(snapshot.humidityPercent, 69);   // 0.69 → 69%
+    QCOMPARE(snapshot.summary(), QStringLiteral("晴 26°"));
+    QCOMPARE(snapshot.latitude, 31.23);
+    QCOMPARE(snapshot.longitude, 121.47);
+    // 不含 obsTime/updateTime：观测时间保持 invalid；
+    // updatedAt 记录本机本次成功的 UTC 时间。
+    QVERIFY(!snapshot.observedAt.isValid());
+    QVERIFY(snapshot.updatedAt.isValid());
+    QVERIFY(qAbs(snapshot.updatedAt.secsTo(QDateTime::currentDateTimeUtc())) < 5);
+
+    // 实测形态：新版 API 的 temp/feelsLike/humidity/icon 是 JSON 数字。
+    // 旧解析只认字符串会得到 missing now.temp —— 这正是上板时
+    // 状态栏无天气、语音问不到天气的主因，这里必须全数字也能解析。
+    const QByteArray numericJson =
+        "{\"code\":200,\"now\":{\"temp\":26,\"feelsLike\":27.5,"
+        "\"humidity\":0.69,\"icon\":100,\"text\":\"晴\"}}";
+    WeatherSnapshot numericSnapshot;
+    QVERIFY(QWeatherProvider::parseCurrent(numericJson, configuration,
+                                           &numericSnapshot, &error));
+    QVERIFY(numericSnapshot.valid);
+    QCOMPARE(numericSnapshot.temperatureC, 26.0);
+    QCOMPARE(numericSnapshot.feelsLikeC, 27.5);
+    QCOMPARE(numericSnapshot.humidityPercent, 69);   // 0.69 → 69%
+    QCOMPARE(numericSnapshot.conditionCode, QStringLiteral("100"));
+    QCOMPARE(numericSnapshot.condition, QStringLiteral("晴"));
+    QVERIFY(!numericSnapshot.observedAt.isValid());
+    QVERIFY(numericSnapshot.updatedAt.isValid());
+
+    // 板上实测的真实响应（curl 抓取）：新版接口没有顶层 code / now 字段，
+    // 数据是顶层对象 condition/temperature/feelsLike，humidity=0.8（80%），
+    // 而且确实没有 obsTime/updateTime —— 必须能直接解析。
+    const QByteArray boardResponse =
+        "{\"metadata\":{\"tag\":\"41cd2829\",\"attributions\":"
+        "[\"https://developer.qweather.com/attribution.html\"]},"
+        "\"condition\":{\"text\":\"阴\",\"code\":\"104\"},"
+        "\"temperature\":{\"value\":29.02,\"unit\":\"°C\"},"
+        "\"feelsLike\":{\"value\":32.05,\"unit\":\"°C\"},\"humidity\":0.8,"
+        "\"wind\":{\"direction\":{\"degree\":73,\"compass\":\"ene\"},"
+        "\"speed\":{\"value\":2.79,\"unit\":\"m/s\"},\"scale\":2},"
+        "\"pressure\":{\"value\":1004.32,\"unit\":\"hPa\"},"
+        "\"visibility\":{\"value\":28080,\"unit\":\"m\"},"
+        "\"dewPoint\":{\"value\":25.18,\"unit\":\"°C\"},"
+        "\"cloudCover\":0.44,\"uvIndex\":0}";
+    WeatherSnapshot boardSnapshot;
+    QVERIFY(QWeatherProvider::parseCurrent(boardResponse, configuration,
+                                           &boardSnapshot, &error));
+    QVERIFY(boardSnapshot.valid);
+    QCOMPARE(boardSnapshot.condition, QStringLiteral("阴"));
+    QCOMPARE(boardSnapshot.conditionCode, QStringLiteral("104"));
+    QCOMPARE(boardSnapshot.temperatureC, 29.02);
+    QCOMPARE(boardSnapshot.feelsLikeC, 32.05);
+    QCOMPARE(boardSnapshot.humidityPercent, 80);   // 0.80 → 80%
+    QCOMPARE(boardSnapshot.summary(), QStringLiteral("阴 29°"));
+    QVERIFY(!boardSnapshot.observedAt.isValid());
+    QVERIFY(boardSnapshot.updatedAt.isValid());
+
+    // 兼容直接返回百分比（0-100）的形态。
+    const QByteArray percentStyle =
+        "{\"code\":\"200\",\"now\":{\"temp\":\"26\",\"text\":\"晴\",\"humidity\":\"65\"}}";
+    WeatherSnapshot percentSnapshot;
+    QVERIFY(QWeatherProvider::parseCurrent(percentStyle, configuration,
+                                           &percentSnapshot, &error));
+    QCOMPARE(percentSnapshot.humidityPercent, 65);
+    QVERIFY(!percentSnapshot.observedAt.isValid());
+    QVERIFY(percentSnapshot.updatedAt.isValid());
+
+    // URL 构造：Host 来自配置，不用 devapi 旧地址；参数只带 lang。
+    const QWeatherProvider provider(configuration);
+    QCOMPARE(provider.currentUrl().toString(),
+             QStringLiteral("https://host.example.qweatherapi.com/weather/v1/current/31.23/121.47?lang=zh"));
+
+    // 控制台「设置」给的专属 Host 不带协议头（板上实测_config 就是这样）：
+    // 程序必须自动补 https://，否则 QNetworkAccessManager 报
+    // "Protocol \"\" is unknown"，请求根本发不出去。
+    WeatherConfiguration bareHostConfig = configuration;
+    bareHostConfig.apiHost = QStringLiteral("ph6vhhujph.re.qweatherapi.com");
+    const QWeatherProvider bareHostProvider(bareHostConfig);
+    QCOMPARE(bareHostProvider.currentUrl().toString(),
+             QStringLiteral("https://ph6vhhujph.re.qweatherapi.com/weather/v1/current/31.23/121.47?lang=zh"));
+
+    // 缺 now.temp。
+    const QByteArray missingTemp = "{\"code\":\"200\",\"now\":{\"text\":\"晴\"}}";
+    QVERIFY(!QWeatherProvider::parseCurrent(missingTemp, configuration, &snapshot, &error));
+    QCOMPARE(error.code, WeatherErrorCode::InvalidResponse);
+
+    // 非法 JSON。
+    const QByteArray invalidJson = "not a json body";
+    QVERIFY(!QWeatherProvider::parseCurrent(invalidJson, configuration, &snapshot, &error));
+    QCOMPARE(error.code, WeatherErrorCode::InvalidResponse);
+
+    // API 返回错误码。
+    const QByteArray rateLimited = "{\"code\":\"429\",\"now\":{}}";
+    QVERIFY(!QWeatherProvider::parseCurrent(rateLimited, configuration, &snapshot, &error));
+    QCOMPARE(error.code, WeatherErrorCode::RateLimited);
+    QCOMPARE(error.apiCode, QStringLiteral("429"));
+
+    // 空结果（now 对象缺失字段）。
+    const QByteArray missingNow = "{\"code\":\"200\",\"now\":{}}";
+    QVERIFY(!QWeatherProvider::parseCurrent(missingNow, configuration, &snapshot, &error));
+    QCOMPARE(error.code, WeatherErrorCode::EmptyResult);
+
+    // 响应码映射：403/404 归配置错误，不归 Unauthorized。
+    QCOMPARE(QWeatherProvider::mapResponseCode(QStringLiteral("401")),
+             WeatherErrorCode::Unauthorized);
+    QCOMPARE(QWeatherProvider::mapResponseCode(QStringLiteral("403")),
+             WeatherErrorCode::ConfigurationError);
+    QCOMPARE(QWeatherProvider::mapResponseCode(QStringLiteral("404")),
+             WeatherErrorCode::ConfigurationError);
+    QCOMPARE(QWeatherProvider::mapResponseCode(QStringLiteral("429")),
+             WeatherErrorCode::RateLimited);
+    QCOMPARE(QWeatherProvider::mapResponseCode(QStringLiteral("500")),
+             WeatherErrorCode::ServerError);
+
+    // HTTP 状态映射：404 不得再映射为 Unauthorized。
+    QCOMPARE(QWeatherProvider::mapHttpStatus(400),
+             WeatherErrorCode::ConfigurationError);
+    QCOMPARE(QWeatherProvider::mapHttpStatus(401),
+             WeatherErrorCode::Unauthorized);
+    QCOMPARE(QWeatherProvider::mapHttpStatus(403),
+             WeatherErrorCode::ConfigurationError);
+    QCOMPARE(QWeatherProvider::mapHttpStatus(404),
+             WeatherErrorCode::ConfigurationError);
+    QVERIFY(QWeatherProvider::mapHttpStatus(404) != WeatherErrorCode::Unauthorized);
+    QCOMPARE(QWeatherProvider::mapHttpStatus(429),
+             WeatherErrorCode::RateLimited);
+    QCOMPARE(QWeatherProvider::mapHttpStatus(500),
+             WeatherErrorCode::ServerError);
+
+    // application/problem+json 的错误诊断提取（不含 API Key 与超链接 type）。
+    const QByteArray problemJson =
+        "{\"error\":{\"status\":404,\"type\":\"https://example/errors/not-found\","
+        "\"title\":\"Not Found\",\"detail\":\"the requested path does not exist\"}}";
+    QCOMPARE(QWeatherProvider::problemDetail(problemJson),
+             QStringLiteral("Not Found: the requested path does not exist"));
+    const QByteArray messageJson = "{\"code\":\"403\",\"message\":\"permission denied\"}";
+    QCOMPARE(QWeatherProvider::problemDetail(messageJson),
+             QStringLiteral("permission denied"));
+    QVERIFY(QWeatherProvider::problemDetail(QByteArrayLiteral("not json")).isEmpty());
+
+    // 工厂：unknown provider 返回占位 Provider，不崩溃。
+    WeatherConfiguration unknown = configuration;
+    unknown.provider = QStringLiteral("unknown");
+    auto unsupported = WeatherProviderFactory::create(unknown);
+    QVERIFY(unsupported != nullptr);
+}
+
+void V02Test::weatherServiceRefreshesUpdatesAndDegrades()
+{
+    const WeatherConfiguration configuration = validWeatherConfiguration();
+
+    // 1) disabled → 不启动、不请求。
+    {
+        WeatherConfiguration disabled = configuration;
+        disabled.enabled = false;
+        FakeWeatherProvider provider;
+        SystemService system;
+        WeatherService service(disabled, &provider, &system);
+        system.setNetworkState(true, true, QStringLiteral("已联网"));
+        service.start();
+        QCOMPARE(provider.fetchCount, 0);
+        QCOMPARE(service.isActive(), false);
+    }
+
+    // 2) 在线启动 → 立即请求；成功更新 SystemService；失败保留旧值。
+    {
+        FakeWeatherProvider provider;
+        SystemService system;
+        WeatherService service(configuration, &provider, &system);
+        system.setNetworkState(true, true, QStringLiteral("已联网"));
+        service.start();
+        QCOMPARE(provider.fetchCount, 1);
+        QCOMPARE(service.isActive(), true);
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("--"));
+
+        WeatherSnapshot good;
+        good.valid = true;
+        good.condition = QStringLiteral("晴");
+        good.conditionCode = QStringLiteral("100");
+        good.temperatureC = 26;
+        good.feelsLikeC = 27;
+        good.humidityPercent = 65;
+        provider.emitSuccess(good);
+        QVERIFY(service.currentOrNone().has_value());
+        QCOMPARE(service.current().summary(), QStringLiteral("晴 26°"));
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("晴 26°"));
+        // 图标编码随快照一起同步到状态栏（空编码时保持空）。
+        QCOMPARE(system.status().weatherConditionCode, QStringLiteral("100"));
+
+        WeatherError failure;
+        failure.code = WeatherErrorCode::ServerError;
+        failure.provider = QStringLiteral("qweather");
+        provider.emitFailure(failure);
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("晴 26°"));
+        QCOMPARE(system.status().weatherConditionCode, QStringLiteral("100"));
+        QVERIFY(service.currentOrNone().has_value());
+    }
+
+    // 3) 离线启动 → 不发请求、保持 "--"；网络恢复（上升沿）立即补刷。
+    // 这是上板实测的回归点：板子开机时 wlan0 比应用晚就绪，启动即刷被跳过，
+    // 若没有网络恢复补刷，下一次尝试要等 refresh_minutes=30 分钟。
+    {
+        FakeWeatherProvider provider;
+        SystemService system;
+        WeatherService service(configuration, &provider, &system);
+        system.setNetworkState(true, false, QStringLiteral("未连接"));
+        service.start();
+        QCOMPARE(provider.fetchCount, 0);
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("--"));
+        system.setNetworkState(true, true, QStringLiteral("已联网"));
+        QCOMPARE(provider.fetchCount, 1);
+        WeatherSnapshot good;
+        good.valid = true;
+        good.condition = QStringLiteral("晴");
+        good.temperatureC = 26;
+        provider.emitSuccess(good);
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("晴 26°"));
+        QVERIFY(service.currentOrNone().has_value());
+    }
+
+    // 4) 超过 stale_after_minutes → stale 置位。
+    {
+        FakeWeatherProvider provider;
+        SystemService system;
+        WeatherService service(configuration, &provider, &system);
+        system.setNetworkState(true, true, QStringLiteral("已联网"));
+        service.start();
+        WeatherSnapshot old;
+        old.valid = true;
+        old.condition = QStringLiteral("多云");
+        old.temperatureC = 24;
+        old.updatedAt = QDateTime::currentDateTimeUtc().addSecs(-3 * 3600);
+        provider.emitSuccess(old);
+        const auto snapshot = service.currentOrNone();
+        QVERIFY(snapshot.has_value());
+        QVERIFY(snapshot->stale);
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("多云 24°"));
+    }
+
+    // 5) stop 后迟到回调不再更新。
+    {
+        FakeWeatherProvider provider;
+        SystemService system;
+        WeatherService service(configuration, &provider, &system);
+        system.setNetworkState(true, true, QStringLiteral("已联网"));
+        service.start();
+        QCOMPARE(provider.fetchCount, 1);
+        service.stop();
+        QCOMPARE(provider.cancelCount, 1);
+        QCOMPARE(service.isActive(), false);
+        WeatherSnapshot late;
+        late.valid = true;
+        late.condition = QStringLiteral("雨");
+        late.temperatureC = 20;
+        provider.emitSuccess(late);
+        QVERIFY(!service.currentOrNone().has_value());
+        QCOMPARE(system.status().weatherSummary, QStringLiteral("--"));
+    }
+}
+
+void V02Test::voiceInteractionInjectsWeatherContext()
+{
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
+    FakeVoiceAudioPort audio;
+    MediaSessionCoordinator mediaSessions;
+    VoiceInteractionService service(validAiConfiguration(), &asr, &llm, &tts,
+                                    &audio, &mediaSessions);
+    const QByteArray wav = VoiceAudioAdapter::pcmS16LeMonoToWav(
+        QByteArray(640, '\1'));
+
+    auto sayCurrentWeather = [&]() {
+        const VoiceInteractionResult started = service.startInteraction();
+        const quint64 session = started.snapshot.sessionId;
+        QVERIFY(service.finishRecording().success);
+        audio.completeRecording(session, wav);
+        asr.succeedAsr(session, QStringLiteral("现在天气怎么样"));
+    };
+
+    // 未注入天气 → LLM messages 无天气上下文（systemPrompt + user）。
+    sayCurrentWeather();
+    QCOMPARE(llm.messages.size(), 2);
+    QCOMPARE(llm.messages.at(0).role, QStringLiteral("system"));
+    QCOMPARE(llm.messages.at(1).role, QStringLiteral("user"));
+
+    WeatherSnapshot snapshot;
+    snapshot.valid = true;
+    snapshot.condition = QStringLiteral("晴");
+    snapshot.temperatureC = 26;
+    snapshot.feelsLikeC = 27;
+    snapshot.humidityPercent = 69;
+    snapshot.updatedAt = QDateTime::currentDateTimeUtc();
+    service.setWeatherProvider([snapshot]() {
+        return std::optional<WeatherSnapshot>{snapshot};
+    });
+
+    // 注入天气后 → 追加一条 system 上下文。
+    service.cancelInteraction();
+    sayCurrentWeather();
+    QCOMPARE(llm.messages.size(), 3);
+    QCOMPARE(llm.messages.at(0).role, QStringLiteral("system"));
+    QCOMPARE(llm.messages.at(2).role, QStringLiteral("user"));
+    const QString context = llm.messages.at(1).content;
+    QVERIFY(context.contains(QStringLiteral("实时天气")));
+    QVERIFY(context.contains(QStringLiteral("晴")));
+    QVERIFY(context.contains(QStringLiteral("26")));
+    QVERIFY(context.contains(QStringLiteral("湿度：69%")));
+    QVERIFY(!context.contains(QStringLiteral("过期")));
+
+    // 过期数据 → 明确注明过期，避免模型把旧天气当当前天气。
+    WeatherSnapshot staleSnapshot = snapshot;
+    staleSnapshot.stale = true;
+    staleSnapshot.updatedAt = QDateTime::currentDateTimeUtc().addSecs(-3 * 3600);
+    service.setWeatherProvider([staleSnapshot]() {
+        return std::optional<WeatherSnapshot>{staleSnapshot};
+    });
+    service.cancelInteraction();
+    sayCurrentWeather();
+    QCOMPARE(llm.messages.size(), 3);
+    QVERIFY(llm.messages.at(1).content.contains(QStringLiteral("过期")));
+
+    service.cancelInteraction();
+}
+
 void V02Test::voiceInteractionCompletesAndRetainsContext()
 {
     FakeAsrProvider asr;
@@ -1732,6 +2231,13 @@ void V02Test::pagesExposeSemanticSignalsAndModels()
     binaryBacklight.brightnessLevels = 2;
     binaryBacklight.brightnessSummary = QStringLiteral("GPIO 背光 · 仅开/关");
     settingsPage.setDeviceSummary(binaryBacklight);
+    // QWeather 来源署名：状态栏（小屏）不再展示，放在设置页「关于设备」。
+    bool aboutHasAttribution = false;
+    for (QLabel* label : settingsPage.findChildren<QLabel*>())
+        aboutHasAttribution = aboutHasAttribution
+            || label->text().contains(
+                QStringLiteral("天气数据：和风天气 (QWeather)"));
+    QVERIFY(aboutHasAttribution);
     auto* brightnessSlider = settingsPage.findChild<QSlider*>(
         QStringLiteral("brightnessSlider"));
     QCOMPARE(brightnessSlider->minimum(), 0);
@@ -1806,6 +2312,7 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
     input.networkSummary = QStringLiteral("Wi-Fi · 已联网");
     input.batteryPercent = 87;
     input.weatherSummary = QStringLiteral("晴 26°");
+    input.weatherConditionCode = QStringLiteral("100");
     status.setStatus(input);
     status.show();
     QTest::qWait(10);
@@ -1822,6 +2329,33 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
                 && label->text().contains(QStringLiteral("电量 87%")));
     QVERIFY(foundSummary);
 
+    // 小屏紧凑样式：状态栏只保留温度（"26°"，取 "晴 26°" 末段），
+    // 不显示现象文本和来源署名；署名移至设置页「关于设备」。
+    bool foundWeatherCompact = false;
+    for (QLabel* label : status.findChildren<QLabel*>())
+        foundWeatherCompact = foundWeatherCompact
+            || (label->text().contains(QStringLiteral("26°"))
+                && label->text().contains(QStringLiteral("电量 87%")));
+    QVERIFY(foundWeatherCompact);
+    bool weatherAttributionInStatusBar = false;
+    for (QLabel* label : status.findChildren<QLabel*>())
+        weatherAttributionInStatusBar = weatherAttributionInStatusBar
+            || label->text().contains(QStringLiteral("天气服务"));
+    QVERIFY(!weatherAttributionInStatusBar);
+
+    // 天气图标随编码显示（"100"→晴），无可用编码时隐藏、不占位。
+    auto* weatherIcon = status.findChild<SvgIconWidget*>(
+        QStringLiteral("weatherConditionIcon"));
+    QVERIFY(weatherIcon);
+    QVERIFY(weatherIcon->isVisible());
+    QCOMPARE(weatherIcon->resourcePath(), QStringLiteral(":/icons/weather-sunny.svg"));
+    input.weatherConditionCode.clear();
+    status.setStatus(input);
+    QVERIFY(!weatherIcon->isVisible());
+    input.weatherConditionCode = QStringLiteral("100");
+    status.setStatus(input);
+    QVERIFY(weatherIcon->isVisible());
+
     MainWindow window;
     window.setSystemStatus(input);
     QCOMPARE(window.findChildren<StatusBarWidget*>().size(), 6);
@@ -1832,7 +2366,61 @@ void V02Test::statusBarRemains64AndShowsSystemInput()
                 || (label->text().contains(QStringLiteral("Wi-Fi · 已联网"))
                     && label->text().contains(QStringLiteral("电量 87%")));
         QVERIFY(pageHasSummary);
+        auto* pageIcon = pageStatus->findChild<SvgIconWidget*>(
+            QStringLiteral("weatherConditionIcon"));
+        QVERIFY(pageIcon);
+        // MainWindow 未 show()，isVisible 永远为 false；只需确认没被显式隐藏。
+        QVERIFY(!pageIcon->isHidden());
     }
+}
+
+void V02Test::weatherIconMappingCoversQWeatherCodes()
+{
+    // 和风 icon 编码 → 内置 SVG 资源路径。
+    QCOMPARE(weatherIconResource(QStringLiteral("100")),
+             QStringLiteral(":/icons/weather-sunny.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("150")),
+             QStringLiteral(":/icons/weather-clear-night.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("101")),
+             QStringLiteral(":/icons/weather-partly-cloudy.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("153")),
+             QStringLiteral(":/icons/weather-partly-cloudy.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("104")),
+             QStringLiteral(":/icons/weather-cloudy.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("154")),
+             QStringLiteral(":/icons/weather-cloudy.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("302")),
+             QStringLiteral(":/icons/weather-thunderstorm.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("303")),
+             QStringLiteral(":/icons/weather-thunderstorm.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("399")),
+             QStringLiteral(":/icons/weather-rain.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("400")),
+             QStringLiteral(":/icons/weather-snow.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("501")),
+             QStringLiteral(":/icons/weather-fog.svg"));
+    QCOMPARE(weatherIconResource(QStringLiteral("510")),
+             QStringLiteral(":/icons/weather-windy.svg"));
+
+    // 未知 / 空编码返回空串：状态栏保持纯文本，不显示错误图标。
+    QVERIFY(weatherIconResource(QString()).isEmpty());
+    QVERIFY(weatherIconResource(QStringLiteral("999")).isEmpty());
+    QVERIFY(weatherIconResource(QStringLiteral("abc")).isEmpty());
+
+    // 全部资源文件必须在 qrc 中注册、可加载（读不到资源说明 qrc 漏注册）。
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-sunny.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-cloudy.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-partly-cloudy.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-rain.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-thunderstorm.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-snow.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-fog.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-windy.svg")).exists());
+    QVERIFY(QFile(QStringLiteral(":/icons/weather-clear-night.svg")).exists());
+    QSvgRenderer sunny(QStringLiteral(":/icons/weather-sunny.svg"));
+    QVERIFY2(sunny.isValid(), "weather-sunny.svg 必须可渲染");
+    QSvgRenderer rain(QStringLiteral(":/icons/weather-rain.svg"));
+    QVERIFY2(rain.isValid(), "weather-rain.svg 必须可渲染");
 }
 
 void V02Test::controlTimeoutWorksAcrossBusinessPages()

@@ -36,6 +36,7 @@ private:
     SettingRow* m_brightnessRow = nullptr;
     SettingRow* m_networkRow = nullptr;
     SettingRow* m_familyRow = nullptr;
+    SettingRow* m_aboutRow = nullptr;
     QLabel* m_versionSummary = nullptr;
     class QPushButton* m_petStyleButton = nullptr;
     class QPushButton* m_networkButton = nullptr;

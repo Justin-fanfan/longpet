@@ -53,10 +53,15 @@ void SystemService::setBatteryPercent(int percent)
     emit statusChanged(m_status);
 }
 
-void SystemService::setWeatherSummary(const QString& summary)
+void SystemService::setWeatherSummary(const QString& summary,
+                                      const QString& conditionCode)
 {
-    m_status.weatherSummary = summary.simplified().isEmpty()
-        ? QStringLiteral("--") : summary.simplified();
+    const QString cleaned = summary.simplified();
+    m_status.weatherSummary = cleaned.isEmpty()
+        ? QStringLiteral("--") : cleaned;
+    // 没有天气数据时同时清掉图标编码，避免"只有图标没有文字"的悬挂状态。
+    m_status.weatherConditionCode = m_status.weatherSummary == QStringLiteral("--")
+        ? QString() : conditionCode;
     emit statusChanged(m_status);
 }
 

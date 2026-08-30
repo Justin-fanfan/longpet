@@ -5,6 +5,8 @@
 
 #include <QDebug>
 
+#include <utility>
+
 const QString VoiceInteractionService::MediaOwner = QStringLiteral("voice_interaction");
 
 VoiceInteractionService::VoiceInteractionService(
@@ -143,6 +145,12 @@ bool VoiceInteractionService::accepts(quint64 sessionId,
     return sessionId == m_snapshot.sessionId && m_snapshot.state == state;
 }
 
+void VoiceInteractionService::setWeatherProvider(
+    std::function<std::optional<WeatherSnapshot>()> provider)
+{
+    m_weatherProvider = std::move(provider);
+}
+
 void VoiceInteractionService::handleRecordingStarted(quint64 sessionId)
 {
     if (!accepts(sessionId, VoiceInteractionState::Recording))
@@ -257,9 +265,43 @@ QList<AiChatMessage> VoiceInteractionService::messagesFor(
         messages.append({QStringLiteral("system"),
                          m_configuration.voice.systemPrompt.trimmed()});
     }
+    // 有有效天气快照时追加一条 system 上下文，让 LLM 能据实回答当前天气。
+    // 没有有效数据时保持原样，绝不主动向 QWeather 发请求。
+    if (m_weatherProvider) {
+        const auto snapshot = m_weatherProvider();
+        if (snapshot && snapshot->valid)
+            messages.append({QStringLiteral("system"),
+                             weatherContextMessage(*snapshot)});
+    }
     messages.append(m_history);
     messages.append({QStringLiteral("user"), userText});
     return messages;
+}
+
+QString VoiceInteractionService::weatherContextMessage(
+    const WeatherSnapshot& snapshot) const
+{
+    QString text = QStringLiteral("设备当前缓存的实时天气信息：\n");
+    if (!snapshot.condition.isEmpty())
+        text += QStringLiteral("天气：%1\n").arg(snapshot.condition);
+    text += QStringLiteral("温度：%1℃\n").arg(QString::number(snapshot.temperatureC, 'f', 0));
+    if (snapshot.feelsLikeC != 0.0)
+        text += QStringLiteral("体感温度：%1℃\n").arg(QString::number(snapshot.feelsLikeC, 'f', 0));
+    if (snapshot.humidityPercent > 0)
+        text += QStringLiteral("湿度：%1%\n").arg(snapshot.humidityPercent);
+    if (snapshot.updatedAt.isValid())
+        // 内部统一存 UTC，展示给模型时转换成本机时区。
+        text += QStringLiteral("数据更新时间：%1\n")
+            .arg(snapshot.updatedAt.toLocalTime().toString(
+                QStringLiteral("yyyy-MM-dd HH:mm")));
+    if (snapshot.stale)
+        text += QStringLiteral("注意：该天气数据已经超过正常更新时间，可能已经过期。\n");
+    text += QStringLiteral(
+        "这是一份当前实时天气数据，不包含未来天气预报。\n"
+        "当用户询问当前天气时请以此数据为准。\n"
+        "如果用户询问今天稍后、明天、是否会下雨、最高最低温等预测信息，\n"
+        "而当前上下文没有预报数据，请明确说明没有足够的天气预报信息，不要自行猜测。");
+    return text;
 }
 
 void VoiceInteractionService::appendHistory(const QString& userText,

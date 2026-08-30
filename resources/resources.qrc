@@ -6,6 +6,14 @@
         <file alias="icons/care.svg">icons/care.svg</file>
         <file alias="icons/reminder.svg">icons/reminder.svg</file>
         <file alias="icons/weather-sunny.svg">icons/weather-sunny.svg</file>
+        <file alias="icons/weather-cloudy.svg">icons/weather-cloudy.svg</file>
+        <file alias="icons/weather-partly-cloudy.svg">icons/weather-partly-cloudy.svg</file>
+        <file alias="icons/weather-rain.svg">icons/weather-rain.svg</file>
+        <file alias="icons/weather-thunderstorm.svg">icons/weather-thunderstorm.svg</file>
+        <file alias="icons/weather-snow.svg">icons/weather-snow.svg</file>
+        <file alias="icons/weather-fog.svg">icons/weather-fog.svg</file>
+        <file alias="icons/weather-windy.svg">icons/weather-windy.svg</file>
+        <file alias="icons/weather-clear-night.svg">icons/weather-clear-night.svg</file>
         <file alias="icons/wifi.svg">icons/wifi.svg</file>
         <file alias="icons/battery.svg">icons/battery.svg</file>
         <file alias="icons/pill.svg">icons/pill.svg</file>

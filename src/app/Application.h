@@ -33,6 +33,9 @@ class VideoCallMediaAdapter;
 class CallPromptPlayerAdapter;
 class VoiceAudioAdapter;
 class VoiceInteractionService;
+class WeatherConfigRepository;
+class WeatherProviderPort;
+class WeatherService;
 class TtsProviderPort;
 
 class Application final : public QObject {
@@ -52,6 +55,7 @@ public:
 private:
     QString resolveDatabasePath() const;
     QString resolveAiConfigPath() const;
+    QString resolveWeatherConfigPath() const;
 
     std::unique_ptr<DatabaseManager> m_database;
     std::unique_ptr<ReminderRepository> m_reminderRepository;
@@ -68,6 +72,9 @@ private:
     std::unique_ptr<TtsProviderPort> m_ttsProvider;
     std::unique_ptr<VoiceAudioAdapter> m_voiceAudioAdapter;
     std::unique_ptr<VoiceInteractionService> m_voiceInteractionService;
+    std::unique_ptr<WeatherConfigRepository> m_weatherConfigRepository;
+    std::unique_ptr<WeatherProviderPort> m_weatherProvider;
+    std::unique_ptr<WeatherService> m_weatherService;
     std::unique_ptr<VideoCallMediaAdapter> m_videoCallMediaAdapter;
     std::unique_ptr<CallPromptPlayerAdapter> m_callPromptPlayerAdapter;
     std::unique_ptr<VideoCallService> m_videoCallService;

@@ -41,6 +41,8 @@ set(
     src/model/ReminderModels.h
     src/model/AiModels.cpp
     src/model/AiModels.h
+    src/model/WeatherModels.cpp
+    src/model/WeatherModels.h
     src/model/NetworkModels.h
     src/model/SettingsModels.h
     src/model/SystemModels.h
@@ -59,6 +61,10 @@ set(
     src/platform/AliyunProviders.h
     src/platform/AiProviderFactory.cpp
     src/platform/AiProviderFactory.h
+    src/platform/QWeatherProvider.cpp
+    src/platform/QWeatherProvider.h
+    src/platform/WeatherProviderFactory.cpp
+    src/platform/WeatherProviderFactory.h
     src/platform/VoiceAudioAdapter.cpp
     src/platform/VoiceAudioAdapter.h
     src/platform/AudioVolumeAdapter.cpp
@@ -83,6 +89,8 @@ set(
     src/data/SettingsRepository.h
     src/data/AiConfigRepository.cpp
     src/data/AiConfigRepository.h
+    src/data/WeatherConfigRepository.cpp
+    src/data/WeatherConfigRepository.h
     src/services/ReminderService.cpp
     src/services/ReminderService.h
     src/services/NetworkService.cpp
@@ -100,6 +108,9 @@ set(
     src/services/VideoCallPorts.h
     src/services/MediaSessionCoordinator.cpp
     src/services/MediaSessionCoordinator.h
+    src/services/WeatherPorts.h
+    src/services/WeatherService.cpp
+    src/services/WeatherService.h
     src/services/VoiceInteractionPorts.h
     src/services/VoiceInteractionService.cpp
     src/services/VoiceInteractionService.h
@@ -212,6 +223,12 @@ if(LONGPET_BUILD_TESTS)
     )
 
     longpet_enable_warnings(LongPetV02Tests)
+
+    target_compile_definitions(
+        LongPetV02Tests
+        PRIVATE
+            LONGPET_REPO_DIR="${CMAKE_SOURCE_DIR}"
+    )
 
     add_test(NAME LongPet.V02 COMMAND LongPetV02Tests)
     set_tests_properties(

@@ -103,7 +103,7 @@ SettingsPage::SettingsPage(QWidget* parent)
         QStringLiteral("宠物风格"), QStringLiteral("本地用户设置"),
         m_petStyleButton, this);
 
-    auto* about = new SettingRow(QStringLiteral(":/icons/info.svg"),
+    m_aboutRow = new SettingRow(QStringLiteral(":/icons/info.svg"),
         QStringLiteral("关于设备"), QStringLiteral("正式软件版本"),
         summaryControl(&m_versionSummary, this), this);
 
@@ -112,7 +112,7 @@ SettingsPage::SettingsPage(QWidget* parent)
     grid->addWidget(m_networkRow, 1, 0);
     grid->addWidget(m_familyRow, 1, 1);
     grid->addWidget(pet, 2, 0);
-    grid->addWidget(about, 2, 1);
+    grid->addWidget(m_aboutRow, 2, 1);
     grid->setRowStretch(3, 1);
     root->addLayout(grid, 1);
 
@@ -169,6 +169,10 @@ void SettingsPage::setSettings(const UserSettings& settings)
 
 void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
 {
+    // QWeather 使用条款要求的来源署名：状态栏只留天气图标 + 温度，
+    // 署名放在「关于设备」这一行（设备信息区域为合理的署名位置）。
+    m_aboutRow->setSubtitle(
+        QStringLiteral("正式软件版本 · 天气数据：和风天气 (QWeather)"));
     m_soundRow->setSubtitle(summary.audioSummary.isEmpty()
         ? QStringLiteral("未检测到音量控制") : summary.audioSummary);
     m_brightnessRow->setSubtitle(summary.brightnessSummary.isEmpty()

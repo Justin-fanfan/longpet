@@ -19,6 +19,51 @@ QLabel* makeLabel(const QString& text, const char* role, QWidget* parent)
     return label;
 }
 
+QString weatherIconResource(const QString& conditionCode)
+{
+    // 和风 icon 编码 → 内置 SVG；未知编码返回空串（纯文本展示）。
+    auto resource = [](const char* name) {
+        return QStringLiteral(":/icons/weather-%1.svg")
+            .arg(QString::fromLatin1(name));
+    };
+    bool numeric = false;
+    const int code = conditionCode.toInt(&numeric);
+    if (!numeric)
+        return {};
+    switch (code) {
+    case 100:    // 晴
+    case 105:    // 晴转多云（预报场景兜底）
+        return resource("sunny");
+    case 150:    // 晴（夜间）
+        return resource("clear-night");
+    case 101:    // 多云
+    case 102:    // 少云
+    case 103:    // 晴间多云
+    case 151:    // 多云（夜间）
+    case 152:    // 少云（夜间）
+    case 153:    // 晴间多云（夜间）
+        return resource("partly-cloudy");
+    case 104:    // 阴
+    case 154:    // 阴（夜间）
+        return resource("cloudy");
+    case 302:    // 雷阵雨
+    case 303:    // 强雷阵雨
+    case 304:    // 雷阵雨伴有冰雹
+        return resource("thunderstorm");
+    default:
+        break;
+    }
+    if (code >= 300 && code < 400)      // 阵雨 ~ 特大暴雨
+        return resource("rain");
+    if (code >= 400 && code < 500)      // 小雪 ~ 暴雪
+        return resource("snow");
+    if (code >= 500 && code < 510)      // 雾 / 霾 / 沙尘
+        return resource("fog");
+    if (code >= 510 && code < 520)      // 风
+        return resource("windy");
+    return {};
+}
+
 SvgIconWidget::SvgIconWidget(const QString& resourcePath, int size, QWidget* parent)
     : QWidget(parent), m_resourcePath(resourcePath)
 {
@@ -30,6 +75,11 @@ void SvgIconWidget::setResourcePath(const QString& resourcePath)
 {
     m_resourcePath = resourcePath;
     update();
+}
+
+QString SvgIconWidget::resourcePath() const
+{
+    return m_resourcePath;
 }
 
 void SvgIconWidget::paintEvent(QPaintEvent*)
@@ -78,6 +128,13 @@ StatusBarWidget::StatusBarWidget(bool showSettings, QWidget* parent)
     m_systemLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
     right->addWidget(m_systemLabel);
 
+    // 天气图标：放在整行摘要最前面（天气永远显示在第一位），仅在有
+    // 天气数据且编码可映射时显示；不改变状态栏布局与字号。
+    m_weatherIcon = new SvgIconWidget({}, 20, rightHost);
+    m_weatherIcon->setObjectName(QStringLiteral("weatherConditionIcon"));
+    m_weatherIcon->hide();
+    right->insertWidget(0, m_weatherIcon, 0, Qt::AlignVCenter);
+
     if (showSettings) {
         m_settingsButton = new QPushButton(rightHost);
         m_settingsButton->setObjectName(QStringLiteral("settingsButton"));
@@ -117,8 +174,27 @@ void StatusBarWidget::setStatus(const SystemStatus& status)
                                                  : QStringLiteral("网络断开"));
     if (status.batteryPercent >= 0)
         summaries.append(QStringLiteral("电量 %1%").arg(status.batteryPercent));
-    if (status.weatherSummary != QStringLiteral("--") && !status.weatherSummary.isEmpty())
-        summaries.prepend(status.weatherSummary);
+    const bool hasWeather = status.weatherSummary != QStringLiteral("--")
+        && !status.weatherSummary.isEmpty();
+    if (hasWeather) {
+        // 小屏紧凑样式：只显示天气图标 + 温度（weatherSummary 形如 "晴 26°"，
+        // 取末段温度）。QWeather 条款要求的来源署名移到了设置页「关于设备」，
+        // 状态栏不再展示，避免和网络/电量挤在一行。
+        QString weatherText = status.weatherSummary;
+        const int separator = weatherText.lastIndexOf(QLatin1Char(' '));
+        if (separator >= 0)
+            weatherText = weatherText.mid(separator + 1);
+        summaries.prepend(weatherText);
+        const QString weatherIcon = weatherIconResource(status.weatherConditionCode);
+        if (weatherIcon.isEmpty()) {
+            m_weatherIcon->hide();
+        } else {
+            m_weatherIcon->setResourcePath(weatherIcon);
+            m_weatherIcon->show();
+        }
+    } else if (m_weatherIcon->isVisible()) {
+        m_weatherIcon->hide();
+    }
     m_systemLabel->setText(summaries.isEmpty()
         ? QStringLiteral("状态待设备接口接入") : summaries.join(QStringLiteral(" · ")));
 }

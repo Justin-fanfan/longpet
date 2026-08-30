@@ -14,10 +14,17 @@ class QVBoxLayout;
 
 QLabel* makeLabel(const QString& text, const char* role, QWidget* parent = nullptr);
 
+// 和风 icon 编码 → 内置天气 SVG 资源路径（":/icons/weather-xxx.svg"）。
+// 未知/空编码返回空串：状态栏保持纯文本，不显示图标。
+QString weatherIconResource(const QString& conditionCode);
+
 class SvgIconWidget final : public QWidget {
+    Q_OBJECT
+
 public:
     explicit SvgIconWidget(const QString& resourcePath, int size = 36, QWidget* parent = nullptr);
     void setResourcePath(const QString& resourcePath);
+    QString resourcePath() const;
 
 protected:
     void paintEvent(QPaintEvent* event) override;
@@ -46,6 +53,7 @@ private:
     QLabel* m_dateLabel = nullptr;
     QLabel* m_timeLabel = nullptr;
     QLabel* m_systemLabel = nullptr;
+    SvgIconWidget* m_weatherIcon = nullptr;
     QPushButton* m_settingsButton = nullptr;
 };
 

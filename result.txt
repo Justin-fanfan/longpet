@@ -1,0 +1,67 @@
+********* Start testing of V02Test *********
+Config: Using QtTest library 6.11.2, Qt 6.11.2 (x86_64-little_endian-llp64 shared (dynamic) release build; by MSVC 2022), windows 11
+PASS   : V02Test::initTestCase()
+PASS   : V02Test::resourcesAreEmbedded()
+PASS   : V02Test::databaseCreatesVersionedSchema()
+QWARN  : V02Test::applicationCompositionRootInitializes() 未找到 AI 配置文件 C:/Users/18214/AppData/Local/LongPetV02Tests/longpet-ai.ini：ASR API 地址未配置或格式不正确
+QINFO  : V02Test::applicationCompositionRootInitializes() AI ASR provider: openai-compatible
+QINFO  : V02Test::applicationCompositionRootInitializes() AI LLM provider: openai-compatible
+QINFO  : V02Test::applicationCompositionRootInitializes() AI TTS provider: openai-compatible
+QWARN  : V02Test::applicationCompositionRootInitializes() 天气功能未启用
+QINFO  : V02Test::applicationCompositionRootInitializes() Weather provider: qweather
+QINFO  : V02Test::applicationCompositionRootInitializes() QNetworkInformation backend loaded: "networklistmanager"
+QWARN  : V02Test::applicationCompositionRootInitializes() Audio volume adapter unavailable: "当前构建未启用 ALSA"
+QINFO  : V02Test::applicationCompositionRootInitializes() Weather disabled; weather service not started
+QINFO  : V02Test::applicationCompositionRootInitializes() FamilyLink API listening on 127.0.0.1:52533
+PASS   : V02Test::applicationCompositionRootInitializes()
+QWARN  : V02Test::networkStatusAdapterMapsAndDegrades() QNetworkInformation backend unavailable; network status is unknown
+PASS   : V02Test::networkStatusAdapterMapsAndDegrades()
+PASS   : V02Test::networkConfigurationParsesValidatesAndEmits()
+PASS   : V02Test::hardwareAdaptersMapAndDegrade()
+PASS   : V02Test::reminderCrudPersistsAndRejectsStaleRevision()
+PASS   : V02Test::reminderSchedulerDoesNotRedeliverToday()
+PASS   : V02Test::careAndSettingsArePersistentServices()
+PASS   : V02Test::familyLinkApiReadsAndWritesServiceData()
+PASS   : V02Test::videoCallStateAndApiTransition()
+PASS   : V02Test::mediaFrameProtocolAndIncomingCallLifecycle()
+PASS   : V02Test::aiConfigurationAndWavEncoding()
+PASS   : V02Test::weatherConfigurationParsesValidatesAndOverrides()
+PASS   : V02Test::weatherDeploymentExampleComplies()
+QINFO  : V02Test::weatherProviderParsesQWeatherJson() Weather provider: unknown
+PASS   : V02Test::weatherProviderParsesQWeatherJson()
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather disabled; weather service not started
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather service starting, provider= qweather refresh_minutes= 30
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather updated: 晴 26° observedAt= 
+QWARN  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather update failed: provider= qweather code= ServerError http= 0 api_code=  detail= 
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather service starting, provider= qweather refresh_minutes= 30
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather refresh skipped: network unavailable
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather updated: 晴 26° observedAt= 
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather service starting, provider= qweather refresh_minutes= 30
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather updated: 多云 24° observedAt= 
+QINFO  : V02Test::weatherServiceRefreshesUpdatesAndDegrades() Weather service starting, provider= qweather refresh_minutes= 30
+PASS   : V02Test::weatherServiceRefreshesUpdatesAndDegrades()
+PASS   : V02Test::voiceInteractionInjectsWeatherContext()
+PASS   : V02Test::voiceInteractionCompletesAndRetainsContext()
+QWARN  : V02Test::voiceInteractionFailuresCancelAndRecover() Voice interaction failed: code=NetworkError provider=fake/asr fake failure
+QWARN  : V02Test::voiceInteractionFailuresCancelAndRecover() Voice interaction failed: code=ServerError provider=fake/llm fake failure
+QWARN  : V02Test::voiceInteractionFailuresCancelAndRecover() Voice interaction failed: code=RateLimited provider=fake/tts fake failure
+QWARN  : V02Test::voiceInteractionFailuresCancelAndRecover() Voice interaction failed: fake audio failure
+PASS   : V02Test::voiceInteractionFailuresCancelAndRecover()
+PASS   : V02Test::openAiCompatibleProviderHandlesSuccessErrorsAndTimeout()
+PASS   : V02Test::aliyunProvidersUseNativeProtocols()
+QINFO  : V02Test::providerFactorySupportsMixedProviders() AI ASR provider: aliyun
+QINFO  : V02Test::providerFactorySupportsMixedProviders() AI LLM provider: openai-compatible
+QINFO  : V02Test::providerFactorySupportsMixedProviders() AI TTS provider: openai
+QINFO  : V02Test::providerFactorySupportsMixedProviders() AI ASR provider: unknown-asr
+PASS   : V02Test::providerFactorySupportsMixedProviders()
+PASS   : V02Test::networkVoiceInteractionRunsEndToEnd()
+PASS   : V02Test::pagesExposeSemanticSignalsAndModels()
+PASS   : V02Test::applicationControllerOwnsNavigation()
+PASS   : V02Test::statusBarRemains64AndShowsSystemInput()
+PASS   : V02Test::weatherIconMappingCoversQWeatherCodes()
+PASS   : V02Test::controlTimeoutWorksAcrossBusinessPages()
+SKIP   : V02Test::renderV02Pages() LONGPET_TEST_CAPTURE_DIR is not set
+D:\code_qt\longpet_main\longpet\tests\V02Test.cpp(2435) : failure location
+PASS   : V02Test::cleanupTestCase()
+Totals: 31 passed, 0 failed, 1 skipped, 0 blacklisted, 3358ms
+********* Finished testing of V02Test *********

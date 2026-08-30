@@ -20,6 +20,7 @@ Environment="HOME=/home/longpet"
 Environment="XDG_RUNTIME_DIR=/run/longpet"
 Environment="LONGPET_DATABASE_PATH=/home/longpet/data/longpet.db"
 Environment="LONGPET_AI_CONFIG=/etc/longpet/ai.ini"
+Environment="LONGPET_WEATHER_CONFIG=/etc/longpet/longpet-weather.ini"
 
 Environment="QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0:tty=/dev/tty1"
 Environment="QT_QPA_GENERIC_PLUGINS=evdevtouch:/dev/input/event0"

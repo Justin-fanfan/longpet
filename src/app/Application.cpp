@@ -18,6 +18,8 @@
 #include "platform/PowerStatusAdapter.h"
 #include "platform/VideoCallMediaAdapter.h"
 #include "platform/VoiceAudioAdapter.h"
+#include "platform/WeatherProviderFactory.h"
+#include "data/WeatherConfigRepository.h"
 #include "services/CareService.h"
 #include "services/FamilyLinkService.h"
 #include "services/ReminderService.h"
@@ -28,6 +30,8 @@
 #include "services/VideoCallService.h"
 #include "services/VoiceInteractionService.h"
 #include "services/VoiceInteractionPorts.h"
+#include "services/WeatherService.h"
+#include "services/WeatherPorts.h"
 #include "widgets/VisualTokens.h"
 
 #include <QCoreApplication>
@@ -93,10 +97,26 @@ bool Application::initialize(QString* error)
     m_ttsProvider = AiProviderFactory::createTts(
         aiConfiguration.tts, aiConfiguration.voice.requestTimeoutMs);
     m_voiceAudioAdapter = std::make_unique<VoiceAudioAdapter>();
+    m_weatherConfigRepository = std::make_unique<WeatherConfigRepository>(
+        resolveWeatherConfigPath());
+    QString weatherConfigError;
+    const WeatherConfiguration weatherConfiguration =
+        m_weatherConfigRepository->load(&weatherConfigError);
+    if (!weatherConfigError.isEmpty())
+        qWarning().noquote() << weatherConfigError;
+    m_weatherProvider = WeatherProviderFactory::create(weatherConfiguration);
+    m_weatherService = std::make_unique<WeatherService>(
+        weatherConfiguration, m_weatherProvider.get(), m_systemService.get());
     m_voiceInteractionService = std::make_unique<VoiceInteractionService>(
         aiConfiguration, m_asrProvider.get(), m_llmProvider.get(),
         m_ttsProvider.get(), m_voiceAudioAdapter.get(),
         m_mediaSessionCoordinator.get());
+    // 给语音交互注入一个只读天气入口；VoiceInteractionService 不接触 Provider。
+    m_voiceInteractionService->setWeatherProvider(
+        [weatherService = m_weatherService.get()]() {
+            return weatherService ? weatherService->currentOrNone()
+                                  : std::optional<WeatherSnapshot>{};
+        });
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>();
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
     m_videoCallService = std::make_unique<VideoCallService>(
@@ -129,6 +149,7 @@ bool Application::initialize(QString* error)
     m_audioVolumeAdapter->start();
     m_backlightAdapter->start();
     m_powerStatusAdapter->start();
+    m_weatherService->start();
     const UserSettings currentSettings = m_settingsService->settings();
     m_audioVolumeAdapter->applyVolume(currentSettings.volume);
     m_backlightAdapter->applyBrightness(currentSettings.brightness);
@@ -177,6 +198,8 @@ void Application::show()
 
 void Application::shutdown()
 {
+    if (m_weatherService)
+        m_weatherService->stop();
     if (m_familyLinkController)
         m_familyLinkController->stop();
     if (m_reminderService)
@@ -201,6 +224,9 @@ void Application::shutdown()
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
     m_voiceInteractionService.reset();
+    m_weatherService.reset();
+    m_weatherProvider.reset();
+    m_weatherConfigRepository.reset();
     m_voiceAudioAdapter.reset();
     m_ttsProvider.reset();
     m_llmProvider.reset();
@@ -251,5 +277,18 @@ QString Application::resolveAiConfigPath() const
 #else
     return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
         .filePath(QStringLiteral("longpet-ai.ini"));
+#endif
+}
+
+QString Application::resolveWeatherConfigPath() const
+{
+    const QString overridePath = qEnvironmentVariable("LONGPET_WEATHER_CONFIG").trimmed();
+    if (!overridePath.isEmpty())
+        return overridePath;
+#ifdef Q_OS_LINUX
+    return QStringLiteral("/etc/longpet/longpet-weather.ini");
+#else
+    return QDir(QStandardPaths::writableLocation(QStandardPaths::AppConfigLocation))
+        .filePath(QStringLiteral("longpet-weather.ini"));
 #endif
 }

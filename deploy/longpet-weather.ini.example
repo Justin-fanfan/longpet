@@ -1,0 +1,37 @@
+# LongPet 天气配置示例
+# 拷贝到 /etc/longpet/longpet-weather.ini 后编辑。
+# 建议权限：root:longpet 0640（与 ai.ini 一致）。
+
+[weather]
+enabled=true
+
+# 目前仅实现 qweather。保留该字段以便后续扩展（amap / openweather / local）。
+provider=qweather
+
+# 和风天气专属 API Host（必填）。
+# 实际值请登录 QWeather 控制台，在「设置」页面查看你的专属 API Host：
+#   https://console.qweather.com/#/view/settings
+# 每个账号的 Host 各不相同，形如 abc123xyz.qweatherapi.com。
+# 控制台给的是不带协议头的裸主机名，填 "https://" 前缀的完整地址或裸主机名均可，
+# 程序会在缺失协议头时自动补上 https://（原始配置也兼容）。
+# 该占位符不可直接使用，请替换成你自己的专属 Host。
+api_host=https://YOUR_QWEATHER_API_HOST
+
+# 和风天气 API Key。Key 通过请求头 X-QW-Api-Key 上传，不会被写入 URL。
+api_key=你的APIKey
+
+# 经纬度（十进制）。第一版定位来自配置，不做 GPS / IP 定位。
+latitude=31.23
+longitude=121.47
+
+# 接口返回的文字语言：zh / en
+language=zh
+
+# 拉取刷新周期（分钟）
+refresh_minutes=30
+
+# 单次请求超时（毫秒）
+request_timeout_ms=10000
+
+# 数据超过该分钟数后标记为过期（状态栏仍显示旧值，但语音会提示可能过期）
+stale_after_minutes=120
