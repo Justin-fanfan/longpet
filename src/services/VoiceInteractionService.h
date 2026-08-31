@@ -18,6 +18,7 @@ class LlmProviderPort;
 class MediaSessionCoordinator;
 class TtsProviderPort;
 class VoiceAudioPort;
+class VoiceToolRegistry;
 
 class VoiceInteractionService final : public QObject {
     Q_OBJECT
@@ -42,10 +43,12 @@ public:
     // 注入一个只读的天气快照入口（一般来自 WeatherService::currentOrNone）。
     // 为空时不注入天气上下文；VoiceInteractionService 不依赖具体天气 Provider。
     void setWeatherProvider(std::function<std::optional<WeatherSnapshot>()> provider);
+    void setToolRegistry(VoiceToolRegistry* registry);
 
 signals:
     void snapshotChanged(const VoiceInteractionSnapshot& snapshot);
     void activityChanged(bool active);
+    void providerAvailabilityChanged(bool available, const QString& reason);
 
 private:
     struct PerformanceMetrics {
@@ -72,6 +75,8 @@ private:
     void handleTranscription(quint64 sessionId, const QString& text);
     void handleLlmDelta(quint64 sessionId, const QString& delta);
     void handleChatCompletion(quint64 sessionId, const QString& text);
+    void handleToolCalls(quint64 sessionId, const QString& content,
+                         const QList<AiToolCall>& calls);
     void handleSpeech(quint64 sessionId, const QByteArray& audio);
     void handlePlaybackStarted(quint64 sessionId);
     void handlePlaybackFinished(quint64 sessionId);
@@ -82,6 +87,7 @@ private:
     void handleAudioFailure(quint64 sessionId, VoiceAudioStage stage,
                             const QString& userMessage, const QString& diagnostic);
     QList<AiChatMessage> messagesFor(const QString& userText) const;
+    void requestLlm();
     QString weatherContextMessage(const WeatherSnapshot& snapshot) const;
     void appendHistory(const QString& userText, const QString& assistantText);
     void enqueueSentences(const QStringList& sentences);
@@ -108,8 +114,10 @@ private:
     VoiceAudioPort* m_audio = nullptr;
     MediaSessionCoordinator* m_mediaSessions = nullptr;
     std::function<std::optional<WeatherSnapshot>()> m_weatherProvider;
+    VoiceToolRegistry* m_toolRegistry = nullptr;
     VoiceInteractionSnapshot m_snapshot;
     QList<AiChatMessage> m_history;
+    QList<AiChatMessage> m_toolMessages;
     SentenceBuffer m_sentenceBuffer;
     VoiceActivityDetector m_vad;
     QQueue<QString> m_ttsTextQueue;
@@ -126,9 +134,11 @@ private:
     quint64 m_audioCancellationSessionId = 0;
     int m_ttsSuccessCount = 0;
     int m_ttsFailureCount = 0;
+    int m_toolRounds = 0;
     bool m_resourcesActive = false;
     bool m_restartPending = false;
     bool m_llmFinished = false;
     bool m_ttsInFlight = false;
     bool m_audioPlaying = false;
+    bool m_toolDecisionPending = false;
 };

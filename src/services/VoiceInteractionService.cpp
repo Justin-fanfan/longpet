@@ -2,6 +2,7 @@
 
 #include "services/MediaSessionCoordinator.h"
 #include "services/VoiceInteractionPorts.h"
+#include "services/VoiceToolRegistry.h"
 
 #include <QDebug>
 
@@ -87,6 +88,8 @@ VoiceInteractionService::VoiceInteractionService(
                 this, &VoiceInteractionService::handleLlmDelta);
         connect(m_llmProvider, &LlmProviderPort::chatCompletionReady,
                 this, &VoiceInteractionService::handleChatCompletion);
+        connect(m_llmProvider, &LlmProviderPort::toolCallsReady,
+                this, &VoiceInteractionService::handleToolCalls);
         connect(m_llmProvider, &LlmProviderPort::requestFailed,
                 this, &VoiceInteractionService::handleLlmFailure);
     }
@@ -217,6 +220,11 @@ void VoiceInteractionService::setWeatherProvider(
     m_weatherProvider = std::move(provider);
 }
 
+void VoiceInteractionService::setToolRegistry(VoiceToolRegistry* registry)
+{
+    m_toolRegistry = registry;
+}
+
 void VoiceInteractionService::handleRecordingStarted(quint64 sessionId)
 {
     if (sessionId != m_snapshot.sessionId
@@ -299,11 +307,8 @@ void VoiceInteractionService::handleTranscription(quint64 sessionId,
     m_snapshot.generationActive = true;
     publish(VoiceInteractionState::Thinking, QStringLiteral("正在思考"));
     m_metrics.llmStartedAt = elapsedMs();
-    const QList<AiChatMessage> messages = messagesFor(transcript);
-    if (m_configuration.voice.llmStreamEnabled)
-        m_llmProvider->streamChat(sessionId, messages);
-    else
-        m_llmProvider->completeChat(sessionId, messages);
+    m_toolMessages = messagesFor(transcript);
+    requestLlm();
 }
 
 void VoiceInteractionService::handleLlmDelta(quint64 sessionId,
@@ -321,7 +326,7 @@ void VoiceInteractionService::handleLlmDelta(quint64 sessionId,
                 .arg(sessionId).arg(now - m_metrics.llmStartedAt);
     }
     m_snapshot.response.append(delta);
-    if (m_configuration.voice.sentenceTtsEnabled)
+    if (m_configuration.voice.sentenceTtsEnabled && !m_toolDecisionPending)
         enqueueSentences(m_sentenceBuffer.append(delta));
     if (!m_uiUpdateTimer.isActive())
         m_uiUpdateTimer.start();
@@ -344,7 +349,13 @@ void VoiceInteractionService::handleChatCompletion(quint64 sessionId,
     const qint64 now = elapsedMs();
     if (m_metrics.llmFirstTokenAt < 0)
         m_metrics.llmFirstTokenAt = now;
-    if (m_snapshot.response.isEmpty()) {
+    if (m_toolDecisionPending) {
+        m_toolDecisionPending = false;
+        m_sentenceBuffer.clear();
+        m_snapshot.response = response;
+        if (m_configuration.voice.sentenceTtsEnabled)
+            enqueueSentences(m_sentenceBuffer.append(response));
+    } else if (m_snapshot.response.isEmpty()) {
         m_snapshot.response = response;
         if (m_configuration.voice.sentenceTtsEnabled)
             enqueueSentences(m_sentenceBuffer.append(response));
@@ -376,6 +387,85 @@ void VoiceInteractionService::handleChatCompletion(quint64 sessionId,
     emit snapshotChanged(m_snapshot);
     pumpTts();
     maybeCompleteInteraction();
+}
+
+void VoiceInteractionService::handleToolCalls(
+    quint64 sessionId, const QString& content, const QList<AiToolCall>& calls)
+{
+    if (!acceptsSession(sessionId) || !m_snapshot.generationActive)
+        return;
+    m_toolDecisionPending = false;
+    m_sentenceBuffer.clear();
+    if (!m_toolRegistry || calls.isEmpty()) {
+        fail(QStringLiteral("Tool"), QStringLiteral("语音操作暂时无法执行"),
+             QStringLiteral("tool call response received without registry or calls"));
+        return;
+    }
+    if (m_toolRounds >= m_configuration.tools.maximumRounds) {
+        fail(QStringLiteral("Tool"), QStringLiteral("这次操作步骤太多，请换一种说法"),
+             QStringLiteral("tool loop exceeded maximum_rounds=%1")
+                 .arg(m_configuration.tools.maximumRounds));
+        return;
+    }
+
+    AiChatMessage assistant;
+    assistant.role = QStringLiteral("assistant");
+    assistant.content = content;
+    assistant.toolCalls = calls;
+    m_toolMessages.append(assistant);
+
+    for (const AiToolCall& call : calls) {
+        if (call.id.trimmed().isEmpty() || call.name.trimmed().isEmpty()) {
+            fail(QStringLiteral("Tool"), QStringLiteral("语音操作参数不完整，请再试一次"),
+                 QStringLiteral("tool call is missing id or name"));
+            return;
+        }
+        const AiToolExecutionResult result = m_toolRegistry->execute(call);
+        qInfo().noquote() << QStringLiteral(
+            "Voice interaction session=%1 stage=Tool name=%2 success=%3 args_chars=%4 result_chars=%5")
+                .arg(sessionId).arg(call.name).arg(result.success)
+                .arg(call.argumentsJson.size()).arg(result.content.size());
+        AiChatMessage toolMessage;
+        toolMessage.role = QStringLiteral("tool");
+        toolMessage.content = result.content;
+        toolMessage.toolCallId = call.id;
+        toolMessage.name = call.name;
+        m_toolMessages.append(toolMessage);
+        if (!result.success && !result.userMessage.isEmpty())
+            m_snapshot.errorMessage = result.userMessage;
+    }
+
+    ++m_toolRounds;
+    m_snapshot.response.clear();
+    m_snapshot.statusMessage = QStringLiteral("操作完成，正在整理回答");
+    emit snapshotChanged(m_snapshot);
+    requestLlm();
+}
+
+void VoiceInteractionService::requestLlm()
+{
+    if (!m_llmProvider || !m_snapshot.generationActive)
+        return;
+    const bool allowTools = m_configuration.tools.enabled && m_toolRegistry
+        && m_toolRounds < m_configuration.tools.maximumRounds;
+    m_toolDecisionPending = allowTools;
+    const QList<AiToolDefinition> definitions = allowTools
+        ? m_toolRegistry->definitions() : QList<AiToolDefinition>{};
+    qInfo().noquote() << QStringLiteral(
+        "Voice interaction session=%1 stage=LLM event=request_start tool_round=%2 tools=%3")
+            .arg(m_snapshot.sessionId).arg(m_toolRounds).arg(allowTools);
+    if (m_configuration.voice.llmStreamEnabled) {
+        if (allowTools)
+            m_llmProvider->streamChatWithTools(
+                m_snapshot.sessionId, m_toolMessages, definitions);
+        else
+            m_llmProvider->streamChat(m_snapshot.sessionId, m_toolMessages);
+    } else if (allowTools) {
+        m_llmProvider->completeChatWithTools(
+            m_snapshot.sessionId, m_toolMessages, definitions);
+    } else {
+        m_llmProvider->completeChat(m_snapshot.sessionId, m_toolMessages);
+    }
 }
 
 void VoiceInteractionService::enqueueSentences(const QStringList& sentences)
@@ -513,6 +603,7 @@ void VoiceInteractionService::handleAsrFailure(
 {
     if (!acceptsSession(sessionId))
         return;
+    emit providerAvailabilityChanged(false, error.userMessage);
     fail(QStringLiteral("ASR"), error.userMessage,
          QStringLiteral("code=%1 provider=%2 http=%3 api_code=%4 %5")
              .arg(aiProviderErrorCodeName(error.code), error.provider)
@@ -525,6 +616,7 @@ void VoiceInteractionService::handleLlmFailure(
 {
     if (!acceptsSession(sessionId))
         return;
+    emit providerAvailabilityChanged(false, error.userMessage);
     fail(QStringLiteral("LLM"), error.userMessage,
          QStringLiteral("code=%1 provider=%2 http=%3 api_code=%4 %5")
              .arg(aiProviderErrorCodeName(error.code), error.provider)
@@ -541,6 +633,7 @@ void VoiceInteractionService::handleTtsFailure(
     if (m_metrics.firstTtsDurationMs < 0)
         m_metrics.firstTtsDurationMs = duration;
     ++m_ttsFailureCount;
+    emit providerAvailabilityChanged(false, error.userMessage);
     m_ttsInFlight = false;
     m_currentTtsText.clear();
     m_currentTtsStartedAt = -1;
@@ -591,6 +684,8 @@ void VoiceInteractionService::maybeCompleteInteraction()
     logFinalMetrics(m_ttsFailureCount > 0
         ? QStringLiteral("completed_with_tts_error")
         : QStringLiteral("completed"));
+    if (m_ttsFailureCount == 0)
+        emit providerAvailabilityChanged(true, {});
     emit snapshotChanged(m_snapshot);
 }
 
@@ -669,9 +764,12 @@ void VoiceInteractionService::resetSessionWork()
     m_lastCapturedMs = 0;
     m_ttsSuccessCount = 0;
     m_ttsFailureCount = 0;
+    m_toolRounds = 0;
+    m_toolMessages.clear();
     m_llmFinished = false;
     m_ttsInFlight = false;
     m_audioPlaying = false;
+    m_toolDecisionPending = false;
 }
 
 void VoiceInteractionService::cancelSession(bool restartAfterCancellation)

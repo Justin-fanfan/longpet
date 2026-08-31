@@ -34,11 +34,27 @@ public:
     {
         completeChat(sessionId, messages);
     }
+    virtual void completeChatWithTools(
+        quint64 sessionId, const QList<AiChatMessage>& messages,
+        const QList<AiToolDefinition>& tools)
+    {
+        Q_UNUSED(tools)
+        completeChat(sessionId, messages);
+    }
+    virtual void streamChatWithTools(
+        quint64 sessionId, const QList<AiChatMessage>& messages,
+        const QList<AiToolDefinition>& tools)
+    {
+        Q_UNUSED(tools)
+        streamChat(sessionId, messages);
+    }
     virtual void cancel(quint64 sessionId) = 0;
 
 signals:
     void chatDelta(quint64 sessionId, const QString& delta);
     void chatCompletionReady(quint64 sessionId, const QString& text);
+    void toolCallsReady(quint64 sessionId, const QString& content,
+                        const QList<AiToolCall>& calls);
     void requestFailed(quint64 sessionId, const AiProviderError& error);
 };
 

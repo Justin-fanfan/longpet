@@ -5,6 +5,8 @@
 #include "platform/SseEventParser.h"
 #include "services/VoiceInteractionPorts.h"
 
+#include <QMap>
+
 class OpenAiAsrProvider final : public AsrProviderPort {
     Q_OBJECT
 
@@ -33,6 +35,12 @@ public:
                       const QList<AiChatMessage>& messages) override;
     void streamChat(quint64 sessionId,
                     const QList<AiChatMessage>& messages) override;
+    void completeChatWithTools(
+        quint64 sessionId, const QList<AiChatMessage>& messages,
+        const QList<AiToolDefinition>& tools) override;
+    void streamChatWithTools(
+        quint64 sessionId, const QList<AiChatMessage>& messages,
+        const QList<AiToolDefinition>& tools) override;
     void cancel(quint64 sessionId) override;
 
 private:
@@ -49,6 +57,7 @@ private:
     QString m_streamText;
     bool m_streamDone = false;
     bool m_streamFinishReasonSeen = false;
+    QMap<int, AiToolCall> m_streamToolCalls;
 };
 
 class OpenAiTtsProvider final : public TtsProviderPort {

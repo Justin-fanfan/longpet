@@ -41,3 +41,38 @@ sentence_maximum_characters=120
 # 当前播放段之外最多预先保留的已合成语音段数，建议板端保持 1~2。
 tts_prebuffer_segments=2
 history_turns=4
+# AI Provider 失败后，KWS 暂时使用离线策略；到期后重新允许在线尝试。
+availability_retry_ms=30000
+
+[tools]
+# 仅开放 LongPet 内置白名单工具，不允许 shell、任意文件或任意 HTTP。
+enabled=true
+maximum_rounds=3
+
+[kws]
+# 依赖 https://github.com/ycxuan0517/loongpet_kws 的代码、模型和运行时。
+# input_device 留空表示使用 PortAudio 默认输入设备，禁止永久写死设备序号。
+enabled=true
+python_program=/usr/bin/python3
+bridge_script=/opt/longpet-kws/longpet_kws_bridge.py
+kws_root=/opt/longpet-kws/upstream
+model_path=/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx
+tokens_path=/opt/longpet-kws/upstream/assets/fsmn/tokens.txt
+capture_backend=sounddevice
+input_device=
+alsa_device=
+input_sample_rate=48000
+wake_threshold=0.15
+hello_threshold=0.10
+companion_threshold=0.05
+emergency_threshold=0.05
+vad_threshold_db=-60.0
+vad_noise_ratio=2.5
+command_timeout_ms=10000
+pause_timeout_ms=1500
+resume_cooldown_ms=1200
+restart_delay_ms=2000
+
+[offline]
+enabled=true
+companion_audio_directory=/opt/longpet/offline-audio

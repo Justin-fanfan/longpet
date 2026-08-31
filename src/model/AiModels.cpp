@@ -66,6 +66,59 @@ QString VoiceInteractionConfiguration::validationError() const
         return QStringLiteral("TTS 预缓冲段数必须在 1 到 4 之间");
     if (historyTurns < 0 || historyTurns > 20)
         return QStringLiteral("对话上下文轮数必须在 0 到 20 之间");
+    if (availabilityRetryMs < 1'000 || availabilityRetryMs > 600'000)
+        return QStringLiteral("AI 可用性重试间隔必须在 1000 到 600000 毫秒之间");
+    return {};
+}
+
+QString KwsConfiguration::validationError() const
+{
+    if (!enabled)
+        return {};
+    if (pythonProgram.trimmed().isEmpty())
+        return QStringLiteral("KWS Python 运行程序尚未配置");
+    if (bridgeScript.trimmed().isEmpty() || kwsRoot.trimmed().isEmpty()
+        || modelPath.trimmed().isEmpty() || tokensPath.trimmed().isEmpty()) {
+        return QStringLiteral("KWS bridge、上游仓库或模型路径尚未配置");
+    }
+    if (captureBackend != QStringLiteral("sounddevice")
+        && captureBackend != QStringLiteral("arecord")) {
+        return QStringLiteral("KWS capture_backend 只支持 sounddevice 或 arecord");
+    }
+    if (captureBackend == QStringLiteral("arecord") && alsaDevice.trimmed().isEmpty())
+        return QStringLiteral("KWS 使用 arecord 时必须配置 alsa_device");
+    if (inputSampleRate < 8'000 || inputSampleRate > 192'000)
+        return QStringLiteral("KWS 采样率必须在 8000 到 192000 Hz 之间");
+    for (const double threshold : {wakeThreshold, ignoredHelloThreshold,
+                                   companionThreshold, emergencyThreshold}) {
+        if (threshold <= 0.0 || threshold > 1.0)
+            return QStringLiteral("KWS 关键词阈值必须大于 0 且不超过 1");
+    }
+    if (vadThresholdDb < -96.0 || vadThresholdDb > 0.0)
+        return QStringLiteral("KWS VAD 阈值必须在 -96 到 0 dBFS 之间");
+    if (vadNoiseRatio < 1.0 || vadNoiseRatio > 20.0)
+        return QStringLiteral("KWS VAD 噪声倍率必须在 1 到 20 之间");
+    if (commandTimeoutMs < 1'000 || commandTimeoutMs > 60'000)
+        return QStringLiteral("KWS 指令窗口必须在 1000 到 60000 毫秒之间");
+    if (pauseTimeoutMs < 100 || pauseTimeoutMs > 10'000
+        || resumeCooldownMs < 0 || resumeCooldownMs > 30'000
+        || restartDelayMs < 250 || restartDelayMs > 60'000) {
+        return QStringLiteral("KWS 生命周期时间参数超出允许范围");
+    }
+    return {};
+}
+
+QString OfflineVoiceConfiguration::validationError() const
+{
+    if (enabled && companionAudioDirectory.trimmed().isEmpty())
+        return QStringLiteral("离线陪伴音频目录尚未配置");
+    return {};
+}
+
+QString VoiceToolConfiguration::validationError() const
+{
+    if (maximumRounds < 1 || maximumRounds > 8)
+        return QStringLiteral("Tool Calling 最大轮数必须在 1 到 8 之间");
     return {};
 }
 

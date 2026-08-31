@@ -2,7 +2,9 @@
 
 #include <QList>
 #include <QMetaType>
+#include <QJsonObject>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
 
 enum class VoiceInteractionState {
@@ -42,9 +44,36 @@ struct AiProviderError {
     int httpStatus = 0;
 };
 
+struct AiToolCall {
+    QString id;
+    QString name;
+    QString argumentsJson;
+};
+
 struct AiChatMessage {
     QString role;
     QString content;
+    QString name;
+    QString toolCallId;
+    QList<AiToolCall> toolCalls;
+};
+
+struct AiToolDefinition {
+    QString name;
+    QString description;
+    QJsonObject parameters;
+};
+
+struct AiToolExecutionResult {
+    bool success = false;
+    QString content;
+    QString userMessage;
+};
+
+struct KwsEvent {
+    QString keyword;
+    double score = 0.0;
+    qint64 timestampMs = 0;
 };
 
 struct AsrProviderConfiguration {
@@ -91,6 +120,46 @@ struct VoiceInteractionConfiguration {
     int sentenceMaximumCharacters = 120;
     int ttsPrebufferSegments = 2;
     int historyTurns = 4;
+    int availabilityRetryMs = 30'000;
+
+    QString validationError() const;
+};
+
+struct KwsConfiguration {
+    bool enabled = false;
+    QString pythonProgram = QStringLiteral("python3");
+    QString bridgeScript = QStringLiteral("/opt/longpet-kws/longpet_kws_bridge.py");
+    QString kwsRoot = QStringLiteral("/opt/longpet-kws/upstream");
+    QString modelPath = QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx");
+    QString tokensPath = QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/tokens.txt");
+    QString captureBackend = QStringLiteral("sounddevice");
+    QString inputDevice;
+    QString alsaDevice;
+    int inputSampleRate = 48'000;
+    double wakeThreshold = 0.15;
+    double ignoredHelloThreshold = 0.10;
+    double companionThreshold = 0.05;
+    double emergencyThreshold = 0.05;
+    double vadThresholdDb = -60.0;
+    double vadNoiseRatio = 2.5;
+    int commandTimeoutMs = 10'000;
+    int pauseTimeoutMs = 1'500;
+    int resumeCooldownMs = 1'200;
+    int restartDelayMs = 2'000;
+
+    QString validationError() const;
+};
+
+struct OfflineVoiceConfiguration {
+    bool enabled = true;
+    QString companionAudioDirectory = QStringLiteral("/opt/longpet/offline-audio");
+
+    QString validationError() const;
+};
+
+struct VoiceToolConfiguration {
+    bool enabled = true;
+    int maximumRounds = 3;
 
     QString validationError() const;
 };
@@ -100,6 +169,9 @@ struct AiConfiguration {
     LlmProviderConfiguration llm;
     TtsProviderConfiguration tts;
     VoiceInteractionConfiguration voice;
+    KwsConfiguration kws;
+    OfflineVoiceConfiguration offline;
+    VoiceToolConfiguration tools;
 
     QString validationError() const;
     bool isValid() const { return validationError().isEmpty(); }
@@ -138,3 +210,6 @@ Q_DECLARE_METATYPE(VoiceAudioStage)
 Q_DECLARE_METATYPE(AiProviderErrorCode)
 Q_DECLARE_METATYPE(AiProviderError)
 Q_DECLARE_METATYPE(VoiceInteractionSnapshot)
+Q_DECLARE_METATYPE(AiToolCall)
+Q_DECLARE_METATYPE(QList<AiToolCall>)
+Q_DECLARE_METATYPE(KwsEvent)

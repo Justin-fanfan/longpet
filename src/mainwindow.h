@@ -14,6 +14,7 @@ class QImage;
 class CarePage;
 class CompanionPage;
 class ConversationPage;
+class EmergencyPage;
 class HomePage;
 class NetworkSetupPage;
 class QEvent;
@@ -39,6 +40,7 @@ public:
         Reminder,
         ReminderEdit,
         VideoCall,
+        Emergency,
         Settings,
         NetworkSetup
     };
@@ -88,6 +90,8 @@ signals:
     void wifiConnectRequested(const WifiNetwork& network, const QString& password);
     void petStyleChangeRequested(const QString& style);
     void pairFamilyRequested();
+    void emergencyDismissRequested();
+    void emergencyContactRequested();
 
 protected:
     bool eventFilter(QObject* watched, QEvent* event) override;
@@ -102,6 +106,7 @@ private:
     ReminderPage* m_reminderPage = nullptr;
     ReminderEditPage* m_reminderEditPage = nullptr;
     VideoCallPage* m_videoCallPage = nullptr;
+    EmergencyPage* m_emergencyPage = nullptr;
     SettingsPage* m_settingsPage = nullptr;
     NetworkSetupPage* m_networkSetupPage = nullptr;
     ToastWidget* m_toast = nullptr;

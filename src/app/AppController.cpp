@@ -8,6 +8,8 @@
 #include "services/SystemService.h"
 #include "services/VideoCallService.h"
 #include "services/VoiceInteractionService.h"
+#include "services/VoiceCommandDispatcher.h"
+#include "services/VoiceToolRegistry.h"
 
 AppController::AppController(MainWindow* window,
                              ReminderService* reminderService,
@@ -18,6 +20,8 @@ AppController::AppController(MainWindow* window,
                              NetworkService* networkService,
                              VideoCallService* videoCallService,
                              VoiceInteractionService* voiceInteractionService,
+                             VoiceCommandDispatcher* voiceCommandDispatcher,
+                             VoiceToolRegistry* voiceToolRegistry,
                              QObject* parent)
     : QObject(parent),
       m_window(window),
@@ -27,7 +31,9 @@ AppController::AppController(MainWindow* window,
       m_systemService(systemService),
       m_networkService(networkService),
       m_videoCallService(videoCallService),
-      m_voiceInteractionService(voiceInteractionService)
+      m_voiceInteractionService(voiceInteractionService),
+      m_voiceCommandDispatcher(voiceCommandDispatcher),
+      m_voiceToolRegistry(voiceToolRegistry)
 {
     m_controlTimeout.setObjectName(QStringLiteral("controlTimeout"));
     m_controlTimeout.setSingleShot(true);
@@ -60,6 +66,7 @@ void AppController::connectUi()
             && m_voiceInteractionService->snapshot().isActive();
         if (page != MainWindow::PageId::Companion
             && page != MainWindow::PageId::VideoCall
+            && page != MainWindow::PageId::Emergency
             && !(page == MainWindow::PageId::Conversation && voiceActive)) {
             m_controlTimeout.start();
         }
@@ -82,6 +89,12 @@ void AppController::connectUi()
             this, &AppController::showReminders);
     connect(m_window, &MainWindow::settingsRequested,
             this, &AppController::showSettings);
+    connect(m_window, &MainWindow::emergencyDismissRequested,
+            this, &AppController::showHome);
+    connect(m_window, &MainWindow::emergencyContactRequested, this, [this] {
+        m_window->showToast(QStringLiteral(
+            "家属端主动告警尚未接入，请立即使用身边电话联系家人或急救服务"));
+    });
     connect(m_window, &MainWindow::addReminderRequested, this, [this] {
         ReminderDraft draft;
         draft.timeOfDay = QTime::currentTime().addSecs(3600);
@@ -228,8 +241,29 @@ void AppController::connectServices()
                 m_controlTimeout.stop();
                 if (m_window->currentPage() != MainWindow::PageId::Conversation)
                     showPage(MainWindow::PageId::Conversation);
+            } else if (!m_pendingVoiceToolPage.isEmpty()) {
+                const QString page = m_pendingVoiceToolPage;
+                m_pendingVoiceToolPage.clear();
+                showToolPage(page);
             } else if (m_window->currentPage() == MainWindow::PageId::Conversation) {
                 m_controlTimeout.start();
+            }
+        });
+    }
+    if (m_voiceCommandDispatcher) {
+        connect(m_voiceCommandDispatcher, &VoiceCommandDispatcher::emergencyRequested,
+                this, &AppController::showEmergency);
+        connect(m_voiceCommandDispatcher, &VoiceCommandDispatcher::userMessage,
+                m_window, &MainWindow::showToast);
+    }
+    if (m_voiceToolRegistry) {
+        connect(m_voiceToolRegistry, &VoiceToolRegistry::pageRequested,
+                this, [this](const QString& page) {
+            if (m_voiceInteractionService
+                && m_voiceInteractionService->snapshot().isActive()) {
+                m_pendingVoiceToolPage = page;
+            } else {
+                showToolPage(page);
             }
         });
     }
@@ -245,7 +279,8 @@ void AppController::showPage(MainWindow::PageId page)
     m_window->showPage(page);
     if (page == MainWindow::PageId::Companion
         || page == MainWindow::PageId::VideoCall
-        || page == MainWindow::PageId::Conversation) {
+        || page == MainWindow::PageId::Conversation
+        || page == MainWindow::PageId::Emergency) {
         m_controlTimeout.stop();
     } else {
         m_controlTimeout.start();
@@ -258,12 +293,16 @@ void AppController::startVoiceInteraction()
         m_window->showToast(QStringLiteral("语音交互服务不可用"));
         return;
     }
-    const VoiceInteractionResult result =
-        m_voiceInteractionService->startInteraction();
-    m_window->setVoiceInteractionSnapshot(result.snapshot);
+    if (m_voiceCommandDispatcher)
+        m_voiceCommandDispatcher->requestStartInteraction();
+    else {
+        const VoiceInteractionResult result =
+            m_voiceInteractionService->startInteraction();
+        m_window->setVoiceInteractionSnapshot(result.snapshot);
+        if (!result.success)
+            m_window->showToast(result.error);
+    }
     showPage(MainWindow::PageId::Conversation);
-    if (!result.success)
-        m_window->showToast(result.error);
 }
 
 void AppController::handleVoicePrimary()
@@ -280,10 +319,14 @@ void AppController::handleVoicePrimary()
         return;
     }
     if (snapshot.isActive()) {
-        const VoiceInteractionResult result =
-            m_voiceInteractionService->restartInteraction();
-        if (!result.success)
-            m_window->showToast(result.error);
+        if (m_voiceCommandDispatcher)
+            m_voiceCommandDispatcher->requestRestartInteraction();
+        else {
+            const VoiceInteractionResult result =
+                m_voiceInteractionService->restartInteraction();
+            if (!result.success)
+                m_window->showToast(result.error);
+        }
         return;
     }
     if (!snapshot.isActive())
@@ -292,11 +335,33 @@ void AppController::handleVoicePrimary()
 
 void AppController::handleVoiceSecondary()
 {
-    if (m_voiceInteractionService
+    if (m_voiceCommandDispatcher)
+        m_voiceCommandDispatcher->requestCancelInteraction();
+    else if (m_voiceInteractionService
         && m_voiceInteractionService->snapshot().isActive()) {
         m_voiceInteractionService->cancelInteraction();
     }
     showHome();
+}
+
+void AppController::showEmergency()
+{
+    m_controlTimeout.stop();
+    showPage(MainWindow::PageId::Emergency);
+}
+
+void AppController::showToolPage(const QString& page)
+{
+    if (page == QStringLiteral("home"))
+        showHome();
+    else if (page == QStringLiteral("reminders"))
+        showReminders();
+    else if (page == QStringLiteral("care"))
+        showCare();
+    else if (page == QStringLiteral("settings"))
+        showSettings();
+    else if (page == QStringLiteral("companion"))
+        showPage(MainWindow::PageId::Companion);
 }
 
 void AppController::showCare()

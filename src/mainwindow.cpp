@@ -3,6 +3,7 @@
 #include "pages/CarePage.h"
 #include "pages/CompanionPage.h"
 #include "pages/ConversationPage.h"
+#include "pages/EmergencyPage.h"
 #include "pages/HomePage.h"
 #include "pages/NetworkSetupPage.h"
 #include "pages/ReminderEditPage.h"
@@ -15,6 +16,7 @@
 #include <QApplication>
 #include <QEvent>
 #include <QStackedWidget>
+#include <QPushButton>
 #include <QVBoxLayout>
 
 MainWindow::MainWindow(QWidget* parent)
@@ -40,6 +42,7 @@ MainWindow::MainWindow(QWidget* parent)
     m_reminderPage = new ReminderPage(m_stack);
     m_reminderEditPage = new ReminderEditPage(m_stack);
     m_videoCallPage = new VideoCallPage(m_stack);
+    m_emergencyPage = new EmergencyPage(m_stack);
     m_settingsPage = new SettingsPage(m_stack);
     m_networkSetupPage = new NetworkSetupPage(m_stack);
     for (QWidget* page : {static_cast<QWidget*>(m_companionPage),
@@ -49,6 +52,7 @@ MainWindow::MainWindow(QWidget* parent)
                           static_cast<QWidget*>(m_reminderPage),
                           static_cast<QWidget*>(m_reminderEditPage),
                           static_cast<QWidget*>(m_videoCallPage),
+                          static_cast<QWidget*>(m_emergencyPage),
                           static_cast<QWidget*>(m_settingsPage),
                           static_cast<QWidget*>(m_networkSetupPage)}) {
         m_stack->addWidget(page);
@@ -98,6 +102,10 @@ MainWindow::MainWindow(QWidget* parent)
             this, &MainWindow::homeRequested);
     connect(m_videoCallPage, &VideoCallPage::hangUpRequested,
             this, &MainWindow::videoCallHangUpRequested);
+    connect(m_emergencyPage->okayButton(), &QPushButton::clicked,
+            this, &MainWindow::emergencyDismissRequested);
+    connect(m_emergencyPage->contactButton(), &QPushButton::clicked,
+            this, &MainWindow::emergencyContactRequested);
     connect(m_settingsPage, &SettingsPage::backRequested,
             this, &MainWindow::homeRequested);
     connect(m_settingsPage, &SettingsPage::volumeChangeRequested,
@@ -257,6 +265,7 @@ QWidget* MainWindow::pageWidget(PageId page) const
     case PageId::Reminder: return m_reminderPage;
     case PageId::ReminderEdit: return m_reminderEditPage;
     case PageId::VideoCall: return m_videoCallPage;
+    case PageId::Emergency: return m_emergencyPage;
     case PageId::Settings: return m_settingsPage;
     case PageId::NetworkSetup: return m_networkSetupPage;
     }

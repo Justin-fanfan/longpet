@@ -29,6 +29,7 @@
 #include "platform\SseEventParser.h"
 #include "platform\WeatherProviderFactory.h"
 #include "platform\VoiceAudioAdapter.h"
+#include "platform\KwsProcessAdapter.h"
 #include "services\CareService.h"
 #include "services\FamilyLinkService.h"
 #include "services\ReminderService.h"
@@ -44,6 +45,12 @@
 #include "services\VoiceInteractionPorts.h"
 #include "services\VoiceInteractionService.h"
 #include "services\VoiceActivityDetector.h"
+#include "services\VoiceToolRegistry.h"
+#include "services\VoiceCapabilityService.h"
+#include "services\VoiceCommandDispatcher.h"
+#include "services\LocalCompanionService.h"
+#include "services\KwsPorts.h"
+#include "services\OfflineVoicePorts.h"
 #include "data\WeatherConfigRepository.h"
 #include "widgets\PetFaceWidget.h"
 #include "widgets\VisualComponents.h"
@@ -59,6 +66,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QMap>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
@@ -76,6 +84,7 @@
 #include <QTimer>
 
 #include <optional>
+#include <algorithm>
 
 class V02Test final : public QObject {
     Q_OBJECT
@@ -109,6 +118,9 @@ private slots:
     void aliyunProvidersUseNativeProtocols();
     void providerFactorySupportsMixedProviders();
     void networkVoiceInteractionRunsEndToEnd();
+    void openAiCompatibleLlmParsesFragmentedToolCalls();
+    void voiceToolCallingMutatesRemindersAndSpeaksFinalOnly();
+    void kwsDispatcherCoordinatesOnlineOfflineAndEmergency();
     void pagesExposeSemanticSignalsAndModels();
     void applicationControllerOwnsNavigation();
     void statusBarRemains64AndShowsSystemInput();
@@ -207,8 +219,23 @@ public:
     void streamChat(quint64 sessionId,
                     const QList<AiChatMessage>& chatMessages) override
     {
+        toolDefinitions.clear();
         ++streamCount;
         completeChat(sessionId, chatMessages);
+    }
+    void completeChatWithTools(
+        quint64 sessionId, const QList<AiChatMessage>& chatMessages,
+        const QList<AiToolDefinition>& tools) override
+    {
+        toolDefinitions = tools;
+        completeChat(sessionId, chatMessages);
+    }
+    void streamChatWithTools(
+        quint64 sessionId, const QList<AiChatMessage>& chatMessages,
+        const QList<AiToolDefinition>& tools) override
+    {
+        ++streamCount;
+        completeChatWithTools(sessionId, chatMessages, tools);
     }
     void cancel(quint64 sessionId) override
     {
@@ -219,6 +246,9 @@ public:
     { emit chatCompletionReady(sessionId, text); }
     void delta(quint64 sessionId, const QString& text)
     { emit chatDelta(sessionId, text); }
+    void tools(quint64 sessionId, const QList<AiToolCall>& calls,
+               const QString& content = {})
+    { emit toolCallsReady(sessionId, content, calls); }
     void fail(quint64 sessionId, const QString& message)
     {
         emit requestFailed(sessionId, providerResponseError(
@@ -229,6 +259,7 @@ public:
     quint64 activeSessionId = 0;
     quint64 canceledSessionId = 0;
     QList<AiChatMessage> messages;
+    QList<AiToolDefinition> toolDefinitions;
     int chatCount = 0;
     int streamCount = 0;
     int cancelCount = 0;
@@ -316,6 +347,70 @@ public:
     int cancelCount = 0;
 };
 
+class FakeKwsPort final : public KwsPort {
+public:
+    using KwsPort::KwsPort;
+
+    void start() override
+    {
+        running = true;
+        ++startCount;
+        emit kwsReady();
+    }
+    void pause() override
+    {
+        paused = true;
+        ++pauseCount;
+        emit kwsPaused();
+    }
+    void resume() override
+    {
+        running = true;
+        paused = false;
+        ++resumeCount;
+        emit kwsResumed();
+    }
+    void stop() override
+    {
+        running = false;
+        paused = false;
+        ++stopCount;
+        emit kwsStopped();
+    }
+    bool isRunning() const override { return running; }
+    bool isPaused() const override { return paused; }
+    void detect(const QString& keyword, double score = 0.9)
+    { emit keywordDetected({keyword, score, QDateTime::currentMSecsSinceEpoch()}); }
+
+    bool running = false;
+    bool paused = false;
+    int startCount = 0;
+    int pauseCount = 0;
+    int resumeCount = 0;
+    int stopCount = 0;
+};
+
+class FakeOfflineAudioLibrary final : public OfflineAudioLibraryPort {
+public:
+    QStringList clipIds(QString* error) const override
+    {
+        if (error)
+            error->clear();
+        return clips.keys();
+    }
+    QByteArray loadClip(const QString& clipId, QString* error) const override
+    {
+        if (error)
+            error->clear();
+        return clips.value(clipId);
+    }
+
+    QMap<QString, QByteArray> clips {
+        {QStringLiteral("a.wav"), QByteArrayLiteral("audio-a")},
+        {QStringLiteral("b.wav"), QByteArrayLiteral("audio-b")}
+    };
+};
+
 class FakeWeatherProvider final : public WeatherProviderPort {
 public:
     using WeatherProviderPort::WeatherProviderPort;
@@ -381,6 +476,7 @@ public:
         RateLimited,
         InvalidJson,
         FragmentedSse,
+        FragmentedToolSse,
         BrokenSse,
         Hang
     };
@@ -416,6 +512,11 @@ public:
                     if ((mode == Mode::FragmentedSse || mode == Mode::BrokenSse)
                         && paths.last().endsWith("/chat/completions")) {
                         sendFragmentedSse(socket, mode == Mode::BrokenSse);
+                        return;
+                    }
+                    if (mode == Mode::FragmentedToolSse
+                        && paths.last().endsWith("/chat/completions")) {
+                        sendFragmentedToolSse(socket);
                         return;
                     }
                     sendResponse(socket, responseFor(paths.last(), bodies.last()));
@@ -549,6 +650,28 @@ private:
         });
     }
 
+    static void sendFragmentedToolSse(QTcpSocket* socket)
+    {
+        const QByteArray body = QByteArrayLiteral(
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"call_1\",\"type\":\"function\",\"function\":{\"name\":\"create_\",\"arguments\":\"{\\\"title\\\":\\\"喝\"}}]}}]}\r\n\r\n"
+            "data: {\"choices\":[{\"delta\":{\"tool_calls\":[{\"index\":0,\"function\":{\"name\":\"reminder\",\"arguments\":\"水\\\",\\\"time\\\":\\\"10:30\\\"}\"}}]},\"finish_reason\":\"tool_calls\"}]}\r\n\r\n"
+            "data: [DONE]\r\n\r\n");
+        const QByteArray headers = QByteArrayLiteral(
+            "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n")
+            + QByteArrayLiteral("Content-Length: ") + QByteArray::number(body.size())
+            + QByteArrayLiteral("\r\nConnection: close\r\n\r\n");
+        const qsizetype first = qMin<qsizetype>(23, body.size());
+        const qsizetype second = qMin<qsizetype>(61, body.size() - first);
+        socket->write(headers + body.left(first));
+        QTimer::singleShot(10, socket, [socket, body, first, second] {
+            socket->write(body.mid(first, second));
+        });
+        QTimer::singleShot(20, socket, [socket, body, first, second] {
+            socket->write(body.mid(first + second));
+            socket->disconnectFromHost();
+        });
+    }
+
     QTcpServer m_server;
     QHash<QTcpSocket*, QByteArray> m_buffers;
     QSet<QTcpSocket*> m_handled;
@@ -643,6 +766,9 @@ void V02Test::initTestCase()
     qRegisterMetaType<QList<WifiNetwork>>();
     qRegisterMetaType<VideoCallSnapshot>();
     qRegisterMetaType<AiProviderError>();
+    qRegisterMetaType<AiToolCall>();
+    qRegisterMetaType<QList<AiToolCall>>();
+    qRegisterMetaType<KwsEvent>();
     QFile styleFile(QStringLiteral(":/styles/app.qss"));
     QVERIFY(styleFile.open(QIODevice::ReadOnly | QIODevice::Text));
     qApp->setStyleSheet(QString::fromUtf8(styleFile.readAll()));
@@ -1347,7 +1473,25 @@ void V02Test::aiConfigurationAndWavEncoding()
         "sentence_minimum_characters=5\n"
         "sentence_maximum_characters=80\n"
         "tts_prebuffer_segments=2\n"
-        "history_turns=3\n");
+        "history_turns=3\n"
+        "availability_retry_ms=45000\n"
+        "[tools]\n"
+        "enabled=true\n"
+        "maximum_rounds=2\n"
+        "[kws]\n"
+        "enabled=true\n"
+        "python_program=/usr/bin/python3\n"
+        "bridge_script=/opt/kws/bridge.py\n"
+        "kws_root=/opt/kws/upstream\n"
+        "model_path=/opt/kws/model.onnx\n"
+        "tokens_path=/opt/kws/tokens.txt\n"
+        "capture_backend=sounddevice\n"
+        "input_device=USB-Audio\n"
+        "input_sample_rate=48000\n"
+        "command_timeout_ms=8000\n"
+        "[offline]\n"
+        "enabled=true\n"
+        "companion_audio_directory=/opt/longpet/audio\n");
     file.close();
 
     AiConfigRepository repository(path);
@@ -1377,6 +1521,14 @@ void V02Test::aiConfigurationAndWavEncoding()
     QCOMPARE(configuration.voice.sentenceMaximumCharacters, 80);
     QCOMPARE(configuration.voice.ttsPrebufferSegments, 2);
     QCOMPARE(configuration.voice.historyTurns, 3);
+    QCOMPARE(configuration.voice.availabilityRetryMs, 45'000);
+    QVERIFY(configuration.tools.enabled);
+    QCOMPARE(configuration.tools.maximumRounds, 2);
+    QVERIFY(configuration.kws.enabled);
+    QCOMPARE(configuration.kws.inputDevice, QStringLiteral("USB-Audio"));
+    QCOMPARE(configuration.kws.commandTimeoutMs, 8'000);
+    QCOMPARE(configuration.offline.companionAudioDirectory,
+             QStringLiteral("/opt/longpet/audio"));
 
     qputenv("LONGPET_ASR_API_KEY", QByteArrayLiteral("environment-asr-key"));
     qputenv("LONGPET_LLM_BASE_URL", QByteArrayLiteral("http://environment-llm/v1"));
@@ -1427,7 +1579,12 @@ void V02Test::aiConfigurationAndWavEncoding()
              QByteArrayLiteral("recording_minimum_ms="),
              QByteArrayLiteral("llm_stream_enabled=true"),
              QByteArrayLiteral("sentence_tts_enabled=true"),
-             QByteArrayLiteral("tts_prebuffer_segments=")}) {
+             QByteArrayLiteral("tts_prebuffer_segments="),
+             QByteArrayLiteral("[tools]"),
+             QByteArrayLiteral("[kws]"),
+             QByteArrayLiteral("input_device="),
+             QByteArrayLiteral("[offline]"),
+             QByteArrayLiteral("companion_audio_directory=")}) {
         QVERIFY2(exampleData.contains(key), key.constData());
     }
 }
@@ -2422,6 +2579,216 @@ void V02Test::networkVoiceInteractionRunsEndToEnd()
     audio.completePlayback(started.snapshot.sessionId);
     QCOMPARE(service.snapshot().state, VoiceInteractionState::Idle);
     QVERIFY(mediaSessions.owner().isEmpty());
+}
+
+void V02Test::openAiCompatibleLlmParsesFragmentedToolCalls()
+{
+    AiHttpStub server;
+    QVERIFY(server.listen());
+    server.mode = AiHttpStub::Mode::FragmentedToolSse;
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.llm.apiBaseUrl = server.baseUrl();
+    OpenAiCompatibleLlmProvider llm(configuration.llm, 1'000);
+    QSignalSpy toolSpy(&llm, &LlmProviderPort::toolCallsReady);
+    QSignalSpy failureSpy(&llm, &LlmProviderPort::requestFailed);
+    AiToolDefinition definition;
+    definition.name = QStringLiteral("create_reminder");
+    definition.description = QStringLiteral("创建提醒");
+    definition.parameters = QJsonObject {
+        {QStringLiteral("type"), QStringLiteral("object")}
+    };
+    llm.streamChatWithTools(77, {{QStringLiteral("user"),
+                                  QStringLiteral("十点半提醒我喝水")}},
+                            {definition});
+    QTRY_COMPARE_WITH_TIMEOUT(toolSpy.count(), 1, 2'000);
+    QCOMPARE(failureSpy.count(), 0);
+    const QList<QVariant> signal = toolSpy.takeFirst();
+    QCOMPARE(signal.at(0).toULongLong(), quint64(77));
+    const QList<AiToolCall> calls =
+        qvariant_cast<QList<AiToolCall>>(signal.at(2));
+    QCOMPARE(calls.size(), 1);
+    QCOMPARE(calls.first().id, QStringLiteral("call_1"));
+    QCOMPARE(calls.first().name, QStringLiteral("create_reminder"));
+    QCOMPARE(calls.first().argumentsJson,
+             QStringLiteral("{\"title\":\"喝水\",\"time\":\"10:30\"}"));
+    QCOMPARE(server.bodies.size(), 1);
+    const QJsonObject request = QJsonDocument::fromJson(
+        server.bodies.first()).object();
+    QCOMPARE(request.value(QStringLiteral("tool_choice")).toString(),
+             QStringLiteral("auto"));
+    QCOMPARE(request.value(QStringLiteral("tools")).toArray().size(), 1);
+}
+
+void V02Test::voiceToolCallingMutatesRemindersAndSpeaksFinalOnly()
+{
+    ServiceFixture fixture;
+    QString error;
+    QVERIFY2(fixture.open(&error), qPrintable(error));
+    VoiceToolRegistry registry(fixture.reminderService.get());
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
+    FakeVoiceAudioPort audio;
+    MediaSessionCoordinator mediaSessions;
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.voice.llmStreamEnabled = true;
+    configuration.tools.enabled = true;
+    configuration.tools.maximumRounds = 1;
+    VoiceInteractionService service(configuration, &asr, &llm, &tts, &audio,
+                                    &mediaSessions);
+    service.setToolRegistry(&registry);
+
+    const VoiceInteractionResult started = service.startInteraction();
+    QVERIFY(started.success);
+    QVERIFY(service.finishRecording().success);
+    audio.completeRecording(started.snapshot.sessionId,
+        VoiceAudioAdapter::pcmS16LeMonoToWav(QByteArray(640, '\1')));
+    asr.succeedAsr(started.snapshot.sessionId,
+                   QStringLiteral("每天十点半提醒我喝水"));
+    QCOMPARE(llm.chatCount, 1);
+    QVERIFY(!llm.toolDefinitions.isEmpty());
+
+    llm.delta(started.snapshot.sessionId, QStringLiteral("我来处理这个操作"));
+    QCOMPARE(tts.ttsCount, 0);
+    llm.tools(started.snapshot.sessionId, {{
+        QStringLiteral("call-create-1"), QStringLiteral("create_reminder"),
+        QStringLiteral("{\"title\":\"喝水\",\"time\":\"10:30\",\"repeat\":\"daily\",\"type\":\"water\"}")
+    }});
+    QCOMPARE(llm.chatCount, 2);
+    QVERIFY(llm.toolDefinitions.isEmpty());
+    QVERIFY(std::any_of(llm.messages.cbegin(), llm.messages.cend(),
+                        [](const AiChatMessage& message) {
+        return message.role == QStringLiteral("tool")
+            && message.toolCallId == QStringLiteral("call-create-1");
+    }));
+    const QList<Reminder> reminders = fixture.reminderService->reminders(&error);
+    QVERIFY2(error.isEmpty(), qPrintable(error));
+    QCOMPARE(reminders.size(), 1);
+    QCOMPARE(reminders.first().title, QStringLiteral("喝水"));
+    QCOMPARE(reminders.first().timeOfDay, QTime(10, 30));
+
+    const QString finalAnswer = QStringLiteral("好的，已为您创建每天十点半的喝水提醒。");
+    llm.delta(started.snapshot.sessionId, finalAnswer);
+    llm.succeed(started.snapshot.sessionId, finalAnswer);
+    QCOMPARE(tts.synthesizedTexts, QStringList{finalAnswer});
+    tts.succeed(started.snapshot.sessionId, QByteArrayLiteral("final-audio"));
+    QCOMPARE(audio.playedAudio, QByteArrayLiteral("final-audio"));
+    audio.completePlayback(started.snapshot.sessionId);
+    QCOMPARE(service.snapshot().state, VoiceInteractionState::Idle);
+    QCOMPARE(service.snapshot().response, finalAnswer);
+
+    const VoiceInteractionResult next = service.startInteraction();
+    QVERIFY(next.success);
+    QVERIFY(service.finishRecording().success);
+    audio.completeRecording(next.snapshot.sessionId,
+        VoiceAudioAdapter::pcmS16LeMonoToWav(QByteArray(640, '\1')));
+    asr.succeedAsr(next.snapshot.sessionId, QStringLiteral("还有哪些提醒"));
+    QVERIFY(std::none_of(llm.messages.cbegin(), llm.messages.cend(),
+                        [](const AiChatMessage& message) {
+        return message.role == QStringLiteral("tool");
+    }));
+    service.cancelInteraction();
+    llm.tools(next.snapshot.sessionId, {{
+        QStringLiteral("late-call"), QStringLiteral("create_reminder"),
+        QStringLiteral("{\"title\":\"迟到回调\",\"time\":\"11:00\"}")
+    }});
+    QCOMPARE(fixture.reminderService->reminders(&error).size(), 1);
+
+    const AiToolExecutionResult listed = registry.execute({
+        QStringLiteral("call-list"), QStringLiteral("list_reminders"),
+        QStringLiteral("{}")});
+    QVERIFY(listed.success);
+    QVERIFY(listed.content.contains(QStringLiteral("喝水")));
+    const AiToolExecutionResult deleted = registry.execute({
+        QStringLiteral("call-delete"), QStringLiteral("delete_reminder"),
+        QStringLiteral("{\"id\":%1}").arg(reminders.first().id)});
+    QVERIFY(deleted.success);
+    QCOMPARE(fixture.reminderService->reminders(&error).size(), 0);
+    QSignalSpy pageSpy(&registry, &VoiceToolRegistry::pageRequested);
+    QVERIFY(registry.execute({QStringLiteral("call-page"),
+                              QStringLiteral("open_page"),
+                              QStringLiteral("{\"page\":\"reminders\"}")}).success);
+    QCOMPARE(pageSpy.count(), 1);
+    QVERIFY(!registry.execute({QStringLiteral("call-unknown"),
+                               QStringLiteral("run_shell"),
+                               QStringLiteral("{}")}).success);
+}
+
+void V02Test::kwsDispatcherCoordinatesOnlineOfflineAndEmergency()
+{
+    AiConfiguration configuration = validAiConfiguration();
+    configuration.kws.enabled = true;
+    configuration.kws.resumeCooldownMs = 1;
+    configuration.kws.pauseTimeoutMs = 100;
+    KwsConfiguration missingConfiguration = configuration.kws;
+    missingConfiguration.bridgeScript = QStringLiteral("Z:/missing/bridge.py");
+    KwsProcessAdapter missingAdapter(missingConfiguration);
+    QSignalSpy missingSpy(&missingAdapter, &KwsPort::kwsError);
+    missingAdapter.start();
+    QCOMPARE(missingSpy.count(), 1);
+    missingAdapter.stop();
+    SystemService systemService;
+    systemService.setNetworkState(true, true, QStringLiteral("Wi-Fi · 已联网"));
+    VoiceCapabilityService capability(configuration, &systemService);
+    FakeAsrProvider asr;
+    FakeLlmProvider llm;
+    FakeTtsProvider tts;
+    FakeVoiceAudioPort audio;
+    MediaSessionCoordinator mediaSessions;
+    VoiceInteractionService voice(configuration, &asr, &llm, &tts, &audio,
+                                  &mediaSessions);
+    connect(&voice, &VoiceInteractionService::providerAvailabilityChanged,
+            &capability, &VoiceCapabilityService::reportProviderAvailability);
+    FakeOfflineAudioLibrary library;
+    LocalCompanionService companion(configuration.offline, &library, &audio,
+                                    &mediaSessions);
+    FakeKwsPort kws;
+    VoiceCommandDispatcher dispatcher(configuration.kws, &kws, &capability,
+                                      &voice, &companion);
+    QSignalSpy emergencySpy(&dispatcher,
+                            &VoiceCommandDispatcher::emergencyRequested);
+    dispatcher.start();
+    QCOMPARE(kws.startCount, 1);
+
+    kws.detect(QStringLiteral("你好"));
+    QCOMPARE(audio.startCount, 0);
+    kws.detect(QStringLiteral("小龙小龙"));
+    QCOMPARE(kws.pauseCount, 1);
+    QCOMPARE(audio.startCount, 1);
+    QCOMPARE(voice.snapshot().state, VoiceInteractionState::Listening);
+    kws.detect(QStringLiteral("停止"));
+    QCOMPARE(voice.snapshot().state, VoiceInteractionState::Idle);
+    QTRY_VERIFY_WITH_TIMEOUT(kws.resumeCount >= 1, 500);
+    QTest::qWait(350);
+
+    systemService.setNetworkState(true, false, QStringLiteral("未连接"));
+    const int recordingCount = audio.startCount;
+    kws.detect(QStringLiteral("小龙小龙"));
+    QCOMPARE(audio.startCount, recordingCount);
+    kws.detect(QStringLiteral("陪我说话"));
+    QVERIFY(companion.isActive());
+    QVERIFY(audio.playedAudio == QByteArrayLiteral("audio-a")
+            || audio.playedAudio == QByteArrayLiteral("audio-b"));
+    const QByteArray firstCompanionAudio = audio.playedAudio;
+    const quint64 companionSession = audio.activeSessionId;
+    audio.completePlayback(companionSession);
+    QVERIFY(!companion.isActive());
+    QTRY_VERIFY_WITH_TIMEOUT(kws.resumeCount >= 2, 500);
+    QTest::qWait(350);
+    kws.detect(QStringLiteral("小龙小龙"));
+    kws.detect(QStringLiteral("陪我说话"));
+    QVERIFY(companion.isActive());
+    QVERIFY(audio.playedAudio != firstCompanionAudio);
+    audio.completePlayback(audio.activeSessionId);
+
+    kws.detect(QStringLiteral("救命"));
+    QCOMPARE(emergencySpy.count(), 1);
+    library.clips.clear();
+    QString offlineError;
+    QVERIFY(!companion.start(&offlineError));
+    QVERIFY(!offlineError.isEmpty());
+    dispatcher.stop();
+    QCOMPARE(kws.stopCount, 1);
 }
 
 void V02Test::pagesExposeSemanticSignalsAndModels()

@@ -13,6 +13,8 @@ class SettingsService;
 class SystemService;
 class VideoCallService;
 class VoiceInteractionService;
+class VoiceCommandDispatcher;
+class VoiceToolRegistry;
 
 class AppController final : public QObject {
     Q_OBJECT
@@ -27,6 +29,8 @@ public:
                   NetworkService* networkService = nullptr,
                   VideoCallService* videoCallService = nullptr,
                   VoiceInteractionService* voiceInteractionService = nullptr,
+                  VoiceCommandDispatcher* voiceCommandDispatcher = nullptr,
+                  VoiceToolRegistry* voiceToolRegistry = nullptr,
                   QObject* parent = nullptr);
 
     void initialize();
@@ -41,6 +45,8 @@ private:
     void showSettings();
     void showNetworkSetup();
     void showVideoCall();
+    void showEmergency();
+    void showToolPage(const QString& page);
     void hangUpVideoCall();
     void startVoiceInteraction();
     void handleVoicePrimary();
@@ -62,5 +68,8 @@ private:
     NetworkService* m_networkService = nullptr;
     VideoCallService* m_videoCallService = nullptr;
     VoiceInteractionService* m_voiceInteractionService = nullptr;
+    VoiceCommandDispatcher* m_voiceCommandDispatcher = nullptr;
+    VoiceToolRegistry* m_voiceToolRegistry = nullptr;
     QTimer m_controlTimeout;
+    QString m_pendingVoiceToolPage;
 };

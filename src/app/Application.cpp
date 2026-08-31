@@ -18,6 +18,8 @@
 #include "platform/PowerStatusAdapter.h"
 #include "platform/VideoCallMediaAdapter.h"
 #include "platform/VoiceAudioAdapter.h"
+#include "platform/KwsProcessAdapter.h"
+#include "platform/OfflineAudioLibraryAdapter.h"
 #include "platform/WeatherProviderFactory.h"
 #include "data/WeatherConfigRepository.h"
 #include "services/CareService.h"
@@ -30,6 +32,10 @@
 #include "services/VideoCallService.h"
 #include "services/VoiceInteractionService.h"
 #include "services/VoiceInteractionPorts.h"
+#include "services/VoiceToolRegistry.h"
+#include "services/LocalCompanionService.h"
+#include "services/VoiceCapabilityService.h"
+#include "services/VoiceCommandDispatcher.h"
 #include "services/WeatherService.h"
 #include "services/WeatherPorts.h"
 #include "widgets/VisualTokens.h"
@@ -111,6 +117,12 @@ bool Application::initialize(QString* error)
         aiConfiguration, m_asrProvider.get(), m_llmProvider.get(),
         m_ttsProvider.get(), m_voiceAudioAdapter.get(),
         m_mediaSessionCoordinator.get());
+    m_voiceToolRegistry = std::make_unique<VoiceToolRegistry>(
+        m_reminderService.get());
+    m_voiceInteractionService->setToolRegistry(
+        aiConfiguration.tools.enabled
+            && aiConfiguration.tools.validationError().isEmpty()
+            ? m_voiceToolRegistry.get() : nullptr);
     // 给语音交互注入一个只读天气入口；VoiceInteractionService 不接触 Provider。
     m_voiceInteractionService->setWeatherProvider(
         [weatherService = m_weatherService.get()]() {
@@ -128,6 +140,23 @@ bool Application::initialize(QString* error)
     m_audioVolumeAdapter = std::make_unique<AudioVolumeAdapter>();
     m_backlightAdapter = std::make_unique<BacklightAdapter>();
     m_powerStatusAdapter = std::make_unique<PowerStatusAdapter>();
+    m_offlineAudioLibraryAdapter = std::make_unique<OfflineAudioLibraryAdapter>(
+        aiConfiguration.offline.companionAudioDirectory);
+    m_localCompanionService = std::make_unique<LocalCompanionService>(
+        aiConfiguration.offline, m_offlineAudioLibraryAdapter.get(),
+        m_voiceAudioAdapter.get(), m_mediaSessionCoordinator.get());
+    m_voiceCapabilityService = std::make_unique<VoiceCapabilityService>(
+        aiConfiguration, m_systemService.get());
+    connect(m_voiceInteractionService.get(),
+            &VoiceInteractionService::providerAvailabilityChanged,
+            m_voiceCapabilityService.get(),
+            &VoiceCapabilityService::reportProviderAvailability);
+    m_kwsProcessAdapter = std::make_unique<KwsProcessAdapter>(
+        aiConfiguration.kws);
+    m_voiceCommandDispatcher = std::make_unique<VoiceCommandDispatcher>(
+        aiConfiguration.kws, m_kwsProcessAdapter.get(),
+        m_voiceCapabilityService.get(), m_voiceInteractionService.get(),
+        m_localCompanionService.get());
     connect(m_networkStatusAdapter.get(), &NetworkStatusAdapter::networkStateChanged,
             m_systemService.get(), &SystemService::setNetworkState);
     connect(m_audioVolumeAdapter.get(), &AudioVolumeAdapter::controlStateChanged,
@@ -178,8 +207,10 @@ bool Application::initialize(QString* error)
     m_controller = std::make_unique<AppController>(m_window.get(),
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
         m_systemService.get(), 15'000, m_networkService.get(),
-        m_videoCallService.get(), m_voiceInteractionService.get());
+        m_videoCallService.get(), m_voiceInteractionService.get(),
+        m_voiceCommandDispatcher.get(), m_voiceToolRegistry.get());
     m_controller->initialize();
+    m_voiceCommandDispatcher->start();
     return true;
 }
 
@@ -198,6 +229,8 @@ void Application::show()
 
 void Application::shutdown()
 {
+    if (m_voiceCommandDispatcher)
+        m_voiceCommandDispatcher->stop();
     if (m_weatherService)
         m_weatherService->stop();
     if (m_familyLinkController)
@@ -223,6 +256,12 @@ void Application::shutdown()
     m_backlightAdapter.reset();
     m_audioVolumeAdapter.reset();
     m_networkStatusAdapter.reset();
+    m_voiceCommandDispatcher.reset();
+    m_kwsProcessAdapter.reset();
+    m_voiceCapabilityService.reset();
+    m_localCompanionService.reset();
+    m_offlineAudioLibraryAdapter.reset();
+    m_voiceToolRegistry.reset();
     m_voiceInteractionService.reset();
     m_weatherService.reset();
     m_weatherProvider.reset();

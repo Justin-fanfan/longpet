@@ -211,6 +211,90 @@ AiConfiguration AiConfigRepository::load(QString* error) const
     configuration.voice.historyTurns = environmentInteger(
         "LONGPET_VOICE_HISTORY_TURNS", boundedInteger(
             settings, voicePrefix + QStringLiteral("history_turns"), 4));
+    configuration.voice.availabilityRetryMs = environmentInteger(
+        "LONGPET_VOICE_AVAILABILITY_RETRY_MS", boundedInteger(
+            settings, voicePrefix + QStringLiteral("availability_retry_ms"), 30'000));
+
+    configuration.kws.enabled = environmentBoolean(
+        "LONGPET_KWS_ENABLED", settings.value(
+            QStringLiteral("kws/enabled"), false).toBool());
+    configuration.kws.pythonProgram = environmentOrValue(
+        "LONGPET_KWS_PYTHON", settings.value(
+            QStringLiteral("kws/python_program"), QStringLiteral("python3")).toString());
+    configuration.kws.bridgeScript = environmentOrValue(
+        "LONGPET_KWS_BRIDGE_SCRIPT", settings.value(
+            QStringLiteral("kws/bridge_script"),
+            QStringLiteral("/opt/longpet-kws/longpet_kws_bridge.py")).toString());
+    configuration.kws.kwsRoot = environmentOrValue(
+        "LONGPET_KWS_ROOT", settings.value(
+            QStringLiteral("kws/kws_root"),
+            QStringLiteral("/opt/longpet-kws/upstream")).toString());
+    configuration.kws.modelPath = environmentOrValue(
+        "LONGPET_KWS_MODEL", settings.value(
+            QStringLiteral("kws/model_path"),
+            QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx")).toString());
+    configuration.kws.tokensPath = environmentOrValue(
+        "LONGPET_KWS_TOKENS", settings.value(
+            QStringLiteral("kws/tokens_path"),
+            QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/tokens.txt")).toString());
+    configuration.kws.captureBackend = environmentOrValue(
+        "LONGPET_KWS_CAPTURE_BACKEND", settings.value(
+            QStringLiteral("kws/capture_backend"),
+            QStringLiteral("sounddevice")).toString()).toLower();
+    configuration.kws.inputDevice = environmentOrValue(
+        "LONGPET_KWS_INPUT_DEVICE", settings.value(
+            QStringLiteral("kws/input_device")).toString());
+    configuration.kws.alsaDevice = environmentOrValue(
+        "LONGPET_KWS_ALSA_DEVICE", settings.value(
+            QStringLiteral("kws/alsa_device")).toString());
+    configuration.kws.inputSampleRate = environmentInteger(
+        "LONGPET_KWS_INPUT_SAMPLE_RATE", boundedInteger(
+            settings, QStringLiteral("kws/input_sample_rate"), 48'000));
+    configuration.kws.wakeThreshold = environmentDouble(
+        "LONGPET_KWS_WAKE_THRESHOLD", boundedDouble(
+            settings, QStringLiteral("kws/wake_threshold"), 0.15));
+    configuration.kws.ignoredHelloThreshold = environmentDouble(
+        "LONGPET_KWS_HELLO_THRESHOLD", boundedDouble(
+            settings, QStringLiteral("kws/hello_threshold"), 0.10));
+    configuration.kws.companionThreshold = environmentDouble(
+        "LONGPET_KWS_COMPANION_THRESHOLD", boundedDouble(
+            settings, QStringLiteral("kws/companion_threshold"), 0.05));
+    configuration.kws.emergencyThreshold = environmentDouble(
+        "LONGPET_KWS_EMERGENCY_THRESHOLD", boundedDouble(
+            settings, QStringLiteral("kws/emergency_threshold"), 0.05));
+    configuration.kws.vadThresholdDb = environmentDouble(
+        "LONGPET_KWS_VAD_THRESHOLD_DB", boundedDouble(
+            settings, QStringLiteral("kws/vad_threshold_db"), -60.0));
+    configuration.kws.vadNoiseRatio = environmentDouble(
+        "LONGPET_KWS_VAD_NOISE_RATIO", boundedDouble(
+            settings, QStringLiteral("kws/vad_noise_ratio"), 2.5));
+    configuration.kws.commandTimeoutMs = environmentInteger(
+        "LONGPET_KWS_COMMAND_TIMEOUT_MS", boundedInteger(
+            settings, QStringLiteral("kws/command_timeout_ms"), 10'000));
+    configuration.kws.pauseTimeoutMs = environmentInteger(
+        "LONGPET_KWS_PAUSE_TIMEOUT_MS", boundedInteger(
+            settings, QStringLiteral("kws/pause_timeout_ms"), 1'500));
+    configuration.kws.resumeCooldownMs = environmentInteger(
+        "LONGPET_KWS_RESUME_COOLDOWN_MS", boundedInteger(
+            settings, QStringLiteral("kws/resume_cooldown_ms"), 1'200));
+    configuration.kws.restartDelayMs = environmentInteger(
+        "LONGPET_KWS_RESTART_DELAY_MS", boundedInteger(
+            settings, QStringLiteral("kws/restart_delay_ms"), 2'000));
+
+    configuration.offline.enabled = environmentBoolean(
+        "LONGPET_OFFLINE_VOICE_ENABLED", settings.value(
+            QStringLiteral("offline/enabled"), true).toBool());
+    configuration.offline.companionAudioDirectory = environmentOrValue(
+        "LONGPET_OFFLINE_COMPANION_AUDIO_DIR", settings.value(
+            QStringLiteral("offline/companion_audio_directory"),
+            QStringLiteral("/opt/longpet/offline-audio")).toString());
+
+    configuration.tools.enabled = environmentBoolean(
+        "LONGPET_VOICE_TOOLS_ENABLED", settings.value(
+            QStringLiteral("tools/enabled"), true).toBool());
+    configuration.tools.maximumRounds = environmentInteger(
+        "LONGPET_VOICE_TOOLS_MAXIMUM_ROUNDS", boundedInteger(
+            settings, QStringLiteral("tools/maximum_rounds"), 3));
 
     const QString validationError = configuration.validationError();
     if (error && !validationError.isEmpty()) {
@@ -219,6 +303,15 @@ AiConfiguration AiConfigRepository::load(QString* error) const
             : QStringLiteral("未找到 AI 配置文件 %1").arg(m_path);
         *error = QStringLiteral("%1：%2").arg(prefix, validationError);
     }
+    const QString kwsError = configuration.kws.validationError();
+    if (!kwsError.isEmpty())
+        qWarning().noquote() << "KWS config invalid:" << kwsError;
+    const QString offlineError = configuration.offline.validationError();
+    if (!offlineError.isEmpty())
+        qWarning().noquote() << "Offline voice config invalid:" << offlineError;
+    const QString toolsError = configuration.tools.validationError();
+    if (!toolsError.isEmpty())
+        qWarning().noquote() << "Voice tools config invalid:" << toolsError;
     return configuration;
 }
 

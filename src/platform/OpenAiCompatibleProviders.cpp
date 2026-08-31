@@ -35,20 +35,72 @@ QJsonObject parseObject(const QByteArray& body, QJsonParseError* error)
 
 QByteArray chatRequestBody(const LlmProviderConfiguration& configuration,
                            const QList<AiChatMessage>& messages,
-                           bool stream)
+                           bool stream,
+                           const QList<AiToolDefinition>& tools = {})
 {
     QJsonArray messageArray;
     for (const AiChatMessage& message : messages) {
-        messageArray.append(QJsonObject {
+        QJsonObject messageObject {
             {QStringLiteral("role"), message.role},
             {QStringLiteral("content"), message.content}
-        });
+        };
+        if (!message.name.isEmpty())
+            messageObject.insert(QStringLiteral("name"), message.name);
+        if (!message.toolCallId.isEmpty())
+            messageObject.insert(QStringLiteral("tool_call_id"), message.toolCallId);
+        if (!message.toolCalls.isEmpty()) {
+            QJsonArray toolCallArray;
+            for (const AiToolCall& call : message.toolCalls) {
+                toolCallArray.append(QJsonObject {
+                    {QStringLiteral("id"), call.id},
+                    {QStringLiteral("type"), QStringLiteral("function")},
+                    {QStringLiteral("function"), QJsonObject {
+                        {QStringLiteral("name"), call.name},
+                        {QStringLiteral("arguments"), call.argumentsJson}
+                    }}
+                });
+            }
+            messageObject.insert(QStringLiteral("tool_calls"), toolCallArray);
+        }
+        messageArray.append(messageObject);
     }
-    return QJsonDocument(QJsonObject {
+    QJsonObject body {
         {QStringLiteral("model"), configuration.model},
         {QStringLiteral("messages"), messageArray},
         {QStringLiteral("stream"), stream}
-    }).toJson(QJsonDocument::Compact);
+    };
+    if (!tools.isEmpty()) {
+        QJsonArray toolArray;
+        for (const AiToolDefinition& tool : tools) {
+            toolArray.append(QJsonObject {
+                {QStringLiteral("type"), QStringLiteral("function")},
+                {QStringLiteral("function"), QJsonObject {
+                    {QStringLiteral("name"), tool.name},
+                    {QStringLiteral("description"), tool.description},
+                    {QStringLiteral("parameters"), tool.parameters}
+                }}
+            });
+        }
+        body.insert(QStringLiteral("tools"), toolArray);
+        body.insert(QStringLiteral("tool_choice"), QStringLiteral("auto"));
+    }
+    return QJsonDocument(body).toJson(QJsonDocument::Compact);
+}
+
+QList<AiToolCall> parseToolCalls(const QJsonArray& array)
+{
+    QList<AiToolCall> calls;
+    for (const QJsonValue& value : array) {
+        const QJsonObject object = value.toObject();
+        const QJsonObject function = object.value(QStringLiteral("function")).toObject();
+        AiToolCall call;
+        call.id = object.value(QStringLiteral("id")).toString();
+        call.name = function.value(QStringLiteral("name")).toString();
+        call.argumentsJson = function.value(QStringLiteral("arguments")).toString();
+        if (!call.id.isEmpty() && !call.name.isEmpty())
+            calls.append(call);
+    }
+    return calls;
 }
 }
 
@@ -149,6 +201,29 @@ void OpenAiCompatibleLlmProvider::streamChat(
         chatRequestBody(m_configuration, messages, true));
 }
 
+void OpenAiCompatibleLlmProvider::completeChatWithTools(
+    quint64 sessionId, const QList<AiChatMessage>& messages,
+    const QList<AiToolDefinition>& tools)
+{
+    resetStream();
+    m_http.postJson(sessionId, providerEndpoint(
+        m_configuration.apiBaseUrl, QStringLiteral("chat/completions")),
+        m_configuration.apiKey,
+        chatRequestBody(m_configuration, messages, false, tools));
+}
+
+void OpenAiCompatibleLlmProvider::streamChatWithTools(
+    quint64 sessionId, const QList<AiChatMessage>& messages,
+    const QList<AiToolDefinition>& tools)
+{
+    resetStream();
+    m_streamSessionId = sessionId;
+    m_http.postJsonStream(sessionId, providerEndpoint(
+        m_configuration.apiBaseUrl, QStringLiteral("chat/completions")),
+        m_configuration.apiKey,
+        chatRequestBody(m_configuration, messages, true, tools));
+}
+
 void OpenAiCompatibleLlmProvider::cancel(quint64 sessionId)
 {
     m_http.cancel(sessionId);
@@ -163,6 +238,7 @@ void OpenAiCompatibleLlmProvider::handleResponse(
         if (!processStreamEvents(sessionId, m_sseParser.finish()))
             return;
         const QString responseText = m_streamText.trimmed();
+        const QList<AiToolCall> toolCalls = m_streamToolCalls.values();
         const bool endedNormally = m_streamDone || m_streamFinishReasonSeen;
         if (!endedNormally) {
             resetStream();
@@ -171,7 +247,7 @@ void OpenAiCompatibleLlmProvider::handleResponse(
                 QStringLiteral("SSE stream ended without [DONE] or finish_reason")));
             return;
         }
-        if (responseText.isEmpty()) {
+        if (responseText.isEmpty() && toolCalls.isEmpty()) {
             resetStream();
             emit requestFailed(sessionId, invalidResponse(
                 QStringLiteral("openai-compatible/llm"),
@@ -180,6 +256,10 @@ void OpenAiCompatibleLlmProvider::handleResponse(
             return;
         }
         resetStream();
+        if (!toolCalls.isEmpty()) {
+            emit toolCallsReady(sessionId, responseText, toolCalls);
+            return;
+        }
         emit chatCompletionReady(sessionId, responseText);
         return;
     }
@@ -193,14 +273,20 @@ void OpenAiCompatibleLlmProvider::handleResponse(
         return;
     }
     const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
-    const QString content = choices.isEmpty() ? QString()
-        : choices.first().toObject().value(QStringLiteral("message"))
-              .toObject().value(QStringLiteral("content")).toString().trimmed();
-    if (content.isEmpty()) {
+    const QJsonObject message = choices.isEmpty() ? QJsonObject()
+        : choices.first().toObject().value(QStringLiteral("message")).toObject();
+    const QString content = message.value(QStringLiteral("content")).toString().trimmed();
+    const QList<AiToolCall> toolCalls = parseToolCalls(
+        message.value(QStringLiteral("tool_calls")).toArray());
+    if (content.isEmpty() && toolCalls.isEmpty()) {
         emit requestFailed(sessionId, invalidResponse(
             QStringLiteral("openai-compatible/llm"),
             QStringLiteral("response has no choices[0].message.content"),
             AiProviderErrorCode::EmptyResult));
+        return;
+    }
+    if (!toolCalls.isEmpty()) {
+        emit toolCallsReady(sessionId, content, toolCalls);
         return;
     }
     emit chatCompletionReady(sessionId, content);
@@ -244,8 +330,21 @@ bool OpenAiCompatibleLlmProvider::processStreamEvents(
             && !choice.value(QStringLiteral("finish_reason")).isUndefined()) {
             m_streamFinishReasonSeen = true;
         }
-        const QString delta = choice.value(QStringLiteral("delta"))
-            .toObject().value(QStringLiteral("content")).toString();
+        const QJsonObject deltaObject = choice.value(QStringLiteral("delta")).toObject();
+        const QJsonArray toolCallDeltas = deltaObject.value(
+            QStringLiteral("tool_calls")).toArray();
+        for (const QJsonValue& value : toolCallDeltas) {
+            const QJsonObject object = value.toObject();
+            const int index = object.value(QStringLiteral("index")).toInt();
+            AiToolCall& call = m_streamToolCalls[index];
+            const QString id = object.value(QStringLiteral("id")).toString();
+            if (!id.isEmpty())
+                call.id = id;
+            const QJsonObject function = object.value(QStringLiteral("function")).toObject();
+            call.name.append(function.value(QStringLiteral("name")).toString());
+            call.argumentsJson.append(function.value(QStringLiteral("arguments")).toString());
+        }
+        const QString delta = deltaObject.value(QStringLiteral("content")).toString();
         if (delta.isEmpty())
             continue;
         m_streamText.append(delta);
@@ -261,6 +360,7 @@ void OpenAiCompatibleLlmProvider::resetStream()
     m_streamText.clear();
     m_streamDone = false;
     m_streamFinishReasonSeen = false;
+    m_streamToolCalls.clear();
 }
 
 OpenAiTtsProvider::OpenAiTtsProvider(

@@ -69,6 +69,10 @@ set(
     src/platform/WeatherProviderFactory.h
     src/platform/VoiceAudioAdapter.cpp
     src/platform/VoiceAudioAdapter.h
+    src/platform/KwsProcessAdapter.cpp
+    src/platform/KwsProcessAdapter.h
+    src/platform/OfflineAudioLibraryAdapter.cpp
+    src/platform/OfflineAudioLibraryAdapter.h
     src/platform/AudioVolumeAdapter.cpp
     src/platform/AudioVolumeAdapter.h
     src/platform/BacklightAdapter.cpp
@@ -114,6 +118,16 @@ set(
     src/services/WeatherService.cpp
     src/services/WeatherService.h
     src/services/VoiceInteractionPorts.h
+    src/services/KwsPorts.h
+    src/services/OfflineVoicePorts.h
+    src/services/VoiceToolRegistry.cpp
+    src/services/VoiceToolRegistry.h
+    src/services/LocalCompanionService.cpp
+    src/services/LocalCompanionService.h
+    src/services/VoiceCapabilityService.cpp
+    src/services/VoiceCapabilityService.h
+    src/services/VoiceCommandDispatcher.cpp
+    src/services/VoiceCommandDispatcher.h
     src/services/SentenceBuffer.cpp
     src/services/SentenceBuffer.h
     src/services/VoiceActivityDetector.cpp
