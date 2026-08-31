@@ -47,8 +47,9 @@ V3 已在 V2 `VAD → ASR → SSE LLM → SentenceBuffer → TTS Queue` 链路�
 | 停止 | 复用取消入口 | 调度已预留，当前模型不支持 |
 | 打开提醒 / 现在几点 / 联系家人 / 返回主页 | 对应本地动作 | 当前模型不支持，未伪造 |
 
-LongPet 仓库没有复制 ONNX、词表、FBank、VAD 或推理代码。部署时独立安装上游仓库，
-LongPet 仅提供协议 bridge。
+LongPet 把上游源码与模型（`fsmn_ctc.onnx`、`tokens.txt`）作为 vendored 依赖放入
+`third_party/longpet-kws`，随仓库一并提交；部署时整目录拷贝到板端 `/home/longpet/longpet-kws/upstream`。
+LongPet 仍不复制或重写 FBank、VAD 或推理代码，只在二者约好的目录结构（`kws_root/src`）之上提供协议 bridge。
 
 ## 3. V3 架构
 
@@ -157,7 +158,7 @@ Qt 发给 bridge 的命令：
 目录由 `[offline] companion_audio_directory` 配置，默认：
 
 ```text
-/opt/longpet/offline-audio
+/home/longpet/offline-audio
 ```
 
 行为：
@@ -250,10 +251,10 @@ maximum_rounds=3
 [kws]
 enabled=true
 python_program=/usr/bin/python3
-bridge_script=/opt/longpet-kws/longpet_kws_bridge.py
-kws_root=/opt/longpet-kws/upstream
-model_path=/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx
-tokens_path=/opt/longpet-kws/upstream/assets/fsmn/tokens.txt
+bridge_script=/home/longpet/longpet-kws/longpet_kws_bridge.py
+kws_root=/home/longpet/longpet-kws/upstream
+model_path=/home/longpet/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx
+tokens_path=/home/longpet/longpet-kws/upstream/assets/fsmn/tokens.txt
 capture_backend=sounddevice
 input_device=
 alsa_device=
@@ -271,7 +272,7 @@ restart_delay_ms=2000
 
 [offline]
 enabled=true
-companion_audio_directory=/opt/longpet/offline-audio
+companion_audio_directory=/home/longpet/offline-audio
 ```
 
 `input_device` 默认空，使用 PortAudio 默认输入；不再永久写死设备序号 `2`。PortAudio 故障时可改为
@@ -380,7 +381,15 @@ journalctl -b -u longpet.service --no-pager | \
 - 没有实现全双工抢话、AEC、WebSocket ASR、partial ASR、流式 TTS、长期记忆、Provider fallback；
 - 当前本地工具在 Qt 线程执行，但都是短耗时 SQLite/时间/导航操作；未来网络型工具应增加异步 Tool Port，
   不应直接扩展为阻塞调用；
-- 本轮未做交叉编译和板端实测，必须按第 12 节完成验收后再判断硬件表现。
+- 本轮（V3 撰写时）未做交叉编译和板端实测，必须按第 12 节完成验收后再判断硬件表现。
+
+> **补充（2026-08-31，板端实测）**：随后在板端做了 KWS 唤醒实测，发现
+> `capture_backend=arecord` 时**说“小龙小龙”无反应**，根因是 vendored
+> `third_party/longpet-kws/src/longpet_kws/cli.py` 的 `ArecordCapture` 用 `bufsize=0`
+> 导致只采到 1 个音频块即退出（识别类误判为 EOF），关键词得分恒为 0。去掉 `bufsize=0`
+> 后修复，并在部署服务上实测 `KWS keyword=小龙小龙 score=0.2994` 成功唤醒 AI。
+> 完整排查、修复与验证见
+> [LongPet-KWS-WakeWord-No-Reaction-Report.md](LongPet-KWS-WakeWord-No-Reaction-Report.md)。
 
 ## 14. 四个核心验收场景
 

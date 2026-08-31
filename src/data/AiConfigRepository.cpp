@@ -224,19 +224,19 @@ AiConfiguration AiConfigRepository::load(QString* error) const
     configuration.kws.bridgeScript = environmentOrValue(
         "LONGPET_KWS_BRIDGE_SCRIPT", settings.value(
             QStringLiteral("kws/bridge_script"),
-            QStringLiteral("/opt/longpet-kws/longpet_kws_bridge.py")).toString());
+            QStringLiteral("/home/longpet/longpet-kws/longpet_kws_bridge.py")).toString());
     configuration.kws.kwsRoot = environmentOrValue(
         "LONGPET_KWS_ROOT", settings.value(
             QStringLiteral("kws/kws_root"),
-            QStringLiteral("/opt/longpet-kws/upstream")).toString());
+            QStringLiteral("/home/longpet/longpet-kws/upstream")).toString());
     configuration.kws.modelPath = environmentOrValue(
         "LONGPET_KWS_MODEL", settings.value(
             QStringLiteral("kws/model_path"),
-            QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx")).toString());
+            QStringLiteral("/home/longpet/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx")).toString());
     configuration.kws.tokensPath = environmentOrValue(
         "LONGPET_KWS_TOKENS", settings.value(
             QStringLiteral("kws/tokens_path"),
-            QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/tokens.txt")).toString());
+            QStringLiteral("/home/longpet/longpet-kws/upstream/assets/fsmn/tokens.txt")).toString());
     configuration.kws.captureBackend = environmentOrValue(
         "LONGPET_KWS_CAPTURE_BACKEND", settings.value(
             QStringLiteral("kws/capture_backend"),
@@ -245,8 +245,10 @@ AiConfiguration AiConfigRepository::load(QString* error) const
         "LONGPET_KWS_INPUT_DEVICE", settings.value(
             QStringLiteral("kws/input_device")).toString());
     configuration.kws.alsaDevice = environmentOrValue(
-        "LONGPET_KWS_ALSA_DEVICE", settings.value(
-            QStringLiteral("kws/alsa_device")).toString());
+        "LONGPET_KWS_ALSA_DEVICE",
+        environmentOrValue(
+            "LONGPET_AI_CAPTURE_DEVICE", settings.value(
+                QStringLiteral("kws/alsa_device")).toString()));
     configuration.kws.inputSampleRate = environmentInteger(
         "LONGPET_KWS_INPUT_SAMPLE_RATE", boundedInteger(
             settings, QStringLiteral("kws/input_sample_rate"), 48'000));
@@ -287,7 +289,7 @@ AiConfiguration AiConfigRepository::load(QString* error) const
     configuration.offline.companionAudioDirectory = environmentOrValue(
         "LONGPET_OFFLINE_COMPANION_AUDIO_DIR", settings.value(
             QStringLiteral("offline/companion_audio_directory"),
-            QStringLiteral("/opt/longpet/offline-audio")).toString());
+            QStringLiteral("/home/longpet/offline-audio")).toString());
 
     configuration.tools.enabled = environmentBoolean(
         "LONGPET_VOICE_TOOLS_ENABLED", settings.value(

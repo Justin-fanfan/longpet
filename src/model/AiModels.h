@@ -128,10 +128,10 @@ struct VoiceInteractionConfiguration {
 struct KwsConfiguration {
     bool enabled = false;
     QString pythonProgram = QStringLiteral("python3");
-    QString bridgeScript = QStringLiteral("/opt/longpet-kws/longpet_kws_bridge.py");
-    QString kwsRoot = QStringLiteral("/opt/longpet-kws/upstream");
-    QString modelPath = QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx");
-    QString tokensPath = QStringLiteral("/opt/longpet-kws/upstream/assets/fsmn/tokens.txt");
+    QString bridgeScript = QStringLiteral("/home/longpet/longpet-kws/longpet_kws_bridge.py");
+    QString kwsRoot = QStringLiteral("/home/longpet/longpet-kws/upstream");
+    QString modelPath = QStringLiteral("/home/longpet/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx");
+    QString tokensPath = QStringLiteral("/home/longpet/longpet-kws/upstream/assets/fsmn/tokens.txt");
     QString captureBackend = QStringLiteral("sounddevice");
     QString inputDevice;
     QString alsaDevice;
@@ -152,7 +152,7 @@ struct KwsConfiguration {
 
 struct OfflineVoiceConfiguration {
     bool enabled = true;
-    QString companionAudioDirectory = QStringLiteral("/opt/longpet/offline-audio");
+    QString companionAudioDirectory = QStringLiteral("/home/longpet/offline-audio");
 
     QString validationError() const;
 };

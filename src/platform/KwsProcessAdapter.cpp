@@ -135,6 +135,16 @@ void KwsProcessAdapter::startProcess()
 {
     if (!m_started || m_process.state() != QProcess::NotRunning)
         return;
+    qInfo().noquote()
+        << QStringLiteral(
+               "KWS resolved config: bridge=%1 backend=%2 alsa_device=%3 input_device=%4")
+               .arg(m_configuration.bridgeScript, m_configuration.captureBackend,
+                    m_configuration.alsaDevice.isEmpty()
+                        ? QStringLiteral("<empty>")
+                        : m_configuration.alsaDevice,
+                    m_configuration.inputDevice.isEmpty()
+                        ? QStringLiteral("<empty>")
+                        : m_configuration.inputDevice);
     const QString configurationError = m_configuration.validationError();
     if (!configurationError.isEmpty()) {
         emit kwsError(QStringLiteral("本地语音唤醒配置不完整"), configurationError);

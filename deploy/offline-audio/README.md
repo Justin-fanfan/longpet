@@ -3,7 +3,7 @@
 将已经取得使用授权的中文陪伴语音放到板端：
 
 ```text
-/opt/longpet/offline-audio
+/home/longpet/offline-audio
 ```
 
 当前支持由 GStreamer 自动解码的 `.wav`、`.mp3`、`.ogg`、`.flac` 文件。建议使用

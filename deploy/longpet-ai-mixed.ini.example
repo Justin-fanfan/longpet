@@ -43,12 +43,15 @@ enabled=true
 maximum_rounds=3
 
 [kws]
+# 依赖 third_party/longpet-kws 的源码+模型（见 deploy/配置说明.md 3.4.4），以及板端 numpy/onnxruntime/sounddevice 运行时。
+# 采集设备解析顺序：LONGPET_KWS_ALSA_DEVICE → LONGPET_AI_CAPTURE_DEVICE(语音交互同款，服务已设) → 下行 alsa_device。
+# alsa_device 仅在未设置上述环境变量时生效；通常留空即可，KWS 会自动继承服务里已有的 USB 麦克风。
 enabled=true
 python_program=/usr/bin/python3
-bridge_script=/opt/longpet-kws/longpet_kws_bridge.py
-kws_root=/opt/longpet-kws/upstream
-model_path=/opt/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx
-tokens_path=/opt/longpet-kws/upstream/assets/fsmn/tokens.txt
+bridge_script=/home/longpet/longpet-kws/longpet_kws_bridge.py
+kws_root=/home/longpet/longpet-kws/upstream
+model_path=/home/longpet/longpet-kws/upstream/assets/fsmn/fsmn_ctc.onnx
+tokens_path=/home/longpet/longpet-kws/upstream/assets/fsmn/tokens.txt
 capture_backend=sounddevice
 input_device=
 alsa_device=
@@ -66,4 +69,4 @@ restart_delay_ms=2000
 
 [offline]
 enabled=true
-companion_audio_directory=/opt/longpet/offline-audio
+companion_audio_directory=/home/longpet/offline-audio
