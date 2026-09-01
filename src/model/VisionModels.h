@@ -29,11 +29,14 @@ struct VisionFrameResult {
 };
 
 struct VisionDetectorInfo {
+    QString detectorName;
     QString modelPath;
     QString provider;
     QString runtimeVersion;
     QList<qint64> inputShape;
     QList<qint64> outputShape;
+    qint64 modelBytes = 0;
+    qint64 parameterCount = 0;
     int inferenceThreads = 1;
     float confidenceThreshold = 0.65F;
     float nmsThreshold = 0.45F;

@@ -8,6 +8,8 @@ CMakeUserPresets.json
 *.dll
 *.pdb
 *.log
+__pycache__/
+*.py[cod]
 
 # Local IDE state is machine-specific
 .vscode/
@@ -15,3 +17,10 @@ CMakeUserPresets.json
 .qtcreator/
 
 quicktest/
+
+# Vision training products are prepared outside the source tree. These guards
+# prevent accidental commits if a developer points a script at the repository.
+third_party/tinyissimo-yolo/data/
+third_party/tinyissimo-yolo/runs/
+third_party/tinyissimo-yolo/checkpoints/
+third_party/tinyissimo-yolo/*.pt

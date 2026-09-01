@@ -1,0 +1,25 @@
+diff --git a/ultralytics/engine/exporter.py b/ultralytics/engine/exporter.py
+index 859106a..e10181b 100644
+--- a/ultralytics/engine/exporter.py
++++ b/ultralytics/engine/exporter.py
+@@ -382,6 +382,7 @@ class Exporter:
+             input_names=["images"],
+             output_names=output_names,
+             dynamic_axes=dynamic or None,
++            dynamo=False,
+         )
+ 
+         # Checks
+diff --git a/ultralytics/nn/modules/head.py b/ultralytics/nn/modules/head.py
+index 6b19c05..b432537 100644
+--- a/ultralytics/nn/modules/head.py
++++ b/ultralytics/nn/modules/head.py
+@@ -33,7 +33,7 @@ class Detect(nn.Module):
+ 
+         # For TinyissimoYOLO v5 and v8, this number is reduced to 5
+         ## it's related to the number of anchors used in the model
+-        self.reg_max = 4 # DFL channels (ch[0] // 16 to scale 4/8/12/16/20 for n/s/m/l/x)
++        self.reg_max = 16 # DFL channels (TinyissimoYOLO v1 training/export requirement)
+         self.no = nc + self.reg_max * 4  # number of outputs per anchor
+         self.stride = torch.zeros(self.nl)  # strides computed during build
+         c2, c3 = max((16, ch[0] // 4, self.reg_max * 4)), max(ch[0], min(self.nc, 100))  # channels

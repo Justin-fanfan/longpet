@@ -2,6 +2,8 @@
 #include "model/VisionModels.h"
 #include "platform/CameraCaptureAdapter.h"
 #include "platform/FastestDetAdapter.h"
+#include "platform/TinyissimoYoloAdapter.h"
+#include "services/VisionPorts.h"
 #include "services/VisionService.h"
 
 #include <QCommandLineParser>
@@ -16,7 +18,12 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#include <memory>
 #include <vector>
+
+#if defined(Q_OS_LINUX) || defined(__linux__)
+#include <unistd.h>
+#endif
 
 namespace {
 QString shapeText(const QList<qint64>& shape)
@@ -30,7 +37,10 @@ QString shapeText(const QList<qint64>& shape)
 void printDetectorInfo(const VisionDetectorInfo& info,
                        const QString& cameraDevice = {})
 {
+    qInfo().noquote() << "detector=" << info.detectorName;
     qInfo().noquote() << "model_path=" << info.modelPath;
+    qInfo().noquote() << "model_bytes=" << info.modelBytes;
+    qInfo().noquote() << "parameter_count=" << info.parameterCount;
     qInfo().noquote() << "model_input_shape=" << shapeText(info.inputShape);
     qInfo().noquote() << "model_output_shape=" << shapeText(info.outputShape);
     qInfo().noquote() << "provider=" << info.provider;
@@ -38,7 +48,12 @@ void printDetectorInfo(const VisionDetectorInfo& info,
     qInfo().noquote() << "inference_threads=" << info.inferenceThreads;
     qInfo().noquote() << "confidence_threshold=" << info.confidenceThreshold;
     qInfo().noquote() << "nms_threshold=" << info.nmsThreshold;
-    qInfo().noquote() << "input_resolution=352x352";
+    if (info.inputShape.size() == 4) {
+        qInfo().noquote() << "input_resolution="
+                          << QStringLiteral("%1x%2")
+                                 .arg(info.inputShape[3])
+                                 .arg(info.inputShape[2]);
+    }
     if (!cameraDevice.isEmpty())
         qInfo().noquote() << "camera_device=" << cameraDevice;
 }
@@ -105,16 +120,53 @@ QString linuxMemoryValue(const QByteArray& key)
     return QStringLiteral("unavailable (status key missing)");
 }
 
-void printSummary(const std::vector<VisionFrameResult>& results,
-                  int warmupCount, double runtimeSeconds,
-                  double measurementSeconds)
+double processCpuSeconds()
 {
+#if defined(Q_OS_LINUX) || defined(__linux__)
+    QFile stat(QStringLiteral("/proc/self/stat"));
+    if (!stat.open(QIODevice::ReadOnly | QIODevice::Text))
+        return -1.0;
+    const QByteArray line = stat.readAll().trimmed();
+    const qsizetype commandEnd = line.lastIndexOf(')');
+    if (commandEnd < 0)
+        return -1.0;
+    const QList<QByteArray> fields = line.mid(commandEnd + 2).split(' ');
+    // fields[0] is field 3 (state), so utime/stime fields 14/15 are 11/12.
+    if (fields.size() <= 12)
+        return -1.0;
+    bool userValid = false;
+    bool systemValid = false;
+    const qint64 userTicks = fields[11].toLongLong(&userValid);
+    const qint64 systemTicks = fields[12].toLongLong(&systemValid);
+    const long ticksPerSecond = sysconf(_SC_CLK_TCK);
+    if (!userValid || !systemValid || ticksPerSecond <= 0)
+        return -1.0;
+    return static_cast<double>(userTicks + systemTicks) / ticksPerSecond;
+#else
+    return -1.0;
+#endif
+}
+
+void printSummary(const std::vector<VisionFrameResult>& results,
+                   int warmupCount, double runtimeSeconds,
+                   double measurementSeconds, double cpuStartSeconds,
+                   double cpuEndSeconds)
+{
+    std::vector<double> decode;
+    std::vector<double> preprocess;
     std::vector<double> inference;
+    std::vector<double> postprocess;
     std::vector<double> total;
+    decode.reserve(results.size());
+    preprocess.reserve(results.size());
     inference.reserve(results.size());
+    postprocess.reserve(results.size());
     total.reserve(results.size());
     for (const VisionFrameResult& result : results) {
+        decode.push_back(result.decodeMs);
+        preprocess.push_back(result.preprocessMs);
         inference.push_back(result.inferenceMs);
+        postprocess.push_back(result.postprocessMs);
         total.push_back(result.totalMs);
     }
 
@@ -123,7 +175,12 @@ void printSummary(const std::vector<VisionFrameResult>& results,
     if (!inference.empty()) {
         const auto [minimum, maximum] = std::minmax_element(
             inference.cbegin(), inference.cend());
+        qInfo().noquote() << "summary_avg_decode_ms=" << average(decode);
+        qInfo().noquote() << "summary_avg_preprocess_ms="
+                          << average(preprocess);
         qInfo().noquote() << "summary_avg_inference_ms=" << average(inference);
+        qInfo().noquote() << "summary_avg_postprocess_ms="
+                          << average(postprocess);
         qInfo().noquote() << "summary_min_inference_ms=" << *minimum;
         qInfo().noquote() << "summary_max_inference_ms=" << *maximum;
         qInfo().noquote() << "summary_p50_inference_ms="
@@ -131,6 +188,10 @@ void printSummary(const std::vector<VisionFrameResult>& results,
         qInfo().noquote() << "summary_p95_inference_ms="
                           << percentile(inference, 0.95);
         qInfo().noquote() << "summary_avg_total_ms=" << average(total);
+        qInfo().noquote() << "summary_p50_total_ms="
+                          << percentile(total, 0.50);
+        qInfo().noquote() << "summary_p95_total_ms="
+                          << percentile(total, 0.95);
     }
     qInfo().noquote() << "summary_effective_inference_fps="
                       << (measurementSeconds > 0.0
@@ -140,7 +201,41 @@ void printSummary(const std::vector<VisionFrameResult>& results,
                       << measurementSeconds;
     qInfo().noquote() << "summary_rss=" << linuxMemoryValue("VmRSS");
     qInfo().noquote() << "summary_peak_rss=" << linuxMemoryValue("VmHWM");
-    qInfo().noquote() << "summary_cpu=not_collected";
+    const double cpuPercent = measurementSeconds > 0.0
+        && cpuStartSeconds >= 0.0 && cpuEndSeconds >= cpuStartSeconds
+        ? (cpuEndSeconds - cpuStartSeconds) / measurementSeconds * 100.0
+        : -1.0;
+    qInfo().noquote() << "summary_process_cpu_percent="
+                      << (cpuPercent >= 0.0
+                              ? QString::number(cpuPercent, 'f', 2)
+                              : QStringLiteral("unavailable"));
+}
+
+struct BenchmarkDetectorConfiguration {
+    QString detector;
+    QString modelPath;
+    float confidenceThreshold = 0.25F;
+    float nmsThreshold = 0.45F;
+    int inferenceThreads = 1;
+};
+
+std::unique_ptr<VisionDetectorPort> createDetector(
+    const BenchmarkDetectorConfiguration& configuration)
+{
+    if (configuration.detector == QStringLiteral("fastestdet")) {
+        FastestDetConfiguration fastest;
+        fastest.modelPath = configuration.modelPath;
+        fastest.confidenceThreshold = configuration.confidenceThreshold;
+        fastest.nmsThreshold = configuration.nmsThreshold;
+        fastest.inferenceThreads = configuration.inferenceThreads;
+        return std::make_unique<FastestDetAdapter>(fastest);
+    }
+    TinyissimoYoloConfiguration tinyissimo;
+    tinyissimo.modelPath = configuration.modelPath;
+    tinyissimo.confidenceThreshold = configuration.confidenceThreshold;
+    tinyissimo.nmsThreshold = configuration.nmsThreshold;
+    tinyissimo.inferenceThreads = configuration.inferenceThreads;
+    return std::make_unique<TinyissimoYoloAdapter>(tinyissimo);
 }
 
 int positiveInteger(const QCommandLineParser& parser,
@@ -161,7 +256,7 @@ int nonNegativeInteger(const QCommandLineParser& parser,
     return valid && value >= 0 ? value : fallback;
 }
 
-int runImageBenchmark(const FastestDetConfiguration& configuration,
+int runImageBenchmark(const BenchmarkDetectorConfiguration& configuration,
                       const QString& imagePath,
                       int warmupCount,
                       int iterations)
@@ -172,13 +267,13 @@ int runImageBenchmark(const FastestDetConfiguration& configuration,
         return 2;
     }
     const QByteArray jpeg = image.readAll();
-    FastestDetAdapter detector(configuration);
+    std::unique_ptr<VisionDetectorPort> detector = createDetector(configuration);
     QString error;
-    if (!detector.initialize(&error)) {
+    if (!detector->initialize(&error)) {
         qCritical().noquote() << "model_error=" << error;
         return 2;
     }
-    printDetectorInfo(detector.info());
+    printDetectorInfo(detector->info());
     qInfo().noquote() << "mode=image image_path="
                       << QFileInfo(imagePath).absoluteFilePath();
 
@@ -189,13 +284,16 @@ int runImageBenchmark(const FastestDetConfiguration& configuration,
     measured.reserve(static_cast<size_t>(iterations));
     QElapsedTimer totalRuntime;
     QElapsedTimer measurementRuntime;
+    double cpuStartSeconds = -1.0;
     totalRuntime.start();
     for (int index = 0; index < warmupCount + iterations; ++index) {
-        if (index == warmupCount)
+        if (index == warmupCount) {
             measurementRuntime.start();
+            cpuStartSeconds = processCpuSeconds();
+        }
         frame.sequence = static_cast<quint64>(index + 1);
         frame.timestamp = QDateTime::currentDateTimeUtc();
-        const VisionFrameResult result = detector.detect(frame, &error);
+        const VisionFrameResult result = detector->detect(frame, &error);
         if (!error.isEmpty()) {
             qCritical().noquote() << "inference_error=" << error;
             return 3;
@@ -205,15 +303,17 @@ int runImageBenchmark(const FastestDetConfiguration& configuration,
         if (!warmup)
             measured.push_back(result);
     }
+    const double cpuEndSeconds = processCpuSeconds();
     printSummary(measured, warmupCount,
                  totalRuntime.nsecsElapsed() / 1'000'000'000.0,
                  measurementRuntime.isValid()
                      ? measurementRuntime.nsecsElapsed() / 1'000'000'000.0
-                     : 0.0);
+                     : 0.0,
+                 cpuStartSeconds, cpuEndSeconds);
     return 0;
 }
 
-int runCameraBenchmark(const FastestDetConfiguration& configuration,
+int runCameraBenchmark(const BenchmarkDetectorConfiguration& configuration,
                        const QString& cameraDevice,
                        int warmupCount,
                        int durationSeconds,
@@ -221,14 +321,15 @@ int runCameraBenchmark(const FastestDetConfiguration& configuration,
 {
     qputenv("LONGPET_CAMERA_DEVICE", cameraDevice.toUtf8());
     CameraCaptureAdapter camera;
-    FastestDetAdapter detector(configuration);
-    VisionService service(&camera, &detector, intervalMs);
+    std::unique_ptr<VisionDetectorPort> detector = createDetector(configuration);
+    VisionService service(&camera, detector.get(), intervalMs);
     QEventLoop loop;
     std::vector<VisionFrameResult> measured;
     int receivedCount = 0;
     int exitCode = 0;
     QElapsedTimer totalRuntime;
     QElapsedTimer measurementRuntime;
+    double cpuStartSeconds = -1.0;
 
     QObject::connect(&service, &VisionService::detectorInfoReady,
                      &loop, [&](const VisionDetectorInfo& info) {
@@ -242,8 +343,10 @@ int runCameraBenchmark(const FastestDetConfiguration& configuration,
                           << "message=" << message;
         if (available && !totalRuntime.isValid()) {
             totalRuntime.start();
-            if (warmupCount == 0)
+            if (warmupCount == 0) {
                 measurementRuntime.start();
+                cpuStartSeconds = processCpuSeconds();
+            }
         }
     });
     QObject::connect(&service, &VisionService::visionResultReady,
@@ -255,6 +358,7 @@ int runCameraBenchmark(const FastestDetConfiguration& configuration,
         } else if (receivedCount == warmupCount
                    && !measurementRuntime.isValid()) {
             measurementRuntime.start();
+            cpuStartSeconds = processCpuSeconds();
         }
     });
     QObject::connect(&service, &VisionService::failed,
@@ -271,6 +375,7 @@ int runCameraBenchmark(const FastestDetConfiguration& configuration,
         ? totalRuntime.nsecsElapsed() / 1'000'000'000.0 : 0.0;
     const double measurementSeconds = measurementRuntime.isValid()
         ? measurementRuntime.nsecsElapsed() / 1'000'000'000.0 : 0.0;
+    const double cpuEndSeconds = processCpuSeconds();
     service.stop();
     if (exitCode != 0)
         return exitCode;
@@ -279,23 +384,31 @@ int runCameraBenchmark(const FastestDetConfiguration& configuration,
         return 4;
     }
     printSummary(measured, std::min(receivedCount, warmupCount),
-                 runtimeSeconds, measurementSeconds);
+                 runtimeSeconds, measurementSeconds,
+                 cpuStartSeconds, cpuEndSeconds);
     return 0;
 }
 }
 
 int main(int argc, char* argv[])
 {
+    // Qt builds with journald support otherwise redirect qInfo away from a
+    // non-interactive SSH pipe, making automated benchmark collection empty.
+    qputenv("QT_LOGGING_TO_CONSOLE", "1");
     QCoreApplication application(argc, argv);
     QCoreApplication::setApplicationName(QStringLiteral("LongPetVisionBench"));
     QCommandLineParser parser;
     parser.setApplicationDescription(
-        QStringLiteral("LongPet FastestDet image/camera benchmark"));
+        QStringLiteral("LongPet detector image/camera benchmark"));
     parser.addHelpOption();
 
+    const QCommandLineOption detectorOption(
+        {QStringLiteral("d"), QStringLiteral("detector")},
+        QStringLiteral("Detector: fastestdet or tinyissimo"),
+        QStringLiteral("name"), QStringLiteral("tinyissimo"));
     const QCommandLineOption modelOption(
         {QStringLiteral("m"), QStringLiteral("model")},
-        QStringLiteral("FastestDet ONNX model path"), QStringLiteral("path"));
+        QStringLiteral("ONNX model path"), QStringLiteral("path"));
     const QCommandLineOption imageOption(
         {QStringLiteral("i"), QStringLiteral("image")},
         QStringLiteral("JPEG image benchmark input"), QStringLiteral("path"));
@@ -318,14 +431,14 @@ int main(int argc, char* argv[])
         QStringLiteral("milliseconds"), QStringLiteral("1"));
     const QCommandLineOption thresholdOption(
         QStringLiteral("threshold"), QStringLiteral("Confidence threshold"),
-        QStringLiteral("value"), QStringLiteral("0.65"));
+        QStringLiteral("value"));
     const QCommandLineOption nmsOption(
         QStringLiteral("nms-threshold"), QStringLiteral("NMS IoU threshold"),
         QStringLiteral("value"), QStringLiteral("0.45"));
     const QCommandLineOption threadsOption(
         QStringLiteral("threads"), QStringLiteral("ORT intra-op threads"),
         QStringLiteral("count"), QStringLiteral("1"));
-    parser.addOptions({modelOption, imageOption, cameraOption,
+    parser.addOptions({detectorOption, modelOption, imageOption, cameraOption,
                        iterationsOption, warmupOption, durationOption,
                        intervalOption, thresholdOption, nmsOption,
                        threadsOption});
@@ -336,13 +449,27 @@ int main(int argc, char* argv[])
         parser.showHelp(1);
     }
 
-    FastestDetConfiguration configuration =
-        FastestDetConfiguration::fromEnvironment();
+    BenchmarkDetectorConfiguration configuration;
+    configuration.detector = parser.value(detectorOption).trimmed().toLower();
+    if (configuration.detector != QStringLiteral("fastestdet")
+        && configuration.detector != QStringLiteral("tinyissimo")) {
+        qCritical().noquote()
+            << "argument_error=--detector must be fastestdet or tinyissimo";
+        return 1;
+    }
     configuration.modelPath = parser.value(modelOption);
+    configuration.confidenceThreshold = configuration.detector
+            == QStringLiteral("fastestdet") ? 0.65F : 0.25F;
     bool valid = false;
-    const float threshold = parser.value(thresholdOption).toFloat(&valid);
-    if (valid && threshold > 0.0F && threshold < 1.0F)
+    if (parser.isSet(thresholdOption)) {
+        const float threshold = parser.value(thresholdOption).toFloat(&valid);
+        if (!valid || threshold <= 0.0F || threshold >= 1.0F) {
+            qCritical().noquote()
+                << "argument_error=--threshold must be between 0 and 1";
+            return 1;
+        }
         configuration.confidenceThreshold = threshold;
+    }
     const float nms = parser.value(nmsOption).toFloat(&valid);
     if (valid && nms > 0.0F && nms < 1.0F)
         configuration.nmsThreshold = nms;

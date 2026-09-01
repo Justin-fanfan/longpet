@@ -96,6 +96,12 @@ set(
     src/platform/FastestDetAdapter.h
     src/platform/FastestDetPostProcessor.cpp
     src/platform/FastestDetPostProcessor.h
+    src/platform/TinyissimoYoloAdapter.cpp
+    src/platform/TinyissimoYoloAdapter.h
+    src/platform/TinyissimoYoloPostProcessor.cpp
+    src/platform/TinyissimoYoloPostProcessor.h
+    src/platform/VisionDetectorFactory.cpp
+    src/platform/VisionDetectorFactory.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp

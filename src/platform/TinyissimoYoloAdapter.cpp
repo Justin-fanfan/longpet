@@ -1,13 +1,13 @@
-#include "FastestDetAdapter.h"
+#include "TinyissimoYoloAdapter.h"
 
-#include "FastestDetPostProcessor.h"
+#include "TinyissimoYoloPostProcessor.h"
 
 #include <QElapsedTimer>
 #include <QFileInfo>
 
 #include <algorithm>
 #include <array>
-#include <cstring>
+#include <cmath>
 #include <exception>
 #include <utility>
 #include <vector>
@@ -42,49 +42,60 @@ int configuredInteger(const char* name, int fallback,
 }
 
 #ifdef LONGPET_HAS_VISION
-template <typename TensorShapeInfo>
-bool readFourDimensionalShape(const TensorShapeInfo& typeInfo,
-                              std::array<int64_t, 4>* shape,
-                              const QString& tensorDescription,
-                              QString* error)
+template <size_t DimensionCount, typename TensorShapeInfo>
+bool readFixedShape(const TensorShapeInfo& typeInfo,
+                    std::array<int64_t, DimensionCount>* shape,
+                    const QString& description, QString* error)
 {
-    const size_t dimensionCount = typeInfo.GetDimensionsCount();
-    if (dimensionCount != shape->size()) {
+    if (typeInfo.GetDimensionsCount() != DimensionCount) {
         if (error) {
-            *error = QStringLiteral("%1 必须是四维 Tensor，实际维度数为 %2")
-                         .arg(tensorDescription)
-                         .arg(dimensionCount);
+            *error = QStringLiteral("%1 必须是 %2 维 Tensor，实际为 %3 维")
+                         .arg(description)
+                         .arg(DimensionCount)
+                         .arg(typeInfo.GetDimensionsCount());
         }
         return false;
     }
-
-    // Do not use TensorTypeAndShapeInfo::GetShape() here. It allocates a
-    // std::vector from the runtime-provided dimension count before the caller
-    // can validate that count. Reading into a fixed array keeps a malformed or
-    // ABI-incompatible model/runtime response from causing an unbounded
-    // allocation on the embedded target.
     Ort::ThrowOnError(Ort::GetApi().GetDimensions(
         typeInfo, shape->data(), shape->size()));
     return true;
 }
+
+qint64 parameterCountFromMetadata(Ort::Session& session)
+{
+    try {
+        Ort::AllocatorWithDefaultOptions allocator;
+        const auto metadata = session.GetModelMetadata();
+        auto value = metadata.LookupCustomMetadataMapAllocated(
+            "longpet.parameter_count", allocator);
+        if (!value)
+            return 0;
+        bool valid = false;
+        const qint64 count = QString::fromUtf8(value.get()).toLongLong(&valid);
+        return valid && count > 0 ? count : 0;
+    } catch (const Ort::Exception&) {
+        return 0;
+    }
+}
 #endif
 }
 
-FastestDetConfiguration FastestDetConfiguration::fromEnvironment()
+TinyissimoYoloConfiguration TinyissimoYoloConfiguration::fromEnvironment()
 {
-    FastestDetConfiguration configuration;
+    TinyissimoYoloConfiguration configuration;
     configuration.modelPath =
         qEnvironmentVariable("LONGPET_VISION_MODEL_PATH").trimmed();
     if (configuration.modelPath.isEmpty()) {
 #ifdef Q_OS_LINUX
-        configuration.modelPath =
-            QStringLiteral("/home/longpet/models/fastestdet.onnx");
+        configuration.modelPath = QStringLiteral(
+            "/home/longpet/models/tinyissimo-yolo-v1-small-person-128.onnx");
 #else
-        configuration.modelPath = QStringLiteral("models/fastestdet.onnx");
+        configuration.modelPath = QStringLiteral(
+            "models/tinyissimo-yolo-v1-small-person-128.onnx");
 #endif
     }
     configuration.confidenceThreshold = configuredFloat(
-        "LONGPET_VISION_CONFIDENCE_THRESHOLD", 0.65F, 0.01F, 0.99F);
+        "LONGPET_VISION_CONFIDENCE_THRESHOLD", 0.25F, 0.01F, 0.99F);
     configuration.nmsThreshold = configuredFloat(
         "LONGPET_VISION_NMS_THRESHOLD", 0.45F, 0.01F, 0.99F);
     configuration.inferenceThreads = configuredInteger(
@@ -92,10 +103,10 @@ FastestDetConfiguration FastestDetConfiguration::fromEnvironment()
     return configuration;
 }
 
-struct FastestDetAdapter::Impl {
+struct TinyissimoYoloAdapter::Impl {
 #ifdef LONGPET_HAS_VISION
     Impl()
-        : environment(ORT_LOGGING_LEVEL_WARNING, "LongPet.FastestDet")
+        : environment(ORT_LOGGING_LEVEL_WARNING, "LongPet.TinyissimoYOLO")
     {
     }
 
@@ -105,17 +116,17 @@ struct FastestDetAdapter::Impl {
     std::string outputName;
     int inputWidth = 0;
     int inputHeight = 0;
-    int outputChannels = 0;
-    int featureHeight = 0;
-    int featureWidth = 0;
+    int candidateCount = 0;
+    bool channelFirst = true;
 #endif
 };
 
-FastestDetAdapter::FastestDetAdapter(FastestDetConfiguration configuration)
+TinyissimoYoloAdapter::TinyissimoYoloAdapter(
+    TinyissimoYoloConfiguration configuration)
     : m_impl(std::make_unique<Impl>()),
       m_configuration(std::move(configuration))
 {
-    m_info.detectorName = QStringLiteral("fastestdet");
+    m_info.detectorName = QStringLiteral("tinyissimo-yolo-v1-small-person");
     m_info.modelPath = m_configuration.modelPath;
     m_info.provider = QStringLiteral("ONNX Runtime CPUExecutionProvider");
     m_info.inferenceThreads = m_configuration.inferenceThreads;
@@ -123,46 +134,44 @@ FastestDetAdapter::FastestDetAdapter(FastestDetConfiguration configuration)
     m_info.nmsThreshold = m_configuration.nmsThreshold;
 }
 
-FastestDetAdapter::~FastestDetAdapter() = default;
+TinyissimoYoloAdapter::~TinyissimoYoloAdapter() = default;
 
-bool FastestDetAdapter::initialize(QString* error)
+bool TinyissimoYoloAdapter::initialize(QString* error)
 {
     m_available = false;
     m_info.inputShape.clear();
     m_info.outputShape.clear();
-    if (!QFileInfo::exists(m_configuration.modelPath)) {
+    const QFileInfo modelFile(m_configuration.modelPath);
+    if (!modelFile.exists()) {
         if (error) {
-            *error = QStringLiteral("FastestDet 模型不存在：%1")
+            *error = QStringLiteral("TinyissimoYOLO 模型不存在：%1")
                          .arg(m_configuration.modelPath);
         }
         return false;
     }
-    m_info.modelBytes = QFileInfo(m_configuration.modelPath).size();
+    m_info.modelBytes = modelFile.size();
 
 #ifndef LONGPET_HAS_VISION
-    if (error) {
-        *error = QStringLiteral(
-            "当前构建未启用 OpenCV/ONNX Runtime 视觉支持");
-    }
+    if (error)
+        *error = QStringLiteral("当前构建未启用 OpenCV/ONNX Runtime 视觉支持");
     return false;
 #else
-    QString initializationStage = QStringLiteral("创建 ONNX Runtime session");
+    QString stage = QStringLiteral("创建 ONNX Runtime session");
     try {
         Ort::SessionOptions options;
         options.SetIntraOpNumThreads(m_configuration.inferenceThreads);
         options.SetInterOpNumThreads(1);
         options.SetGraphOptimizationLevel(GraphOptimizationLevel::ORT_ENABLE_ALL);
-        const QByteArray modelPath = QFileInfo(m_configuration.modelPath)
-                                         .absoluteFilePath().toUtf8();
+        const QByteArray modelPath = modelFile.absoluteFilePath().toUtf8();
         m_impl->session = std::make_unique<Ort::Session>(
             m_impl->environment, modelPath.constData(), options);
 
-        initializationStage = QStringLiteral("检查模型输入输出数量");
+        stage = QStringLiteral("检查模型输入输出");
         if (m_impl->session->GetInputCount() != 1
             || m_impl->session->GetOutputCount() != 1) {
             if (error) {
                 *error = QStringLiteral(
-                    "FastestDet graph 必须恰好包含一个输入和一个输出");
+                    "TinyissimoYOLO graph 必须恰好包含一个输入和一个输出");
             }
             m_impl->session.reset();
             return false;
@@ -174,35 +183,43 @@ bool FastestDetAdapter::initialize(QString* error)
         m_impl->inputName = inputName.get();
         m_impl->outputName = outputName.get();
 
-        initializationStage = QStringLiteral("读取模型 Tensor 信息");
-        // GetTensorTypeAndShapeInfo() returns a non-owning view for TypeInfo.
-        // Keep the owning TypeInfo objects alive until all shape and element
-        // type queries are complete.
+        stage = QStringLiteral("校验 TinyissimoYOLO graph");
         const auto inputTypeInfo = m_impl->session->GetInputTypeInfo(0);
         const auto outputTypeInfo = m_impl->session->GetOutputTypeInfo(0);
         const auto inputType = inputTypeInfo.GetTensorTypeAndShapeInfo();
         const auto outputType = outputTypeInfo.GetTensorTypeAndShapeInfo();
         std::array<int64_t, 4> inputShape {};
-        std::array<int64_t, 4> outputShape {};
-        if (!readFourDimensionalShape(inputType, &inputShape,
-                                      QStringLiteral("模型输入"), error)
-            || !readFourDimensionalShape(outputType, &outputShape,
-                                         QStringLiteral("模型输出"), error)) {
+        std::array<int64_t, 3> outputShape {};
+        if (!readFixedShape(inputType, &inputShape,
+                            QStringLiteral("模型输入"), error)
+            || !readFixedShape(outputType, &outputShape,
+                               QStringLiteral("模型输出"), error)) {
             m_impl->session.reset();
             return false;
         }
-        initializationStage = QStringLiteral("校验 FastestDet graph");
+        const bool channelFirst = outputShape[1] == 5
+            && outputShape[2] > 0;
+        const bool candidateFirst = outputShape[2] == 5
+            && outputShape[1] > 0;
+        const int candidateCount = static_cast<int>(
+            channelFirst ? outputShape[2] : outputShape[1]);
+        const int expectedCandidateCount = static_cast<int>(
+            (inputShape[2] / 32) * (inputShape[3] / 32));
         if (inputType.GetElementType() != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
             || outputType.GetElementType()
                 != ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
             || inputShape[0] != 1 || inputShape[1] != 3
-            || inputShape[2] != 352 || inputShape[3] != 352
-            || outputShape[0] != 1 || outputShape[1] < 6
-            || outputShape[2] <= 0 || outputShape[3] <= 0) {
+            || inputShape[2] <= 0 || inputShape[3] <= 0
+            || inputShape[2] != inputShape[3]
+            || inputShape[2] % 32 != 0
+            || outputShape[0] != 1
+            || (!channelFirst && !candidateFirst)
+            || candidateCount != expectedCandidateCount) {
             if (error) {
                 *error = QStringLiteral(
-                    "模型 graph 与 FastestDet 不匹配；期望输入 [1,3,352,352] "
-                    "及单尺度 NCHW 输出");
+                    "graph 与 TinyissimoYOLO person-only 不匹配；期望静态 "
+                    "float32 [1,3,H,W]（H/W 为 32 的倍数）及 [1,5,N] "
+                    "或 [1,N,5] 输出");
             }
             m_impl->session.reset();
             return false;
@@ -210,57 +227,49 @@ bool FastestDetAdapter::initialize(QString* error)
 
         m_impl->inputHeight = static_cast<int>(inputShape[2]);
         m_impl->inputWidth = static_cast<int>(inputShape[3]);
-        m_impl->outputChannels = static_cast<int>(outputShape[1]);
-        m_impl->featureHeight = static_cast<int>(outputShape[2]);
-        m_impl->featureWidth = static_cast<int>(outputShape[3]);
+        m_impl->channelFirst = channelFirst;
+        m_impl->candidateCount = candidateCount;
         for (const int64_t dimension : inputShape)
             m_info.inputShape.append(dimension);
         for (const int64_t dimension : outputShape)
             m_info.outputShape.append(dimension);
-        // The official 80-class graph used by V1 has 240,443 initializer
-        // elements. Keep unknown/custom channel layouts observable as zero.
-        if (outputShape[1] == 85 && outputShape[2] == 22
-            && outputShape[3] == 22) {
-            m_info.parameterCount = 240'443;
-        }
         m_info.runtimeVersion = QString::fromLatin1(Ort::GetVersionString());
+        m_info.parameterCount = parameterCountFromMetadata(*m_impl->session);
         m_available = true;
         return true;
     } catch (const Ort::Exception& exception) {
         m_impl->session.reset();
         if (error) {
-            *error = QStringLiteral("加载 FastestDet ONNX 失败（%1）：%2")
-                         .arg(initializationStage,
-                              QString::fromUtf8(exception.what()));
+            *error = QStringLiteral("加载 TinyissimoYOLO ONNX 失败（%1）：%2")
+                         .arg(stage, QString::fromUtf8(exception.what()));
         }
-        return false;
     } catch (const std::exception& exception) {
         m_impl->session.reset();
         if (error) {
-            *error = QStringLiteral("初始化 FastestDet 失败（%1）：%2")
-                         .arg(initializationStage,
-                              QString::fromUtf8(exception.what()));
+            *error = QStringLiteral("初始化 TinyissimoYOLO 失败（%1）：%2")
+                         .arg(stage, QString::fromUtf8(exception.what()));
         }
-        return false;
     }
+    return false;
 #endif
 }
 
-bool FastestDetAdapter::isAvailable() const
+bool TinyissimoYoloAdapter::isAvailable() const
 {
     return m_available;
 }
 
-VisionFrameResult FastestDetAdapter::detect(const CameraFrame& frame,
-                                            QString* error)
+VisionFrameResult TinyissimoYoloAdapter::detect(const CameraFrame& frame,
+                                                 QString* error)
 {
     VisionFrameResult result;
     result.frameSequence = frame.sequence;
     result.timestamp = frame.timestamp;
     if (!m_available || !frame.isValid()) {
         if (error) {
-            *error = !m_available ? QStringLiteral("FastestDet 当前不可用")
-                                  : QStringLiteral("摄像头 JPEG 帧无效");
+            *error = !m_available
+                ? QStringLiteral("TinyissimoYOLO 当前不可用")
+                : QStringLiteral("摄像头 JPEG 帧无效");
         }
         return result;
     }
@@ -286,12 +295,37 @@ VisionFrameResult FastestDetAdapter::detect(const CameraFrame& frame,
         result.sourceSize = QSize(decoded.cols, decoded.rows);
 
         stageTimer.restart();
+        const float scale = std::min(
+            static_cast<float>(m_impl->inputWidth) / decoded.cols,
+            static_cast<float>(m_impl->inputHeight) / decoded.rows);
+        const int resizedWidth = std::max(
+            1, static_cast<int>(std::round(decoded.cols * scale)));
+        const int resizedHeight = std::max(
+            1, static_cast<int>(std::round(decoded.rows * scale)));
+        const float halfWidthPadding =
+            (m_impl->inputWidth - resizedWidth) / 2.0F;
+        const float halfHeightPadding =
+            (m_impl->inputHeight - resizedHeight) / 2.0F;
+        const int left = static_cast<int>(std::round(halfWidthPadding - 0.1F));
+        const int right = static_cast<int>(std::round(halfWidthPadding + 0.1F));
+        const int top = static_cast<int>(std::round(halfHeightPadding - 0.1F));
+        const int bottom = static_cast<int>(std::round(halfHeightPadding + 0.1F));
         cv::Mat resized;
-        cv::resize(decoded, resized,
-                   cv::Size(m_impl->inputWidth, m_impl->inputHeight),
-                   0.0, 0.0, cv::INTER_AREA);
+        cv::resize(decoded, resized, cv::Size(resizedWidth, resizedHeight),
+                   0.0, 0.0, scale < 1.0F ? cv::INTER_AREA : cv::INTER_LINEAR);
+        cv::Mat letterboxed;
+        cv::copyMakeBorder(resized, letterboxed, top, bottom, left, right,
+                           cv::BORDER_CONSTANT, cv::Scalar(114, 114, 114));
+        if (letterboxed.cols != m_impl->inputWidth
+            || letterboxed.rows != m_impl->inputHeight) {
+            if (error)
+                *error = QStringLiteral("TinyissimoYOLO letterbox 尺寸异常");
+            return result;
+        }
+        cv::Mat rgb;
+        cv::cvtColor(letterboxed, rgb, cv::COLOR_BGR2RGB);
         cv::Mat normalized;
-        resized.convertTo(normalized, CV_32FC3, 1.0 / 255.0);
+        rgb.convertTo(normalized, CV_32FC3, 1.0 / 255.0);
         const size_t plane = static_cast<size_t>(m_impl->inputWidth)
             * static_cast<size_t>(m_impl->inputHeight);
         std::vector<float> input(plane * 3);
@@ -323,28 +357,37 @@ VisionFrameResult FastestDetAdapter::detect(const CameraFrame& frame,
         result.inferenceMs = stageTimer.nsecsElapsed() / 1'000'000.0;
         if (outputs.size() != 1 || !outputs.front().IsTensor()) {
             if (error)
-                *error = QStringLiteral("FastestDet 没有返回有效 Tensor");
+                *error = QStringLiteral("TinyissimoYOLO 没有返回有效 Tensor");
             return result;
         }
 
         const auto outputType = outputs.front().GetTensorTypeAndShapeInfo();
-        std::array<int64_t, 4> shape {};
-        if (!readFourDimensionalShape(outputType, &shape,
-                                      QStringLiteral("运行时模型输出"), error)) {
+        std::array<int64_t, 3> outputShape {};
+        if (!readFixedShape(outputType, &outputShape,
+                            QStringLiteral("运行时模型输出"), error)) {
             return result;
         }
-        if (shape[0] != 1
-            || shape[1] != m_impl->outputChannels
-            || shape[2] != m_impl->featureHeight
-            || shape[3] != m_impl->featureWidth) {
+        const int runtimeCandidates = static_cast<int>(
+            m_impl->channelFirst ? outputShape[2] : outputShape[1]);
+        const int runtimeChannels = static_cast<int>(
+            m_impl->channelFirst ? outputShape[1] : outputShape[2]);
+        if (outputShape[0] != 1 || runtimeChannels != 5
+            || runtimeCandidates != m_impl->candidateCount) {
             if (error)
-                *error = QStringLiteral("FastestDet 运行时输出 shape 发生变化");
+                *error = QStringLiteral("TinyissimoYOLO 运行时输出 shape 发生变化");
             return result;
         }
+
         stageTimer.restart();
-        result.persons = FastestDetPostProcessor::decode(
-            outputs.front().GetTensorData<float>(), m_impl->outputChannels,
-            m_impl->featureHeight, m_impl->featureWidth, result.sourceSize,
+        TinyissimoLetterboxTransform transform;
+        transform.sourceSize = result.sourceSize;
+        transform.inputSize = QSize(m_impl->inputWidth, m_impl->inputHeight);
+        transform.scale = scale;
+        transform.padX = static_cast<float>(left);
+        transform.padY = static_cast<float>(top);
+        result.persons = TinyissimoYoloPostProcessor::decode(
+            outputs.front().GetTensorData<float>(), m_impl->candidateCount,
+            m_impl->channelFirst, transform,
             m_configuration.confidenceThreshold,
             m_configuration.nmsThreshold);
         result.postprocessMs = stageTimer.nsecsElapsed() / 1'000'000.0;
@@ -352,17 +395,17 @@ VisionFrameResult FastestDetAdapter::detect(const CameraFrame& frame,
         return result;
     } catch (const Ort::Exception& exception) {
         if (error) {
-            *error = QStringLiteral("FastestDet inference 失败：%1")
+            *error = QStringLiteral("TinyissimoYOLO inference 失败：%1")
                          .arg(QString::fromUtf8(exception.what()));
         }
     } catch (const cv::Exception& exception) {
         if (error) {
-            *error = QStringLiteral("FastestDet 图像处理失败：%1")
+            *error = QStringLiteral("TinyissimoYOLO 图像处理失败：%1")
                          .arg(QString::fromUtf8(exception.what()));
         }
     } catch (const std::exception& exception) {
         if (error) {
-            *error = QStringLiteral("FastestDet 处理失败：%1")
+            *error = QStringLiteral("TinyissimoYOLO 处理失败：%1")
                          .arg(QString::fromUtf8(exception.what()));
         }
     }
@@ -371,7 +414,7 @@ VisionFrameResult FastestDetAdapter::detect(const CameraFrame& frame,
 #endif
 }
 
-VisionDetectorInfo FastestDetAdapter::info() const
+VisionDetectorInfo TinyissimoYoloAdapter::info() const
 {
     return m_info;
 }

@@ -13,7 +13,7 @@
 #include "platform/CameraCaptureAdapter.h"
 #include "platform/CallPromptPlayerAdapter.h"
 #include "platform/FamilyLinkHttpAdapter.h"
-#include "platform/FastestDetAdapter.h"
+#include "platform/VisionDetectorFactory.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
 #include "platform/AiProviderFactory.h"
@@ -33,6 +33,7 @@
 #include "services/SystemService.h"
 #include "services/VideoCallService.h"
 #include "services/VisionService.h"
+#include "services/VisionPorts.h"
 #include "services/VoiceInteractionService.h"
 #include "services/VoiceInteractionPorts.h"
 #include "services/VoiceToolRegistry.h"
@@ -143,9 +144,9 @@ bool Application::initialize(QString* error)
                                   : std::optional<WeatherSnapshot>{};
         });
     m_cameraCaptureAdapter = std::make_unique<CameraCaptureAdapter>();
-    m_fastestDetAdapter = std::make_unique<FastestDetAdapter>();
+    m_visionDetector = VisionDetectorFactory::createFromEnvironment();
     m_visionService = std::make_unique<VisionService>(
-        m_cameraCaptureAdapter.get(), m_fastestDetAdapter.get());
+        m_cameraCaptureAdapter.get(), m_visionDetector.get());
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>(
         m_cameraCaptureAdapter.get());
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
@@ -317,7 +318,7 @@ void Application::shutdown()
     m_callPromptPlayerAdapter.reset();
     m_videoCallMediaAdapter.reset();
     m_visionService.reset();
-    m_fastestDetAdapter.reset();
+    m_visionDetector.reset();
     m_cameraCaptureAdapter.reset();
     m_systemService.reset();
     m_mediaSessionCoordinator.reset();

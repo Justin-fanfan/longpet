@@ -1,0 +1,21 @@
+# Reproduced on Windows/Python 3.11 CPU. Keep this in an isolated environment;
+# none of these packages are needed by the LongPet C++ runtime.
+torch==2.12.1
+torchvision==0.27.1
+numpy==2.4.6
+Pillow==12.3.0
+PyYAML==6.0.3
+scipy==1.17.1
+pandas==3.0.5
+matplotlib==3.11.1
+seaborn==0.13.2
+opencv-python-headless==5.0.0.93
+psutil==7.2.2
+onnx==1.22.0
+onnxruntime==1.29.0
+onnxscript==0.7.1
+py-cpuinfo==9.0.0
+pycocotools==2.0.11
+thop==0.1.1.post2209072238
+requests>=2.23.0
+tqdm>=4.64.0

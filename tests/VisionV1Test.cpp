@@ -3,6 +3,9 @@
 #include "platform/CameraCaptureAdapter.h"
 #include "platform/FastestDetAdapter.h"
 #include "platform/FastestDetPostProcessor.h"
+#include "platform/TinyissimoYoloAdapter.h"
+#include "platform/TinyissimoYoloPostProcessor.h"
+#include "platform/VisionDetectorFactory.h"
 #include "platform/VideoCallMediaAdapter.h"
 #include "services/VisionPorts.h"
 #include "services/VisionService.h"
@@ -14,6 +17,7 @@
 #include <QThread>
 
 #include <atomic>
+#include <memory>
 #include <vector>
 
 namespace {
@@ -109,6 +113,8 @@ private slots:
     void cameraSourceSharesLifecycleAndKeepsLatestJpeg();
     void cameraDeviceConfigurationPreservesLegacyFallback();
     void fastestDetPostprocessMapsFiltersAndNormalizesPerson();
+    void tinyissimoPostprocessMapsLetterboxAndAppliesNms();
+    void detectorFactoryDefaultsToTinyissimoAndKeepsFastestDetFallback();
     void visionServiceUsesLatestFrameOnlyAndPauses();
     void videoCallAndVisionShareOneCameraSource();
     void missingModelAndCameraDegradeWithoutCrash();
@@ -199,6 +205,70 @@ void VisionV1Test::fastestDetPostprocessMapsFiltersAndNormalizesPerson()
         0.5F, 0.45F).isEmpty());
 }
 
+void VisionV1Test::tinyissimoPostprocessMapsLetterboxAndAppliesNms()
+{
+    constexpr int candidateCount = 3;
+    // Tinyissimo export layout: [1, 5, N] = cx, cy, w, h, class score.
+    std::vector<float> output(5 * candidateCount, 0.0F);
+    output[0 * candidateCount + 0] = 64.0F;
+    output[1 * candidateCount + 0] = 64.0F;
+    output[2 * candidateCount + 0] = 64.0F;
+    output[3 * candidateCount + 0] = 64.0F;
+    output[4 * candidateCount + 0] = 0.90F;
+    // Nearly identical lower-confidence candidate must be suppressed.
+    output[0 * candidateCount + 1] = 65.0F;
+    output[1 * candidateCount + 1] = 64.0F;
+    output[2 * candidateCount + 1] = 64.0F;
+    output[3 * candidateCount + 1] = 64.0F;
+    output[4 * candidateCount + 1] = 0.80F;
+    output[4 * candidateCount + 2] = 0.10F;
+
+    TinyissimoLetterboxTransform transform;
+    transform.sourceSize = QSize(640, 480);
+    transform.inputSize = QSize(128, 128);
+    transform.scale = 0.2F;
+    transform.padY = 16.0F;
+    const QList<PersonDetection> persons =
+        TinyissimoYoloPostProcessor::decode(
+            output.data(), candidateCount, true, transform, 0.25F, 0.45F);
+    QCOMPARE(persons.size(), 1);
+    const PersonDetection person = persons.front();
+    QVERIFY(qAbs(person.confidence - 0.90F) < 0.001F);
+    QVERIFY(qAbs(person.boundingBox.x() - 160.0) < 0.01);
+    QVERIFY(qAbs(person.boundingBox.y() - 80.0) < 0.01);
+    QVERIFY(qAbs(person.boundingBox.width() - 320.0) < 0.01);
+    QVERIFY(qAbs(person.boundingBox.height() - 320.0) < 0.01);
+    QVERIFY(qAbs(person.normalizedCenter.x() - 0.5) < 0.001);
+    QVERIFY(qAbs(person.normalizedCenter.y() - 0.5) < 0.001);
+
+    QVERIFY(TinyissimoYoloPostProcessor::decode(
+        output.data(), candidateCount, true, transform,
+        0.95F, 0.45F).isEmpty());
+}
+
+void VisionV1Test::detectorFactoryDefaultsToTinyissimoAndKeepsFastestDetFallback()
+{
+    const QByteArray previous = qgetenv("LONGPET_VISION_DETECTOR");
+    const bool wasSet = qEnvironmentVariableIsSet("LONGPET_VISION_DETECTOR");
+
+    qunsetenv("LONGPET_VISION_DETECTOR");
+    const std::unique_ptr<VisionDetectorPort> defaultDetector =
+        VisionDetectorFactory::createFromEnvironment();
+    QCOMPARE(defaultDetector->info().detectorName,
+             QStringLiteral("tinyissimo-yolo-v1-small-person"));
+
+    qputenv("LONGPET_VISION_DETECTOR", "fastestdet");
+    const std::unique_ptr<VisionDetectorPort> fallbackDetector =
+        VisionDetectorFactory::createFromEnvironment();
+    QCOMPARE(fallbackDetector->info().detectorName,
+             QStringLiteral("fastestdet"));
+
+    if (wasSet)
+        qputenv("LONGPET_VISION_DETECTOR", previous);
+    else
+        qunsetenv("LONGPET_VISION_DETECTOR");
+}
+
 void VisionV1Test::visionServiceUsesLatestFrameOnlyAndPauses()
 {
     TestCameraCaptureAdapter camera;
@@ -280,6 +350,14 @@ void VisionV1Test::missingModelAndCameraDegradeWithoutCrash()
     FastestDetAdapter missingModel(missingConfiguration);
     QString error;
     QVERIFY(!missingModel.initialize(&error));
+    QVERIFY(error.contains(QStringLiteral("模型不存在")));
+
+    TinyissimoYoloConfiguration missingTinyConfiguration;
+    missingTinyConfiguration.modelPath = QStringLiteral(
+        "definitely-missing-tinyissimo.onnx");
+    TinyissimoYoloAdapter missingTinyModel(missingTinyConfiguration);
+    error.clear();
+    QVERIFY(!missingTinyModel.initialize(&error));
     QVERIFY(error.contains(QStringLiteral("模型不存在")));
 
     TestCameraCaptureAdapter camera;

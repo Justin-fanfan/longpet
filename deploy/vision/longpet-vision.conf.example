@@ -1,0 +1,11 @@
+# Install as /etc/systemd/system/longpet.service.d/vision.conf only after the
+# detector benchmark is accepted. Vision remains disabled by default in the
+# shipped service because it competes with KWS on the single-core 2K300.
+[Service]
+Environment="LONGPET_VISION_ENABLED=0"
+Environment="LONGPET_VISION_DETECTOR=tinyissimo"
+Environment="LONGPET_VISION_MODEL_PATH=/home/longpet/models/tinyissimo-yolo-v1-small-person-128.onnx"
+Environment="LONGPET_VISION_CONFIDENCE_THRESHOLD=0.25"
+Environment="LONGPET_VISION_NMS_THRESHOLD=0.45"
+Environment="LONGPET_VISION_INFERENCE_THREADS=1"
+Environment="LONGPET_VISION_INTERVAL_MS=300"
