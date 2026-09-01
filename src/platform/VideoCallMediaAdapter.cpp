@@ -1,5 +1,7 @@
 #include "VideoCallMediaAdapter.h"
 
+#include "services/CameraPorts.h"
+
 #include <QDateTime>
 #include <QHostAddress>
 #include <QImage>
@@ -29,12 +31,6 @@ QString playbackDevice()
         ? QStringLiteral("plughw:CARD=Device,DEV=0") : configured;
 }
 
-QString cameraDevice()
-{
-    const QString configured = qEnvironmentVariable("LONGPET_CALL_CAMERA_DEVICE").trimmed();
-    return configured.isEmpty() ? QStringLiteral("/dev/video0") : configured;
-}
-
 QHostAddress mediaListenAddress()
 {
     const QString configured = qEnvironmentVariable("LONGPET_MEDIA_ADDRESS").trimmed();
@@ -45,16 +41,25 @@ QHostAddress mediaListenAddress()
 }
 }
 
-VideoCallMediaAdapter::VideoCallMediaAdapter(QObject* parent)
+VideoCallMediaAdapter::VideoCallMediaAdapter(CameraSourcePort* cameraSource,
+                                             QObject* parent)
     : VideoCallMediaPort(parent),
-      m_server(QStringLiteral("LongPet media"), QWebSocketServer::NonSecureMode, this)
+      m_server(QStringLiteral("LongPet media"), QWebSocketServer::NonSecureMode, this),
+      m_cameraSource(cameraSource)
 {
     connect(&m_server, &QWebSocketServer::newConnection,
             this, &VideoCallMediaAdapter::acceptPendingConnection);
-    connect(&m_cameraProcess, &QProcess::readyReadStandardOutput,
-            this, &VideoCallMediaAdapter::processCameraOutput);
     connect(&m_captureProcess, &QProcess::readyReadStandardOutput,
             this, &VideoCallMediaAdapter::processAudioCaptureOutput);
+    if (m_cameraSource) {
+        connect(m_cameraSource, &CameraSourcePort::frameReady,
+                this, &VideoCallMediaAdapter::handleCameraFrame);
+        connect(m_cameraSource, &CameraSourcePort::failed, this,
+                [this](const QString& code, const QString& message) {
+            if (m_cameraAcquired && m_prepared && !m_stopping)
+                emit failed(code, message);
+        });
+    }
 
     m_videoFlushTimer.setInterval(20);
     connect(&m_videoFlushTimer, &QTimer::timeout,
@@ -63,12 +68,6 @@ VideoCallMediaAdapter::VideoCallMediaAdapter(QObject* parent)
     connect(&m_audioPlaybackTimer, &QTimer::timeout,
             this, &VideoCallMediaAdapter::drainAudioPlayback);
 
-    connect(&m_cameraProcess,
-            qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
-            [this](int code, QProcess::ExitStatus) {
-        reportProcessFailure(QStringLiteral("CAMERA_UNAVAILABLE"),
-                             QStringLiteral("摄像头采集"), &m_cameraProcess, code);
-    });
     connect(&m_captureProcess,
             qOverload<int, QProcess::ExitStatus>(&QProcess::finished), this,
             [this](int code, QProcess::ExitStatus) {
@@ -159,9 +158,11 @@ void VideoCallMediaAdapter::stop()
     }
     m_server.close();
     stopProcess(&m_captureProcess);
-    stopProcess(&m_cameraProcess);
+    if (m_cameraAcquired && m_cameraSource) {
+        m_cameraSource->release(this);
+        m_cameraAcquired = false;
+    }
     stopProcess(&m_playbackProcess);
-    m_cameraBuffer.clear();
     m_captureBuffer.clear();
     m_pendingLocalVideo.clear();
     m_pendingRemoteVideo.clear();
@@ -294,18 +295,13 @@ void VideoCallMediaAdapter::handleSocketDisconnected()
 
 bool VideoCallMediaAdapter::startCamera(QString* error)
 {
-#ifndef Q_OS_LINUX
-    if (error)
-        *error = QStringLiteral("摄像头媒体采集仅支持 LongPet Linux 设备");
-    return false;
-#else
-    const QString caps = QStringLiteral("image/jpeg,width=640,height=480,framerate=30/1");
-    return startProcess(&m_cameraProcess,
-        {QStringLiteral("-q"), QStringLiteral("v4l2src"),
-         QStringLiteral("device=%1").arg(cameraDevice()), QStringLiteral("!"), caps,
-         QStringLiteral("!"), QStringLiteral("fdsink"), QStringLiteral("fd=1"),
-         QStringLiteral("sync=false")}, QStringLiteral("摄像头采集"), error);
-#endif
+    if (!m_cameraSource) {
+        if (error)
+            *error = QStringLiteral("共享摄像头服务未配置");
+        return false;
+    }
+    m_cameraAcquired = m_cameraSource->acquire(this, error);
+    return m_cameraAcquired;
 }
 
 bool VideoCallMediaAdapter::startAudio(QString* error)
@@ -374,35 +370,19 @@ void VideoCallMediaAdapter::stopProcess(QProcess* process)
     }
 }
 
-void VideoCallMediaAdapter::processCameraOutput()
+void VideoCallMediaAdapter::handleCameraFrame(const CameraFrame& frame)
 {
-    m_cameraBuffer.append(m_cameraProcess.readAllStandardOutput());
-    static const QByteArray startMarker = QByteArray::fromHex("ffd8");
-    static const QByteArray endMarker = QByteArray::fromHex("ffd9");
-    while (true) {
-        const qsizetype start = m_cameraBuffer.indexOf(startMarker);
-        if (start < 0) {
-            if (m_cameraBuffer.size() > 2 * 1024 * 1024)
-                m_cameraBuffer.clear();
-            return;
-        }
-        if (start > 0)
-            m_cameraBuffer.remove(0, start);
-        const qsizetype end = m_cameraBuffer.indexOf(endMarker, 2);
-        if (end < 0)
-            return;
-        QByteArray jpeg = m_cameraBuffer.left(end + 2);
-        m_cameraBuffer.remove(0, end + 2);
-        ++m_cameraFrameCounter;
-        if ((m_cameraFrameCounter % 3) != 0)
-            continue;
-        if (!m_authenticated)
-            continue;
-        if (m_socket && m_socket->bytesToWrite() < MaximumSocketBacklog)
-            sendFrame(MediaStreamType::DeviceVideo, jpeg);
-        else
-            m_pendingLocalVideo = std::move(jpeg);
+    if (!m_cameraAcquired || m_session.mode != VideoCallMode::Video
+        || !frame.isValid()) {
+        return;
     }
+    ++m_cameraFrameCounter;
+    if ((m_cameraFrameCounter % 3) != 0 || !m_authenticated)
+        return;
+    if (m_socket && m_socket->bytesToWrite() < MaximumSocketBacklog)
+        sendFrame(MediaStreamType::DeviceVideo, frame.jpeg);
+    else
+        m_pendingLocalVideo = frame.jpeg;
 }
 
 void VideoCallMediaAdapter::processAudioCaptureOutput()

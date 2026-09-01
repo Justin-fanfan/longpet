@@ -36,6 +36,14 @@ Environment="LONGPET_ALSA_MIXER_DEVICE=hw:CARD=Device"
 Environment="LONGPET_AI_CAPTURE_DEVICE=plughw:CARD=Device,DEV=0"
 Environment="LONGPET_AI_PLAYBACK_DEVICE=plughw:CARD=Device,DEV=0"
 
+# Vision V1 默认不在正式进程中常驻推理；先运行 LongPetVisionBench 取得板端数据。
+# 确认性能可接受后，用 systemd drop-in 设置 LONGPET_VISION_ENABLED=1。
+# LONGPET_CAMERA_DEVICE 优先于旧 LONGPET_CALL_CAMERA_DEVICE。
+Environment="LONGPET_VISION_ENABLED=0"
+Environment="LONGPET_CAMERA_DEVICE=/dev/video0"
+Environment="LONGPET_VISION_MODEL_PATH=/home/longpet/models/fastestdet.onnx"
+Environment="LONGPET_VISION_INTERVAL_MS=300"
+
 Restart=always
 RestartSec=2
 

@@ -10,8 +10,10 @@
 #include "mainwindow.h"
 #include "platform/AudioVolumeAdapter.h"
 #include "platform/BacklightAdapter.h"
+#include "platform/CameraCaptureAdapter.h"
 #include "platform/CallPromptPlayerAdapter.h"
 #include "platform/FamilyLinkHttpAdapter.h"
+#include "platform/FastestDetAdapter.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
 #include "platform/AiProviderFactory.h"
@@ -30,6 +32,7 @@
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
 #include "services/VideoCallService.h"
+#include "services/VisionService.h"
 #include "services/VoiceInteractionService.h"
 #include "services/VoiceInteractionPorts.h"
 #include "services/VoiceToolRegistry.h"
@@ -62,6 +65,16 @@ QHostAddress configuredFamilyLinkAddress()
     if (!configured.isEmpty() && address.setAddress(configured))
         return address;
     return QHostAddress(QHostAddress::LocalHost);
+}
+
+bool configuredVisionEnabled()
+{
+    const QString value = qEnvironmentVariable("LONGPET_VISION_ENABLED")
+                              .trimmed().toLower();
+    return value == QStringLiteral("1")
+        || value == QStringLiteral("true")
+        || value == QStringLiteral("yes")
+        || value == QStringLiteral("on");
 }
 }
 
@@ -129,11 +142,39 @@ bool Application::initialize(QString* error)
             return weatherService ? weatherService->currentOrNone()
                                   : std::optional<WeatherSnapshot>{};
         });
-    m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>();
+    m_cameraCaptureAdapter = std::make_unique<CameraCaptureAdapter>();
+    m_fastestDetAdapter = std::make_unique<FastestDetAdapter>();
+    m_visionService = std::make_unique<VisionService>(
+        m_cameraCaptureAdapter.get(), m_fastestDetAdapter.get());
+    m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>(
+        m_cameraCaptureAdapter.get());
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
     m_videoCallService = std::make_unique<VideoCallService>(
         m_videoCallMediaAdapter.get(), m_callPromptPlayerAdapter.get(),
         m_mediaSessionCoordinator.get());
+    connect(m_videoCallService.get(), &VideoCallService::callActivityChanged,
+            m_visionService.get(), &VisionService::setVideoCallActive);
+    connect(m_visionService.get(), &VisionService::visionResultReady, this,
+            [](const VisionFrameResult& result) {
+        qInfo().noquote()
+            << QStringLiteral(
+                   "Vision frame=%1 persons=%2 decode_ms=%3 preprocess_ms=%4 "
+                   "inference_ms=%5 postprocess_ms=%6 total_ms=%7")
+                   .arg(result.frameSequence)
+                   .arg(result.persons.size())
+                   .arg(result.decodeMs, 0, 'f', 2)
+                   .arg(result.preprocessMs, 0, 'f', 2)
+                   .arg(result.inferenceMs, 0, 'f', 2)
+                   .arg(result.postprocessMs, 0, 'f', 2)
+                   .arg(result.totalMs, 0, 'f', 2);
+    });
+    connect(m_visionService.get(), &VisionService::failed, this,
+            [](const QString& stage, const QString& message) {
+        qWarning().noquote() << QStringLiteral("Vision %1 unavailable: %2")
+                                    .arg(stage, message);
+    });
+    if (configuredVisionEnabled())
+        m_visionService->start();
     m_networkStatusAdapter = std::make_unique<NetworkStatusAdapter>();
     m_networkManagerAdapter = std::make_unique<NetworkManagerAdapter>();
     m_networkService = std::make_unique<NetworkService>(m_networkManagerAdapter.get());
@@ -233,6 +274,8 @@ void Application::shutdown()
         m_voiceCommandDispatcher->stop();
     if (m_weatherService)
         m_weatherService->stop();
+    if (m_visionService)
+        m_visionService->stop();
     if (m_familyLinkController)
         m_familyLinkController->stop();
     if (m_reminderService)
@@ -273,6 +316,9 @@ void Application::shutdown()
     m_videoCallService.reset();
     m_callPromptPlayerAdapter.reset();
     m_videoCallMediaAdapter.reset();
+    m_visionService.reset();
+    m_fastestDetAdapter.reset();
+    m_cameraCaptureAdapter.reset();
     m_systemService.reset();
     m_mediaSessionCoordinator.reset();
     m_settingsService.reset();

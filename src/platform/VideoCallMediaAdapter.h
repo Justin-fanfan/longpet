@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/MediaFrameProtocol.h"
+#include "model/CameraModels.h"
 #include "services/VideoCallPorts.h"
 
 #include <QByteArray>
@@ -13,12 +14,14 @@
 #include <QWebSocketServer>
 
 class QWebSocket;
+class CameraSourcePort;
 
 class VideoCallMediaAdapter final : public VideoCallMediaPort {
     Q_OBJECT
 
 public:
-    explicit VideoCallMediaAdapter(QObject* parent = nullptr);
+    explicit VideoCallMediaAdapter(CameraSourcePort* cameraSource = nullptr,
+                                   QObject* parent = nullptr);
     ~VideoCallMediaAdapter() override;
 
     quint16 port() const override;
@@ -33,7 +36,7 @@ private:
     void handleBinaryMessage(const QByteArray& message);
     void handleControlFrame(const QByteArray& payload);
     void handleSocketDisconnected();
-    void processCameraOutput();
+    void handleCameraFrame(const CameraFrame& frame);
     void processAudioCaptureOutput();
     void scheduleRemoteVideoDecode(const QByteArray& jpeg);
     void sendFrame(MediaStreamType streamType, const QByteArray& payload,
@@ -53,13 +56,12 @@ private:
 
     QWebSocketServer m_server;
     QPointer<QWebSocket> m_socket;
-    QProcess m_cameraProcess;
+    CameraSourcePort* m_cameraSource = nullptr;
     QProcess m_captureProcess;
     QProcess m_playbackProcess;
     QTimer m_videoFlushTimer;
     QTimer m_audioPlaybackTimer;
     VideoCallSnapshot m_session;
-    QByteArray m_cameraBuffer;
     QByteArray m_captureBuffer;
     QByteArray m_pendingLocalVideo;
     QByteArray m_pendingRemoteVideo;
@@ -75,4 +77,5 @@ private:
     bool m_remoteDecodeScheduled = false;
     bool m_playbackPrimed = false;
     bool m_stopping = false;
+    bool m_cameraAcquired = false;
 };

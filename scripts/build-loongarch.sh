@@ -11,6 +11,7 @@ cmake \
     -B "${BUILD_DIR}" \
     -G Ninja \
     -DCMAKE_BUILD_TYPE=Release \
+    -DLONGPET_ENABLE_VISION="${LONGPET_ENABLE_VISION:-ON}" \
     -DCMAKE_TOOLCHAIN_FILE="${PROJECT_DIR}/cmake/toolchains/loongarch64-buildroot.cmake"
 
 cmake \
@@ -18,3 +19,6 @@ cmake \
     --parallel "${BUILD_JOBS}"
 
 file "${BUILD_DIR}/LongPet"
+if [[ -x "${BUILD_DIR}/LongPetVisionBench" ]]; then
+    file "${BUILD_DIR}/LongPetVisionBench"
+fi

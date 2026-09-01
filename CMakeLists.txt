@@ -13,6 +13,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_AUTOMOC ON)
 set(CMAKE_AUTORCC ON)
 
+option(LONGPET_ENABLE_VISION "Build OpenCV/ONNX Runtime vision support" OFF)
+
 find_package(
     Qt6 6.5
     REQUIRED
@@ -49,6 +51,9 @@ set(
     src/model/VideoCallModels.h
     src/model/MediaFrameProtocol.cpp
     src/model/MediaFrameProtocol.h
+    src/model/CameraModels.h
+    src/model/VisionModels.cpp
+    src/model/VisionModels.h
     src/platform/NetworkStatusAdapter.cpp
     src/platform/NetworkStatusAdapter.h
     src/platform/NetworkManagerAdapter.cpp
@@ -85,6 +90,12 @@ set(
     src/platform/CallPromptPlayerAdapter.h
     src/platform/VideoCallMediaAdapter.cpp
     src/platform/VideoCallMediaAdapter.h
+    src/platform/CameraCaptureAdapter.cpp
+    src/platform/CameraCaptureAdapter.h
+    src/platform/FastestDetAdapter.cpp
+    src/platform/FastestDetAdapter.h
+    src/platform/FastestDetPostProcessor.cpp
+    src/platform/FastestDetPostProcessor.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp
@@ -112,6 +123,10 @@ set(
     src/services/VideoCallService.cpp
     src/services/VideoCallService.h
     src/services/VideoCallPorts.h
+    src/services/CameraPorts.h
+    src/services/VisionPorts.h
+    src/services/VisionService.cpp
+    src/services/VisionService.h
     src/services/MediaSessionCoordinator.cpp
     src/services/MediaSessionCoordinator.h
     src/services/WeatherPorts.h
@@ -198,6 +213,41 @@ if(ALSA_FOUND)
     target_compile_definitions(LongPetCore PRIVATE LONGPET_HAS_ALSA=1)
 endif()
 
+if(LONGPET_ENABLE_VISION)
+    find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
+
+    set(ONNXRUNTIME_ROOT "" CACHE PATH "ONNX Runtime installation prefix")
+    find_path(
+        ONNXRUNTIME_INCLUDE_DIR
+        NAMES onnxruntime_cxx_api.h
+        HINTS ${ONNXRUNTIME_ROOT} $ENV{ONNXRUNTIME_ROOT}
+        PATH_SUFFIXES
+            include
+            include/onnxruntime
+            include/onnxruntime/core/session
+        REQUIRED
+    )
+    find_library(
+        ONNXRUNTIME_LIBRARY
+        NAMES onnxruntime
+        HINTS ${ONNXRUNTIME_ROOT} $ENV{ONNXRUNTIME_ROOT}
+        PATH_SUFFIXES lib lib64
+        REQUIRED
+    )
+
+    target_compile_definitions(LongPetCore PRIVATE LONGPET_HAS_VISION=1)
+    target_include_directories(
+        LongPetCore PRIVATE
+            ${OpenCV_INCLUDE_DIRS}
+            ${ONNXRUNTIME_INCLUDE_DIR}
+    )
+    target_link_libraries(
+        LongPetCore PUBLIC
+            ${OpenCV_LIBS}
+            ${ONNXRUNTIME_LIBRARY}
+    )
+endif()
+
 longpet_enable_warnings(LongPetCore)
 
 qt_add_executable(
@@ -222,6 +272,16 @@ install(
     TARGETS LongPet
     RUNTIME DESTINATION bin
 )
+
+if(LONGPET_ENABLE_VISION)
+    qt_add_executable(
+        LongPetVisionBench
+        tools/LongPetVisionBench.cpp
+    )
+    target_link_libraries(LongPetVisionBench PRIVATE LongPetCore)
+    longpet_enable_warnings(LongPetVisionBench)
+    install(TARGETS LongPetVisionBench RUNTIME DESTINATION bin)
+endif()
 
 option(LONGPET_BUILD_TESTS "Build LongPet V0.2 tests" OFF)
 
@@ -253,6 +313,26 @@ if(LONGPET_BUILD_TESTS)
     add_test(NAME LongPet.V02 COMMAND LongPetV02Tests)
     set_tests_properties(
         LongPet.V02
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+
+    qt_add_executable(
+        LongPetVisionV1Tests
+        tests/VisionV1Test.cpp
+    )
+
+    target_link_libraries(
+        LongPetVisionV1Tests
+        PRIVATE
+            LongPetCore
+            Qt6::Test
+    )
+
+    longpet_enable_warnings(LongPetVisionV1Tests)
+    add_test(NAME LongPet.VisionV1 COMMAND LongPetVisionV1Tests)
+    set_tests_properties(
+        LongPet.VisionV1
         PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
