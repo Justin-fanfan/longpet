@@ -138,8 +138,14 @@ void VoiceCommandDispatcher::requestCancelInteraction()
     scheduleKwsResume();
 }
 
-void VoiceCommandDispatcher::notifyExternalMediaStopped()
+void VoiceCommandDispatcher::notifyExternalMediaActivity(bool active)
 {
+    if (active) {
+        m_resumeTimer.stop();
+        if (m_kws && !m_kws->isPaused())
+            m_kws->pause();
+        return;
+    }
     scheduleKwsResume();
 }
 
@@ -177,6 +183,8 @@ void VoiceCommandDispatcher::handleKeyword(const KwsEvent& event)
         return;
     }
     if (event.keyword == QStringLiteral("现在几点")) {
+        m_offlineArmed = false;
+        m_commandWindow.stop();
         const QString time = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm"));
         emit userMessage(QStringLiteral("现在是 %1").arg(time));
         return;
@@ -194,10 +202,14 @@ void VoiceCommandDispatcher::handleKeyword(const KwsEvent& event)
         return;
     }
     if (event.keyword == QStringLiteral("音量大点")) {
+        m_offlineArmed = false;
+        m_commandWindow.stop();
         emit volumeDeltaRequested(10);
         return;
     }
     if (event.keyword == QStringLiteral("音量小点")) {
+        m_offlineArmed = false;
+        m_commandWindow.stop();
         emit volumeDeltaRequested(-10);
         return;
     }
