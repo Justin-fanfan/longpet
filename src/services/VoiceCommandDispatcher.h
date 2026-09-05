@@ -26,13 +26,24 @@ public:
     void requestStartInteraction();
     void requestRestartInteraction();
     void requestCancelInteraction();
+    void notifyExternalMediaStopped();
 
 signals:
     void emergencyRequested();
+    void remindersRequested();
+    void familyContactRequested();
+    void homeRequested();
+    void volumeDeltaRequested(int delta);
     void userMessage(const QString& message);
 
 private:
-    enum class PendingAction { None, StartVoice, RestartVoice, PlayCompanion };
+    enum class PendingAction {
+        None,
+        StartVoice,
+        RestartVoice,
+        PlayCompanion,
+        ContactFamily
+    };
 
     void handleKeyword(const KwsEvent& event);
     void prepare(PendingAction action);
