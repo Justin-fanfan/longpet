@@ -209,6 +209,37 @@ bool Application::initialize(QString* error)
         m_systemService.get(), 15'000, m_networkService.get(),
         m_videoCallService.get(), m_voiceInteractionService.get(),
         m_voiceCommandDispatcher.get(), m_voiceToolRegistry.get());
+
+    connect(m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::remindersRequested,
+            m_window.get(), &MainWindow::reminderRequested);
+    connect(m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::homeRequested,
+            m_window.get(), &MainWindow::homeRequested);
+    connect(m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::familyContactRequested,
+            m_window.get(), &MainWindow::videoCallRequested);
+    connect(m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::volumeDeltaRequested,
+            this, [this](int delta) {
+        QString settingsError;
+        const UserSettings settings = m_settingsService->settings(&settingsError);
+        if (!settingsError.isEmpty()) {
+            m_window->showToast(settingsError);
+            return;
+        }
+        const int volume = qBound(0, settings.volume + delta, 100);
+        if (!m_settingsService->setVolume(volume, &settingsError)) {
+            m_window->showToast(settingsError.isEmpty()
+                ? QStringLiteral("音量调整失败") : settingsError);
+            return;
+        }
+        m_window->showToast(QStringLiteral("音量已调到 %1%").arg(volume));
+    });
+    connect(m_videoCallService.get(), &VideoCallService::callActivityChanged,
+            m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::notifyExternalMediaActivity);
+
     m_controller->initialize();
     m_voiceCommandDispatcher->start();
     return true;

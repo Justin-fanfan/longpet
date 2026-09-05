@@ -14,7 +14,10 @@ import numpy as np
 
 PROTOCOL = "longpet-kws"
 VERSION = 1
-SUPPORTED_KEYWORDS = ["小龙小龙", "你好", "陪我说话", "救命"]
+SUPPORTED_KEYWORDS = [
+    "小龙小龙", "你好", "陪我说话", "救命", "停止", "打开提醒",
+    "现在几点", "联系家人", "返回主页", "音量大点", "音量小点",
+]
 OUTPUT_LOCK = threading.Lock()
 
 
@@ -67,7 +70,9 @@ def main():
     sys.path.insert(0, str(kws_root / "src"))
 
     # Acoustic inference, FBank, VAD and capture stay in the requested upstream
-    # project.  LongPet's C++ business layer only sees the JSONL protocol.
+    # project. LongPet overlays command vocabulary in this bridge so the vendored
+    # upstream runtime remains reusable and business-agnostic.
+    import longpet_kws.cli as kws_cli  # pylint: disable=import-error,import-outside-toplevel
     from longpet_kws.cli import (  # pylint: disable=import-error,import-outside-toplevel
         ArecordCapture,
         FsmnKws,
@@ -75,6 +80,20 @@ def main():
         sounddevice_capture_worker,
     )
     from longpet_kws.vad import EnergyVad  # pylint: disable=import-error,import-outside-toplevel
+
+    command_threshold = 0.05
+    kws_cli.KEYWORDS = SUPPORTED_KEYWORDS.copy()
+    kws_cli.KEYWORD_ALIASES.update({
+        "停止": ["停止"],
+        "打开提醒": ["打开提醒"],
+        "现在几点": ["现在几点"],
+        "联系家人": ["联系家人"],
+        # The current tokens.txt has no “返”. Match the homophone “反” but
+        # normalize the emitted event back to the canonical command string.
+        "返回主页": ["反回主页"],
+        "音量大点": ["音量大点"],
+        "音量小点": ["音量小点"],
+    })
 
     if args.capture_backend == "arecord" and not args.alsa_device:
         raise ValueError("--alsa-device is required for arecord capture")
@@ -84,6 +103,13 @@ def main():
         "你好": args.nihao_threshold,
         "陪我说话": args.peiwoshuohua_threshold,
         "救命": args.jiuming_threshold,
+        "停止": command_threshold,
+        "打开提醒": command_threshold,
+        "现在几点": command_threshold,
+        "联系家人": command_threshold,
+        "返回主页": command_threshold,
+        "音量大点": command_threshold,
+        "音量小点": command_threshold,
     }
     detector = FsmnKws(args.model, args.tokens, thresholds)
 
