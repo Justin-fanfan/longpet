@@ -236,11 +236,9 @@ bool Application::initialize(QString* error)
         }
         m_window->showToast(QStringLiteral("音量已调到 %1%").arg(volume));
     });
-    connect(m_videoCallService.get(), &VideoCallService::snapshotChanged,
-            this, [this](const VideoCallSnapshot& snapshot) {
-        if (!snapshot.isActive() && m_voiceCommandDispatcher)
-            m_voiceCommandDispatcher->notifyExternalMediaStopped();
-    });
+    connect(m_videoCallService.get(), &VideoCallService::callActivityChanged,
+            m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::notifyExternalMediaActivity);
 
     m_controller->initialize();
     m_voiceCommandDispatcher->start();
