@@ -234,7 +234,7 @@ bool Application::initialize(QString* error)
                 ? QStringLiteral("音量调整失败") : settingsError);
             return;
         }
-        m_window->showToast(QStringLiteral("音量已调到 %1%1").arg(volume));
+        m_window->showToast(QStringLiteral("音量已调到 %1%").arg(volume));
     });
     connect(m_videoCallService.get(), &VideoCallService::snapshotChanged,
             this, [this](const VideoCallSnapshot& snapshot) {
