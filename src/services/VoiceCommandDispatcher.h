@@ -26,7 +26,7 @@ public:
     void requestStartInteraction();
     void requestRestartInteraction();
     void requestCancelInteraction();
-    void notifyExternalMediaStopped();
+    void notifyExternalMediaActivity(bool active);
 
 signals:
     void emergencyRequested();
