@@ -138,6 +138,11 @@ void VoiceCommandDispatcher::requestCancelInteraction()
     scheduleKwsResume();
 }
 
+void VoiceCommandDispatcher::notifyExternalMediaStopped()
+{
+    scheduleKwsResume();
+}
+
 void VoiceCommandDispatcher::handleKeyword(const KwsEvent& event)
 {
     const qint64 now = QDateTime::currentMSecsSinceEpoch();
@@ -163,6 +168,37 @@ void VoiceCommandDispatcher::handleKeyword(const KwsEvent& event)
     if (event.keyword == QStringLiteral("停止")) {
         requestCancelInteraction();
         emit userMessage(QStringLiteral("已停止当前语音操作"));
+        return;
+    }
+    if (event.keyword == QStringLiteral("打开提醒")) {
+        m_offlineArmed = false;
+        m_commandWindow.stop();
+        emit remindersRequested();
+        return;
+    }
+    if (event.keyword == QStringLiteral("现在几点")) {
+        const QString time = QDateTime::currentDateTime().toString(QStringLiteral("HH:mm"));
+        emit userMessage(QStringLiteral("现在是 %1").arg(time));
+        return;
+    }
+    if (event.keyword == QStringLiteral("联系家人")) {
+        m_offlineArmed = false;
+        m_commandWindow.stop();
+        prepare(PendingAction::ContactFamily);
+        return;
+    }
+    if (event.keyword == QStringLiteral("返回主页")) {
+        m_offlineArmed = false;
+        m_commandWindow.stop();
+        emit homeRequested();
+        return;
+    }
+    if (event.keyword == QStringLiteral("音量大点")) {
+        emit volumeDeltaRequested(10);
+        return;
+    }
+    if (event.keyword == QStringLiteral("音量小点")) {
+        emit volumeDeltaRequested(-10);
         return;
     }
     if (event.keyword == QStringLiteral("小龙小龙")) {
@@ -227,6 +263,10 @@ void VoiceCommandDispatcher::performPending()
                 ? QStringLiteral("离线陪伴暂时不可用") : error);
             scheduleKwsResume();
         }
+        return;
+    }
+    if (action == PendingAction::ContactFamily) {
+        emit familyContactRequested();
         return;
     }
     if (!m_voice) {
