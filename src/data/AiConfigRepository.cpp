@@ -214,6 +214,9 @@ AiConfiguration AiConfigRepository::load(QString* error) const
     configuration.voice.availabilityRetryMs = environmentInteger(
         "LONGPET_VOICE_AVAILABILITY_RETRY_MS", boundedInteger(
             settings, voicePrefix + QStringLiteral("availability_retry_ms"), 30'000));
+    configuration.voice.requireInternet = environmentBoolean(
+        "LONGPET_VOICE_REQUIRE_INTERNET", settings.value(
+            voicePrefix + QStringLiteral("require_internet"), true).toBool());
 
     configuration.kws.enabled = environmentBoolean(
         "LONGPET_KWS_ENABLED", settings.value(
@@ -267,6 +270,9 @@ AiConfiguration AiConfigRepository::load(QString* error) const
     configuration.kws.vadThresholdDb = environmentDouble(
         "LONGPET_KWS_VAD_THRESHOLD_DB", boundedDouble(
             settings, QStringLiteral("kws/vad_threshold_db"), -60.0));
+    configuration.kws.commandThreshold = environmentDouble(
+        "LONGPET_KWS_COMMAND_THRESHOLD", boundedDouble(
+            settings, QStringLiteral("kws/command_threshold"), 0.05));
     configuration.kws.vadNoiseRatio = environmentDouble(
         "LONGPET_KWS_VAD_NOISE_RATIO", boundedDouble(
             settings, QStringLiteral("kws/vad_noise_ratio"), 2.5));
@@ -275,7 +281,7 @@ AiConfiguration AiConfigRepository::load(QString* error) const
             settings, QStringLiteral("kws/command_timeout_ms"), 10'000));
     configuration.kws.pauseTimeoutMs = environmentInteger(
         "LONGPET_KWS_PAUSE_TIMEOUT_MS", boundedInteger(
-            settings, QStringLiteral("kws/pause_timeout_ms"), 1'500));
+            settings, QStringLiteral("kws/pause_timeout_ms"), 5'000));
     configuration.kws.resumeCooldownMs = environmentInteger(
         "LONGPET_KWS_RESUME_COOLDOWN_MS", boundedInteger(
             settings, QStringLiteral("kws/resume_cooldown_ms"), 1'200));

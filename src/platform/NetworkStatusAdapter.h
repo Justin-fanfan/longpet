@@ -12,6 +12,7 @@ struct NetworkStatusSnapshot {
     bool known = false;
     bool internetAvailable = false;
     QString summary;
+    bool localNetworkAvailable = false;
 };
 
 class NetworkStatusAdapter final : public QObject {
@@ -36,6 +37,7 @@ public:
         bool behindCaptivePortal = false);
 
 signals:
+    void localNetworkStateChanged(bool available);
     void networkStateChanged(bool known, bool internetAvailable,
                              const QString& summary);
 

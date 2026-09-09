@@ -7,6 +7,7 @@
 #include <QJsonDocument>
 #include <QJsonParseError>
 #include <QSet>
+#include <cmath>
 
 namespace {
 QJsonObject stringProperty(const QString& description,
@@ -73,7 +74,7 @@ QList<AiToolDefinition> VoiceToolRegistry::definitions() const
 {
     return {
         {QStringLiteral("create_reminder"),
-         QStringLiteral("创建一个本地提醒。时间使用 24 小时 HH:mm；单次提醒可给出 yyyy-MM-dd 日期。"),
+         QStringLiteral("仅在用户明确要求时创建提醒；时间为24小时HH:mm，日期yyyy-MM-dd。repeat默认once，明确要求每天才用daily。省略日期且今天时间已过则安排明天，结果含实际日期；含糊时先询问。"),
          objectSchema({
              {QStringLiteral("title"), stringProperty(QStringLiteral("提醒内容"))},
              {QStringLiteral("time"), stringProperty(QStringLiteral("24 小时时间，例如 08:30"))},
@@ -99,6 +100,8 @@ QList<AiToolDefinition> VoiceToolRegistry::definitions() const
         {QStringLiteral("get_current_time"),
          QStringLiteral("获取 LongPet 设备当前的本地日期和时间。"),
          objectSchema({})},
+        {QStringLiteral("get_current_date"),
+         QStringLiteral("获取设备今天的日期、星期和本地时间。"), objectSchema({})},
         {QStringLiteral("open_page"),
          QStringLiteral("在 LongPet 上打开一个已有页面。"),
          objectSchema({
@@ -112,6 +115,8 @@ QList<AiToolDefinition> VoiceToolRegistry::definitions() const
 
 AiToolExecutionResult VoiceToolRegistry::execute(const AiToolCall& call)
 {
+    if (call.argumentsJson.size() > 32 * 1024)
+        return jsonResult(false, {{QStringLiteral("error"), QStringLiteral("工具参数过长")}});
     QJsonParseError parseError;
     const QJsonDocument document = QJsonDocument::fromJson(
         call.argumentsJson.trimmed().isEmpty() ? QByteArrayLiteral("{}")
@@ -123,13 +128,47 @@ AiToolExecutionResult VoiceToolRegistry::execute(const AiToolCall& call)
                           QStringLiteral("语音指令参数不完整"));
     }
     const QJsonObject arguments = document.object();
+    QJsonObject schema;
+    for (const auto& definition : definitions()) {
+        if (definition.name == call.name)
+            schema = definition.parameters;
+    }
+    auto invalid = [] {
+        return jsonResult(false, {{QStringLiteral("error"), QStringLiteral("工具参数缺失、类型或范围不正确")}},
+                          QStringLiteral("语音操作参数不正确"));
+    };
+    if (schema.isEmpty())
+        return jsonResult(false, {{QStringLiteral("error"), QStringLiteral("工具不在允许列表中")}});
+    for (const auto& required : schema.value(QStringLiteral("required")).toArray()) {
+        if (!arguments.contains(required.toString()))
+            return invalid();
+    }
+    const QJsonObject properties = schema.value(QStringLiteral("properties")).toObject();
+    for (auto it = arguments.begin(); it != arguments.end(); ++it) {
+        if (!properties.contains(it.key()))
+            return invalid();
+        const QJsonObject property = properties.value(it.key()).toObject();
+        const QJsonValue value = it.value();
+        if (property.value(QStringLiteral("type")) == QStringLiteral("string")) {
+            if (!value.isString() || value.toString().trimmed().isEmpty()
+                || value.toString().size() > 200)
+                return invalid();
+        } else if (!value.isDouble() || !std::isfinite(value.toDouble())
+                   || std::floor(value.toDouble()) != value.toDouble()
+                   || value.toDouble() <= 0 || value.toDouble() > 9'007'199'254'740'991.0) {
+            return invalid();
+        }
+        const QJsonArray enums = property.value(QStringLiteral("enum")).toArray();
+        if (!enums.isEmpty() && !enums.contains(value))
+            return invalid();
+    }
     if (call.name == QStringLiteral("create_reminder"))
         return createReminder(arguments);
     if (call.name == QStringLiteral("list_reminders"))
         return listReminders();
     if (call.name == QStringLiteral("delete_reminder"))
         return deleteReminder(arguments);
-    if (call.name == QStringLiteral("get_current_time"))
+    if (call.name == QStringLiteral("get_current_time") || call.name == QStringLiteral("get_current_date"))
         return currentTime();
     if (call.name == QStringLiteral("open_page"))
         return openPage(arguments);
@@ -152,6 +191,10 @@ AiToolExecutionResult VoiceToolRegistry::createReminder(
     draft.scheduledDate = dateText.isEmpty()
         ? QDate::currentDate()
         : QDate::fromString(dateText, QStringLiteral("yyyy-MM-dd"));
+    if (!draft.timeOfDay.isValid() || !draft.scheduledDate.isValid()
+        || draft.timeOfDay.toString(QStringLiteral("HH:mm")) != arguments.value(QStringLiteral("time")).toString()
+        || (!dateText.isEmpty() && draft.scheduledDate.toString(Qt::ISODate) != dateText))
+        return jsonResult(false, {{QStringLiteral("error"), QStringLiteral("提醒时间或日期无效")}});
 
     const QString type = arguments.value(QStringLiteral("type")).toString(
         QStringLiteral("other"));
@@ -165,7 +208,7 @@ AiToolExecutionResult VoiceToolRegistry::createReminder(
         return jsonResult(false, {{QStringLiteral("error"), QStringLiteral("未知提醒类型")}});
 
     const QString repeat = arguments.value(QStringLiteral("repeat")).toString(
-        QStringLiteral("daily"));
+        QStringLiteral("once"));
     if (repeat == QStringLiteral("daily"))
         draft.repeatRule = ReminderRepeatRule::Daily;
     else if (repeat == QStringLiteral("weekdays"))
@@ -179,6 +222,9 @@ AiToolExecutionResult VoiceToolRegistry::createReminder(
         && draft.timeOfDay.isValid() && draft.timeOfDay <= QTime::currentTime()) {
         draft.scheduledDate = QDate::currentDate().addDays(1);
     }
+    if (draft.repeatRule == ReminderRepeatRule::Once
+        && QDateTime(draft.scheduledDate, draft.timeOfDay) <= QDateTime::currentDateTime())
+        return jsonResult(false, {{QStringLiteral("error"), QStringLiteral("单次提醒时间已经过去，请确认日期")}});
     const ServiceResult result = m_reminderService->save(draft);
     if (!result.success) {
         return jsonResult(false, {{QStringLiteral("error"), result.error}},

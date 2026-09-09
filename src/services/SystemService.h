@@ -15,6 +15,7 @@ public:
     SystemStatus status() const;
     DeviceSummary deviceSummary() const;
     void setNetworkState(bool known, bool available, const QString& summary = {});
+    void setLocalNetworkAvailable(bool available);
     void setBatteryPercent(int percent);
     // conditionCode 是和风 icon 编码（"100" 等），用于状态栏天气图标；可为空。
     void setWeatherSummary(const QString& summary, const QString& conditionCode = {});

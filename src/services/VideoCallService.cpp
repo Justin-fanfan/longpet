@@ -16,6 +16,7 @@ VideoCallService::VideoCallService(VideoCallMediaPort* mediaPort,
       m_mediaSessions(mediaSessions)
 {
     if (m_mediaPort) {
+        // Network/camera prewarming is allowed; microphone and prompt wait for KWS.
         connect(m_mediaPort, &VideoCallMediaPort::mediaReady,
                 this, &VideoCallService::handleMediaReady);
         connect(m_mediaPort, &VideoCallMediaPort::failed,
@@ -26,6 +27,18 @@ VideoCallService::VideoCallService(VideoCallMediaPort* mediaPort,
         });
         connect(m_mediaPort, &VideoCallMediaPort::remoteVideoFrame,
                 this, &VideoCallService::remoteVideoFrame);
+    }
+    if (m_mediaSessions) {
+        connect(m_mediaSessions, &MediaSessionCoordinator::mediaReady, this,
+                [this](const QString& owner) {
+            if (owner == QStringLiteral("video_call"))
+                mediaGateReady();
+        });
+        connect(m_mediaSessions, &MediaSessionCoordinator::mediaFailed, this,
+                [this](const QString& owner, const QString& message) {
+            if (owner == QStringLiteral("video_call"))
+                handleMediaFailure(QStringLiteral("MICROPHONE_RELEASE_TIMEOUT"), message);
+        });
     }
     if (m_promptPlayer) {
         connect(m_promptPlayer, &CallPromptPlayerPort::finished,
@@ -92,15 +105,31 @@ VideoCallResult VideoCallService::startIncomingCall(VideoCallMode mode)
         return failure(VideoCallErrorCode::MediaUnavailable, error);
     }
 
-    m_promptActive = false;
-    if (m_promptPlayer && m_promptPlayer->play(mode, &error)) {
-        m_promptActive = true;
-        return {true, {}, VideoCallErrorCode::None, m_snapshot};
-    }
-    if (!error.isEmpty())
-        qWarning().noquote() << "Call prompt unavailable, continuing:" << error;
-    continueAfterPrompt();
+    m_waitingForAudioStart = true;
+    mediaGateReady();
     return {true, {}, VideoCallErrorCode::None, m_snapshot};
+}
+
+void VideoCallService::mediaGateReady()
+{
+    if (!m_waitingForAudioStart || !m_snapshot.isActive()
+        || (m_mediaSessions && !m_mediaSessions->isReady(QStringLiteral("video_call"))))
+        return;
+    m_waitingForAudioStart = false;
+    if (m_snapshot.state == VideoCallState::NotifyingDevice) {
+        QString error;
+        m_promptActive = true;
+        if (m_promptPlayer && m_promptPlayer->play(m_snapshot.mode, &error))
+            return;
+        if (!error.isEmpty())
+            qWarning().noquote() << "Call prompt unavailable, continuing:" << error;
+        continueAfterPrompt();
+    } else if (m_snapshot.state == VideoCallState::ConnectingMedia) {
+        if (m_mediaPort)
+            m_mediaPort->enableAudio();
+        else
+            transitionTo(VideoCallState::Connected);
+    }
 }
 
 VideoCallResult VideoCallService::applyRemoteAction(
@@ -122,12 +151,8 @@ VideoCallResult VideoCallService::applyRemoteAction(
                            QStringLiteral("当前通话不能接听"));
         }
         transitionTo(VideoCallState::ConnectingMedia);
-        if (m_mediaPort)
-            m_mediaPort->enableAudio();
-        else {
-            m_snapshot.mediaReady = false;
-            transitionTo(VideoCallState::Connected);
-        }
+        m_waitingForAudioStart = true;
+        mediaGateReady();
         return {true, {}, VideoCallErrorCode::None, m_snapshot};
     case VideoCallAction::Reject:
         if (m_snapshot.state != VideoCallState::OutgoingRinging) {
@@ -229,6 +254,7 @@ void VideoCallService::handleMediaFailure(const QString& code,
 
 void VideoCallService::releaseResources()
 {
+    m_waitingForAudioStart = false;
     m_promptActive = false;
     if (m_promptPlayer)
         m_promptPlayer->stop();

@@ -15,6 +15,8 @@ public:
     virtual void pause() = 0;
     virtual void resume() = 0;
     virtual void stop() = 0;
+    // Running includes model loading. Paused means capture has positively released
+    // the microphone, not just that a pause command was sent.
     virtual bool isRunning() const = 0;
     virtual bool isPaused() const = 0;
 

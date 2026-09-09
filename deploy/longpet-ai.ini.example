@@ -43,6 +43,8 @@ tts_prebuffer_segments=2
 history_turns=4
 # AI Provider 失败后，KWS 暂时使用离线策略；到期后重新允许在线尝试。
 availability_retry_ms=30000
+# 使用公网 API 保持 true；三套 Provider 都在局域网时可设 false（仍检查本地网络连接）。
+require_internet=true
 
 [tools]
 # 仅开放 LongPet 内置白名单工具，不允许 shell、任意文件或任意 HTTP。
@@ -68,10 +70,13 @@ wake_threshold=0.15
 hello_threshold=0.10
 companion_threshold=0.05
 emergency_threshold=0.05
+# PR #3 新增的停止/提醒/时间/联系家人/主页/音量关键词共用阈值，需板端标定。
+command_threshold=0.05
 vad_threshold_db=-60.0
 vad_noise_ratio=2.5
 command_timeout_ms=10000
-pause_timeout_ms=1500
+# 确认采集进程已释放麦克风的等待上限；超时失败，不继续抢占设备。
+pause_timeout_ms=5000
 resume_cooldown_ms=1200
 restart_delay_ms=2000
 

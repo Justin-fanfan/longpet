@@ -5,6 +5,7 @@
 #include "services/VoiceInteractionPorts.h"
 
 #include <QRandomGenerator>
+#include <QDebug>
 
 const QString LocalCompanionService::MediaOwner = QStringLiteral("offline_companion");
 
@@ -17,6 +18,20 @@ LocalCompanionService::LocalCompanionService(
 {
     if (!m_audio)
         return;
+    if (m_mediaSessions) {
+        connect(m_mediaSessions, &MediaSessionCoordinator::mediaReady, this,
+                [this](const QString& owner) {
+            if (owner == MediaOwner)
+                playWhenReady();
+        });
+        connect(m_mediaSessions, &MediaSessionCoordinator::mediaFailed, this,
+                [this](const QString& owner, const QString& message) {
+            if (owner == MediaOwner && m_active) {
+                m_failureMessage = message;
+                stop();
+            }
+        });
+    }
     connect(m_audio, &VoiceAudioPort::playbackStarted,
             this, [this](quint64 sessionId) {
         if (m_active && sessionId == m_sessionId)
@@ -24,22 +39,32 @@ LocalCompanionService::LocalCompanionService(
     });
     connect(m_audio, &VoiceAudioPort::playbackFinished,
             this, [this](quint64 sessionId) {
-        if (m_active && sessionId == m_sessionId)
+        if (m_active && !m_canceling && sessionId == m_sessionId)
             finish(true);
     });
     connect(m_audio, &VoiceAudioPort::cancellationFinished,
             this, [this](quint64 sessionId) {
         if (m_active && m_canceling && sessionId == m_sessionId)
-            finish(true);
+            finish(m_failureMessage.isEmpty(), m_failureMessage, m_failureDiagnostic);
     });
     connect(m_audio, &VoiceAudioPort::audioFailed,
             this, [this](quint64 sessionId, VoiceAudioStage stage,
                          const QString& userMessage, const QString& diagnostic) {
         if (m_active && sessionId == m_sessionId
             && stage == VoiceAudioStage::Playback) {
-            finish(false, userMessage, diagnostic);
+            m_failureMessage = userMessage;
+            m_failureDiagnostic = diagnostic;
+            stop();
         }
     });
+}
+
+LocalCompanionService::~LocalCompanionService()
+{
+    if (m_active && m_audio)
+        m_audio->cancel(m_sessionId);
+    if (m_mediaSessions)
+        m_mediaSessions->release(MediaOwner);
 }
 
 bool LocalCompanionService::start(QString* error)
@@ -92,14 +117,28 @@ bool LocalCompanionService::start(QString* error)
     m_sessionId = (quint64(1) << 63) | ++m_nextSession;
     m_active = true;
     m_canceling = false;
+    m_failureMessage.clear();
+    m_failureDiagnostic.clear();
+    m_pendingAudio = audio;
+    qInfo().noquote() << "Offline companion selected=" << clipId;
     emit activityChanged(true);
-    m_audio->play(m_sessionId, audio);
+    playWhenReady();
     return true;
+}
+
+void LocalCompanionService::playWhenReady()
+{
+    if (!m_active || m_canceling || m_pendingAudio.isEmpty()
+        || (m_mediaSessions && !m_mediaSessions->isReady(MediaOwner)))
+        return;
+    const QByteArray audio = std::move(m_pendingAudio);
+    m_pendingAudio.clear();
+    m_audio->play(m_sessionId, audio);
 }
 
 void LocalCompanionService::stop()
 {
-    if (!m_active)
+    if (!m_active || m_canceling)
         return;
     m_canceling = true;
     if (m_audio)
@@ -120,6 +159,8 @@ void LocalCompanionService::finish(bool success, const QString& userMessage,
         return;
     m_active = false;
     m_canceling = false;
+    m_pendingAudio.clear();
+    qInfo() << "Offline companion completed success=" << success;
     m_sessionId = 0;
     if (m_mediaSessions)
         m_mediaSessions->release(MediaOwner);

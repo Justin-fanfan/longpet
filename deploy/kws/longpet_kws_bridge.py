@@ -3,6 +3,7 @@
 
 import argparse
 import json
+import math
 import multiprocessing as mp
 import queue
 import sys
@@ -14,7 +15,10 @@ import numpy as np
 
 PROTOCOL = "longpet-kws"
 VERSION = 1
-SUPPORTED_KEYWORDS = ["小龙小龙", "你好", "陪我说话", "救命"]
+SUPPORTED_KEYWORDS = [
+    "小龙小龙", "你好", "陪我说话", "救命", "停止", "打开提醒",
+    "现在几点", "联系家人", "返回主页", "音量大点", "音量小点",
+]
 OUTPUT_LOCK = threading.Lock()
 
 
@@ -29,17 +33,19 @@ def command_reader(target):
     for line in sys.stdin:
         try:
             payload = json.loads(line)
+            if not isinstance(payload, dict):
+                raise ValueError("command must be a JSON object")
             if payload.get("protocol") != PROTOCOL or payload.get("version") != VERSION:
                 emit("error", message="unsupported command protocol/version")
                 continue
             command = payload.get("command")
             if command in ("pause", "resume", "stop"):
-                target.put(command)
+                target.put((command, payload.get("command_id", 0)))
             else:
                 emit("error", message="unsupported command")
         except (TypeError, ValueError, json.JSONDecodeError) as error:
             emit("error", message=f"invalid command JSON: {error}")
-    target.put("stop")
+    target.put(("stop", 0))
 
 
 def parse_args():
@@ -56,18 +62,25 @@ def parse_args():
     parser.add_argument("--nihao-threshold", type=float, default=0.10)
     parser.add_argument("--peiwoshuohua-threshold", type=float, default=0.05)
     parser.add_argument("--jiuming-threshold", type=float, default=0.05)
+    parser.add_argument("--command-threshold", type=float, default=0.05)
+    parser.add_argument("--start-paused", action="store_true")
+    parser.add_argument("--check-model", action="store_true",
+                        help="load model, validate vocabulary and infer silence without opening audio")
     parser.add_argument("--vad-threshold-db", type=float, default=-60.0)
     parser.add_argument("--vad-noise-ratio", type=float, default=2.5)
     return parser.parse_args()
 
 
 def main():
+    startup = time.monotonic()
     args = parse_args()
     kws_root = Path(args.kws_root).resolve()
     sys.path.insert(0, str(kws_root / "src"))
 
     # Acoustic inference, FBank, VAD and capture stay in the requested upstream
-    # project.  LongPet's C++ business layer only sees the JSONL protocol.
+    # project. LongPet overlays command vocabulary in this bridge so the vendored
+    # upstream runtime remains reusable and business-agnostic.
+    import longpet_kws.cli as kws_cli  # pylint: disable=import-error,import-outside-toplevel
     from longpet_kws.cli import (  # pylint: disable=import-error,import-outside-toplevel
         ArecordCapture,
         FsmnKws,
@@ -75,6 +88,20 @@ def main():
         sounddevice_capture_worker,
     )
     from longpet_kws.vad import EnergyVad  # pylint: disable=import-error,import-outside-toplevel
+
+    command_threshold = args.command_threshold
+    kws_cli.KEYWORDS = SUPPORTED_KEYWORDS.copy()
+    kws_cli.KEYWORD_ALIASES.update({
+        "停止": ["停止"],
+        "打开提醒": ["打开提醒"],
+        "现在几点": ["现在几点"],
+        "联系家人": ["联系家人"],
+        # The current tokens.txt has no “返”. Match the homophone “反” but
+        # normalize the emitted event back to the canonical command string.
+        "返回主页": ["反回主页"],
+        "音量大点": ["音量大点"],
+        "音量小点": ["音量小点"],
+    })
 
     if args.capture_backend == "arecord" and not args.alsa_device:
         raise ValueError("--alsa-device is required for arecord capture")
@@ -84,8 +111,24 @@ def main():
         "你好": args.nihao_threshold,
         "陪我说话": args.peiwoshuohua_threshold,
         "救命": args.jiuming_threshold,
+        "停止": command_threshold,
+        "打开提醒": command_threshold,
+        "现在几点": command_threshold,
+        "联系家人": command_threshold,
+        "返回主页": command_threshold,
+        "音量大点": command_threshold,
+        "音量小点": command_threshold,
     }
+    if any(not math.isfinite(value) or not 0 < value <= 1 for value in thresholds.values()):
+        raise ValueError("keyword thresholds must be finite and in (0, 1]")
+    model_started = time.monotonic()
     detector = FsmnKws(args.model, args.tokens, thresholds)
+    model_ms = round((time.monotonic() - model_started) * 1000)
+    if args.check_model:
+        detector.accept(np.zeros(1600, dtype=np.float32))
+        emit("model_checked", supported_keywords=SUPPORTED_KEYWORDS,
+             model_load_ms=model_ms, acoustic_accuracy_verified=False)
+        return
 
     def new_vad():
         return EnergyVad(sample_rate=16_000,
@@ -104,8 +147,9 @@ def main():
     stop_event = None
     capture = None
     capture_process = None
-    paused = False
-    announced_ready = False
+    paused = args.start_paused
+    resume_command_id = 0
+    last_audio_at = time.monotonic()
 
     def drain_audio():
         if audio_queue is None:
@@ -117,9 +161,15 @@ def main():
                 return
 
     def stop_capture():
-        nonlocal capture, capture_process
+        nonlocal capture, capture_process, audio_queue, status_queue, stop_event
         if capture is not None:
             capture.stop()
+            if capture.process is not None:
+                capture.process.wait(timeout=1)
+            if capture.thread is not None:
+                capture.thread.join(timeout=1)
+            if capture.process is not None and capture.process.stdout is not None:
+                capture.process.stdout.close()
             capture = None
         if capture_process is not None:
             stop_event.set()
@@ -127,11 +177,23 @@ def main():
             if capture_process.is_alive():
                 capture_process.terminate()
                 capture_process.join(timeout=1)
+            if capture_process.is_alive():
+                capture_process.kill()
+                capture_process.join(timeout=1)
+            if capture_process.is_alive():
+                raise RuntimeError("capture did not exit; refusing pause acknowledgement")
+            capture_process.close()
             capture_process = None
         drain_audio()
+        for target in (audio_queue, status_queue):
+            if target is not None and hasattr(target, "close"):
+                target.cancel_join_thread()
+                target.close()
+        audio_queue = status_queue = stop_event = None
 
     def start_capture():
-        nonlocal audio_queue, status_queue, stop_event, capture, capture_process
+        nonlocal audio_queue, status_queue, stop_event, capture, capture_process, last_audio_at
+        last_audio_at = time.monotonic()
         if args.capture_backend == "arecord":
             audio_queue = queue.Queue(maxsize=4)
             status_queue = None
@@ -150,36 +212,44 @@ def main():
         capture_process.start()
         return False
 
-    capture_ready = start_capture()
+    capture_ready = False
     try:
+        if not paused:
+            capture_ready = start_capture()
+        emit("ready", supported_keywords=SUPPORTED_KEYWORDS, paused=paused,
+             model_load_ms=model_ms, startup_ms=round((time.monotonic() - startup) * 1000))
         while True:
             while True:
                 try:
-                    command = commands.get_nowait()
+                    command, command_id = commands.get_nowait()
                 except queue.Empty:
                     break
                 if command == "stop":
                     stop_capture()
-                    emit("stopped")
+                    emit("stopped", command_id=command_id)
                     return
                 if command == "pause" and not paused:
+                    pause_started = time.monotonic()
                     stop_capture()
                     detector.reset_stream()
                     vad = new_vad()
                     paused = True
                     capture_ready = False
-                    emit("paused")
+                    emit("paused", command_id=command_id, release_ms=round((time.monotonic() - pause_started) * 1000))
                 elif command == "pause":
-                    emit("paused")
+                    emit("paused", command_id=command_id)
                 elif command == "resume" and paused:
+                    resume_command_id = command_id
                     detector.reset_stream()
                     vad = new_vad()
                     capture_ready = start_capture()
                     paused = False
                     if capture_ready:
-                        emit("resumed")
+                        emit("resumed", command_id=resume_command_id)
                 elif command == "resume" and not paused:
-                    emit("resumed")
+                    resume_command_id = command_id
+                    if capture_ready:
+                        emit("resumed", command_id=resume_command_id)
 
             if paused:
                 time.sleep(0.05)
@@ -195,21 +265,21 @@ def main():
                         raise RuntimeError(f"sounddevice capture failed: {message}")
                     if kind == "ready":
                         capture_ready = True
-                        if announced_ready:
-                            emit("resumed")
+                        emit("resumed", command_id=resume_command_id)
+            if capture_process is not None and not capture_process.is_alive():
+                raise RuntimeError("sounddevice capture child exited unexpectedly")
             if args.capture_backend == "arecord" and capture is not None:
                 process = capture.process
                 if process is not None and process.poll() is not None:
                     raise RuntimeError(f"arecord exited with code {process.returncode}")
 
-            if capture_ready and not announced_ready:
-                announced_ready = True
-                emit("ready", supported_keywords=SUPPORTED_KEYWORDS)
-
             try:
                 raw = audio_queue.get(timeout=0.1)
             except queue.Empty:
+                if time.monotonic() - last_audio_at > 5:
+                    raise RuntimeError("capture produced no audio for 5 seconds")
                 continue
+            last_audio_at = time.monotonic()
             capture_audio = np.frombuffer(raw, dtype="<i2").astype(np.float32) / 32768.0
             block = resample_block(capture_audio, args.input_samplerate)
             for chunk in vad.accept(block):

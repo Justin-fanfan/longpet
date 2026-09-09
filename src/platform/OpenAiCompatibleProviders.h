@@ -54,9 +54,11 @@ private:
     ProviderHttpClient m_http;
     SseEventParser m_sseParser;
     quint64 m_streamSessionId = 0;
+    qint64 m_streamBytesReceived = 0;
     QString m_streamText;
     bool m_streamDone = false;
     bool m_streamFinishReasonSeen = false;
+    QString m_streamFinishReason;
     QMap<int, AiToolCall> m_streamToolCalls;
 };
 

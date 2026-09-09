@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
+#include <QSet>
 
 namespace {
 QHttpPart textPart(const QByteArray& name, const QByteArray& value)
@@ -97,10 +98,27 @@ QList<AiToolCall> parseToolCalls(const QJsonArray& array)
         call.id = object.value(QStringLiteral("id")).toString();
         call.name = function.value(QStringLiteral("name")).toString();
         call.argumentsJson = function.value(QStringLiteral("arguments")).toString();
-        if (!call.id.isEmpty() && !call.name.isEmpty())
-            calls.append(call);
+        if (object.value(QStringLiteral("type")).toString() != QStringLiteral("function"))
+            call.name.clear();
+        calls.append(call);
     }
     return calls;
+}
+
+bool validToolCalls(const QList<AiToolCall>& calls)
+{
+    if (calls.size() > 8)
+        return false;
+    QSet<QString> ids;
+    for (const auto& call : calls) {
+        const QJsonDocument arguments = QJsonDocument::fromJson(call.argumentsJson.toUtf8());
+        if (call.id.isEmpty() || call.id.size() > 128 || ids.contains(call.id)
+            || call.name.isEmpty() || call.name.size() > 64
+            || call.argumentsJson.size() > 32 * 1024 || !arguments.isObject())
+            return false;
+        ids.insert(call.id);
+    }
+    return true;
 }
 }
 
@@ -175,7 +193,10 @@ OpenAiCompatibleLlmProvider::OpenAiCompatibleLlmProvider(
     connect(&m_http, &ProviderHttpClient::succeeded,
             this, &OpenAiCompatibleLlmProvider::handleResponse);
     connect(&m_http, &ProviderHttpClient::failed,
-            this, &LlmProviderPort::requestFailed);
+            this, [this](quint64 sessionId, const AiProviderError& error) {
+        resetStream();
+        emit requestFailed(sessionId, error);
+    });
     connect(&m_http, &ProviderHttpClient::streamChunkReceived,
             this, &OpenAiCompatibleLlmProvider::handleStreamChunk);
 }
@@ -240,11 +261,16 @@ void OpenAiCompatibleLlmProvider::handleResponse(
         const QString responseText = m_streamText.trimmed();
         const QList<AiToolCall> toolCalls = m_streamToolCalls.values();
         const bool endedNormally = m_streamDone || m_streamFinishReasonSeen;
-        if (!endedNormally) {
+        const bool validFinish = m_streamFinishReason.isEmpty()
+            || m_streamFinishReason == QStringLiteral("stop")
+            || m_streamFinishReason == QStringLiteral("tool_calls");
+        if (!endedNormally || !validFinish || !validToolCalls(toolCalls)
+            || (!toolCalls.isEmpty() && m_streamFinishReason != QStringLiteral("tool_calls"))
+            || (toolCalls.isEmpty() && m_streamFinishReason == QStringLiteral("tool_calls"))) {
             resetStream();
             emit requestFailed(sessionId, invalidResponse(
                 QStringLiteral("openai-compatible/llm"),
-                QStringLiteral("SSE stream ended without [DONE] or finish_reason")));
+                QStringLiteral("SSE incomplete stream, invalid tool calls or finish_reason")));
             return;
         }
         if (responseText.isEmpty() && toolCalls.isEmpty()) {
@@ -278,6 +304,18 @@ void OpenAiCompatibleLlmProvider::handleResponse(
     const QString content = message.value(QStringLiteral("content")).toString().trimmed();
     const QList<AiToolCall> toolCalls = parseToolCalls(
         message.value(QStringLiteral("tool_calls")).toArray());
+    const QString finishReason = choices.isEmpty() ? QString() : choices.first().toObject()
+        .value(QStringLiteral("finish_reason")).toString();
+    if (!validToolCalls(toolCalls)
+        || (message.contains(QStringLiteral("tool_calls"))
+            && !message.value(QStringLiteral("tool_calls")).isNull()
+            && !message.value(QStringLiteral("tool_calls")).isArray())
+        || (!finishReason.isEmpty() && finishReason != QStringLiteral("stop")
+            && finishReason != QStringLiteral("tool_calls"))) {
+        emit requestFailed(sessionId, invalidResponse(QStringLiteral("openai-compatible/llm"),
+                                                      QStringLiteral("malformed tool call or finish reason")));
+        return;
+    }
     if (content.isEmpty() && toolCalls.isEmpty()) {
         emit requestFailed(sessionId, invalidResponse(
             QStringLiteral("openai-compatible/llm"),
@@ -297,13 +335,29 @@ void OpenAiCompatibleLlmProvider::handleStreamChunk(
 {
     if (sessionId != m_streamSessionId)
         return;
+    m_streamBytesReceived += chunk.size();
+    if (m_streamBytesReceived > 1024 * 1024) {
+        m_http.cancel(sessionId);
+        resetStream();
+        emit requestFailed(sessionId, invalidResponse(QStringLiteral("openai-compatible/llm"),
+                                                      QStringLiteral("SSE byte budget exceeded")));
+        return;
+    }
     processStreamEvents(sessionId, m_sseParser.append(chunk));
 }
 
 bool OpenAiCompatibleLlmProvider::processStreamEvents(
     quint64 sessionId, const QList<QByteArray>& events)
 {
+    auto reject = [this, sessionId](const QString& diagnostic) {
+        m_http.cancel(sessionId);
+        resetStream();
+        emit requestFailed(sessionId, invalidResponse(QStringLiteral("openai-compatible/llm"), diagnostic));
+        return false;
+    };
     for (const QByteArray& event : events) {
+        if (m_streamDone)
+            continue;
         if (event.trimmed() == QByteArrayLiteral("[DONE]")) {
             m_streamDone = true;
             continue;
@@ -312,9 +366,8 @@ bool OpenAiCompatibleLlmProvider::processStreamEvents(
         QJsonParseError parseError;
         const QJsonObject root = parseObject(event, &parseError);
         if (parseError.error != QJsonParseError::NoError || root.isEmpty()) {
-            const QString diagnostic = QStringLiteral("SSE JSON error: %1 payload=%2")
-                .arg(parseError.errorString(),
-                     QString::fromUtf8(event.left(160)));
+            const QString diagnostic = QStringLiteral("SSE JSON error: %1")
+                .arg(parseError.errorString());
             m_http.cancel(sessionId);
             resetStream();
             emit requestFailed(sessionId, invalidResponse(
@@ -323,31 +376,51 @@ bool OpenAiCompatibleLlmProvider::processStreamEvents(
         }
 
         const QJsonArray choices = root.value(QStringLiteral("choices")).toArray();
+        if (root.contains(QStringLiteral("error")))
+            return reject(QStringLiteral("SSE provider error event"));
         if (choices.isEmpty())
             continue; // Some providers send a final usage-only SSE event.
         const QJsonObject choice = choices.first().toObject();
         if (!choice.value(QStringLiteral("finish_reason")).isNull()
             && !choice.value(QStringLiteral("finish_reason")).isUndefined()) {
+            if (!choice.value(QStringLiteral("finish_reason")).isString())
+                return reject(QStringLiteral("finish_reason is not a string"));
             m_streamFinishReasonSeen = true;
+            m_streamFinishReason = choice.value(QStringLiteral("finish_reason")).toString();
         }
         const QJsonObject deltaObject = choice.value(QStringLiteral("delta")).toObject();
+        if (deltaObject.contains(QStringLiteral("tool_calls"))
+            && !deltaObject.value(QStringLiteral("tool_calls")).isArray()
+            && !deltaObject.value(QStringLiteral("tool_calls")).isNull())
+            return reject(QStringLiteral("tool_calls is not an array"));
         const QJsonArray toolCallDeltas = deltaObject.value(
             QStringLiteral("tool_calls")).toArray();
         for (const QJsonValue& value : toolCallDeltas) {
             const QJsonObject object = value.toObject();
-            const int index = object.value(QStringLiteral("index")).toInt();
+            const QJsonValue indexValue = object.value(QStringLiteral("index"));
+            const int index = indexValue.toInt(-1);
+            if (!indexValue.isDouble() || indexValue.toDouble() != index || index < 0 || index >= 8
+                || (object.contains(QStringLiteral("type"))
+                    && object.value(QStringLiteral("type")).toString() != QStringLiteral("function")))
+                return reject(QStringLiteral("invalid tool delta index or type"));
             AiToolCall& call = m_streamToolCalls[index];
             const QString id = object.value(QStringLiteral("id")).toString();
+            if (!call.id.isEmpty() && !id.isEmpty() && call.id != id)
+                return reject(QStringLiteral("tool delta changed id"));
             if (!id.isEmpty())
                 call.id = id;
             const QJsonObject function = object.value(QStringLiteral("function")).toObject();
             call.name.append(function.value(QStringLiteral("name")).toString());
             call.argumentsJson.append(function.value(QStringLiteral("arguments")).toString());
+            if (call.id.size() > 128 || call.name.size() > 64 || call.argumentsJson.size() > 32 * 1024)
+                return reject(QStringLiteral("tool delta size exceeded"));
         }
         const QString delta = deltaObject.value(QStringLiteral("content")).toString();
         if (delta.isEmpty())
             continue;
         m_streamText.append(delta);
+        if (m_streamText.size() > 64 * 1024)
+            return reject(QStringLiteral("stream text size exceeded"));
         emit chatDelta(sessionId, delta);
     }
     return true;
@@ -357,9 +430,11 @@ void OpenAiCompatibleLlmProvider::resetStream()
 {
     m_sseParser.reset();
     m_streamSessionId = 0;
+    m_streamBytesReceived = 0;
     m_streamText.clear();
     m_streamDone = false;
     m_streamFinishReasonSeen = false;
+    m_streamFinishReason.clear();
     m_streamToolCalls.clear();
 }
 

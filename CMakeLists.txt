@@ -256,4 +256,17 @@ if(LONGPET_BUILD_TESTS)
         PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )
+    find_package(Python3 QUIET COMPONENTS Interpreter)
+    if(Python3_Interpreter_FOUND)
+        set_property(TEST LongPet.V02 APPEND PROPERTY ENVIRONMENT
+            "LONGPET_TEST_PYTHON=${Python3_EXECUTABLE}")
+        execute_process(COMMAND "${Python3_EXECUTABLE}" -c "import numpy"
+                        RESULT_VARIABLE LONGPET_TEST_NUMPY ERROR_QUIET)
+        if(LONGPET_TEST_NUMPY EQUAL 0)
+            add_test(NAME LongPet.KwsBridge
+                COMMAND "${Python3_EXECUTABLE}" "${CMAKE_SOURCE_DIR}/tests/test_kws_bridge.py")
+            set_tests_properties(LongPet.KwsBridge PROPERTIES
+                ENVIRONMENT "PYTHONDONTWRITEBYTECODE=1")
+        endif()
+    endif()
 endif()

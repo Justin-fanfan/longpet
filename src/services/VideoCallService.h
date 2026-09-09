@@ -34,6 +34,7 @@ private:
     void initializeSnapshot(VideoCallMode mode, VideoCallDirection direction);
     bool prepareMedia(QString* error);
     void continueAfterPrompt();
+    void mediaGateReady();
     void handleMediaReady();
     void handleMediaFailure(const QString& code, const QString& message);
     void releaseResources();
@@ -48,4 +49,5 @@ private:
     bool m_promptActive = false;
     bool m_callResourcesActive = false;
     bool m_mediaSessionAcquired = false;
+    bool m_waitingForAudioStart = false;
 };

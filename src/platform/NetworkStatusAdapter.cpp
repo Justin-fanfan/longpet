@@ -34,6 +34,7 @@ bool sameStatus(const NetworkStatusSnapshot& left,
 {
     return left.known == right.known
         && left.internetAvailable == right.internetAvailable
+        && left.localNetworkAvailable == right.localNetworkAvailable
         && left.summary == right.summary;
 }
 }
@@ -121,11 +122,11 @@ NetworkStatusSnapshot NetworkStatusAdapter::mapState(
         return {true, false, QStringLiteral("未连接")};
     case QNetworkInformation::Reachability::Local:
     case QNetworkInformation::Reachability::Site:
-        return {true, false, withTransport(transport, QStringLiteral("无互联网"))};
+        return {true, false, withTransport(transport, QStringLiteral("无互联网")), true};
     case QNetworkInformation::Reachability::Online:
         if (behindCaptivePortal)
-            return {true, false, withTransport(transport, QStringLiteral("需认证"))};
-        return {true, true, withTransport(transport, QStringLiteral("已联网"))};
+            return {true, false, withTransport(transport, QStringLiteral("需认证")), true};
+        return {true, true, withTransport(transport, QStringLiteral("已联网")), true};
     }
     return {false, false, QStringLiteral("网络状态未知")};
 }
@@ -157,4 +158,5 @@ void NetworkStatusAdapter::publishStatus(const NetworkStatusSnapshot& status)
     m_lastStatus = status;
     emit networkStateChanged(status.known, status.internetAvailable,
                              status.summary);
+    emit localNetworkStateChanged(status.localNetworkAvailable);
 }
