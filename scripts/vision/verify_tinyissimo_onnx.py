@@ -133,6 +133,7 @@ def main() -> int:
         }
     text = json.dumps(result, indent=2, ensure_ascii=False) + "\n"
     if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
         args.output.write_text(text, encoding="utf-8")
     print(text, end="")
     return 0 if result["passed"] else 3

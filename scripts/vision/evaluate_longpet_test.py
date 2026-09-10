@@ -119,6 +119,7 @@ def main() -> int:
     per_video: dict[str, dict[str, Any]] = defaultdict(lambda: {
         "images": 0, "positive_images": 0, "detected_images": 0,
         "any_prediction_images": 0, "boxes": 0, "best_iou_sum": 0.0,
+        "score_sum": 0.0,
         "low_conf_images": 0, "missed_images": 0, "negative_images": 0,
         "false_positive_images": 0,
     })
@@ -146,6 +147,7 @@ def main() -> int:
         agg = per_video[source]
         agg["images"] += 1
         agg["boxes"] += len(selected)
+        agg["score_sum"] += sum(selected_scores)
         if gt_boxes:
             agg["positive_images"] += 1
             best_iou = max((iou_xyxy(gt, pred) for gt in gt_boxes for pred in selected_boxes), default=0.0)
@@ -181,6 +183,8 @@ def main() -> int:
         negative_images = agg["negative_images"]
         video_rows.append({
             "source": source,
+            "frames": agg["images"],
+            "detected_frames": agg["detected_images"],
             **agg,
             "positive_frame_detection_rate": (
                 agg["detected_images"] / positive_images if positive_images else None
@@ -189,6 +193,7 @@ def main() -> int:
                 agg["any_prediction_images"] / positive_images if positive_images else None
             ),
             "mean_best_iou": agg["best_iou_sum"] / positive_images if positive_images else None,
+            "mean_confidence": agg["score_sum"] / agg["boxes"] if agg["boxes"] else None,
             "negative_false_positive_rate": (
                 agg["false_positive_images"] / negative_images if negative_images else None
             ),
@@ -198,6 +203,11 @@ def main() -> int:
         "boxes", "low_conf_images", "missed_images", "negative_images", "false_positive_images",
     )}
     total_iou = sum(float(row["best_iou_sum"]) for row in video_rows)
+    note = (
+        "negative false-positive rate is undefined because this split contains zero confirmed negative images"
+        if total["negative_images"] == 0
+        else "negative false-positive rate uses score threshold {:.2f} over confirmed negative images".format(args.score_threshold)
+    )
     summary = {
         "name": args.name,
         "model": str(args.model.resolve()),
@@ -211,7 +221,7 @@ def main() -> int:
         "mean_best_iou": total_iou / total["positive_images"] if total["positive_images"] else None,
         "score_threshold": args.score_threshold,
         "iou_threshold": args.iou_threshold,
-        "note": "negative false-positive rate is undefined because this test split contains zero confirmed negative images",
+        "note": note,
         "per_video": video_rows,
     }
     output.mkdir(parents=True, exist_ok=True)
