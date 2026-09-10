@@ -50,7 +50,7 @@ enabled=true
 maximum_rounds=3
 
 [kws]
-# 依赖 third_party/longpet-kws 的源码+模型（见 deploy/配置说明.md 3.4.4），以及板端 numpy/onnxruntime/sounddevice 运行时。
+# 依赖 components/longpet-kws 的源码+模型（见 deploy/配置说明.md 3.4.4），以及板端 numpy/onnxruntime/sounddevice 运行时。
 # input_device 留空表示使用 PortAudio 默认输入设备，禁止永久写死设备序号。
 # 采集设备解析顺序：LONGPET_KWS_ALSA_DEVICE → LONGPET_AI_CAPTURE_DEVICE(语音交互同款，服务已设) → 下行 alsa_device。
 # 因此 alsa_device 仅在未设置上述环境变量时生效；推荐直接用服务里已有的 LONGPET_AI_CAPTURE_DEVICE，与语音交互共用同一麦克风。

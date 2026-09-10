@@ -1,5 +1,8 @@
 # LongPet KWS 唤醒词无反应 —— 排查与修复报告
 
+> 历史记录：本文保留排障时的 10.x 板端地址和板端文件位置；当前仓库 KWS 位于
+> `components/longpet-kws`，当前部署地址和命令见 [最新配置说明](../deploy/配置说明.md)。
+
 日期：2026-08-31  
 目标平台：LongPet / LoongArch64 / Qt 6  
 板端主机：`LS-GD`（10.240.178.51），服务以 `longpet` 用户运行  
@@ -9,7 +12,7 @@
 ## 1. 结论
 
 说完“小龙小龙”无任何反应，**根因**是仓内 vendored 的上游采集类
-`third_party/longpet-kws/src/longpet_kws/cli.py` 的 `ArecordCapture` 用
+`components/longpet-kws/src/longpet_kws/cli.py` 的 `ArecordCapture` 用
 `subprocess.Popen(..., bufsize=0)` 启动 `arecord`，导致 `p.stdout` 是**无缓冲 FileIO**，
 `read(block_bytes)` 只做一次 `os.read`，管道尚未攒满就返回**部分帧**；随后 `_read()`
 里 `if len(raw) < block_bytes: return` 把这个部分读误判为 EOF，**采集器只送出第一个
@@ -115,7 +118,7 @@ self.process = subprocess.Popen(
 
 **修改落点**（仓库与板端必须同步）：
 
-- 仓库：`third_party/longpet-kws/src/longpet_kws/cli.py`
+- 仓库：`components/longpet-kws/src/longpet_kws/cli.py`
 - 板端：`/home/longpet/longpet-kws/upstream/src/longpet_kws/cli.py`
   （板端 bridge `longpet_kws_bridge.py` 通过 `sys.path.insert(0, kws_root/"src")` 从该文件
   `from longpet_kws.cli import ArecordCapture`，因此只需改这一处。）
@@ -160,7 +163,7 @@ self.process = subprocess.Popen(
 
 ### 6.1 本次核心修改
 
-- `third_party/longpet-kws/src/longpet_kws/cli.py` —— `ArecordCapture.start()` 去掉 `bufsize=0`（唯一必改项）。
+- `components/longpet-kws/src/longpet_kws/cli.py` —— `ArecordCapture.start()` 去掉 `bufsize=0`（唯一必改项）。
 
 ### 6.2 同批次相关（协助定位 / 同仓库未提交）
 
@@ -171,8 +174,8 @@ self.process = subprocess.Popen(
   “KWS 使用 arecord 时必须配置 alsa_device” 的问题。
 - `deploy/longpet-ai.ini.example`、`deploy/longpet-ai-mixed.ini.example`、
   `deploy/配置说明.md` —— 说明 env 继承顺序与采集设备配置。
-- `third_party/longpet-kws/**` —— 首次 vendored 进仓库的上游源码与模型
-  （含本次修复的 `cli.py`）。此目录此前尚未提交。
+- `components/longpet-kws/**` —— 当时首次纳入仓库、现由 LongPet 直接维护的组件源码与模型
+  （含本次修复的 `cli.py`）。此目录当时尚未提交。
 
 ### 6.3 板端同步位置
 
@@ -241,7 +244,7 @@ journalctl -fu longpet.service   # 看 KWS ready → 说“小龙小龙” → k
 
 ## 9. 待办 / 未覆盖
 
-- 该项目所有改动（`cli.py`、`AiConfigRepository.cpp`、诊断日志、ini 示例、`third_party/longpet-kws/**`）
+- 该项目所有改动（`cli.py`、`AiConfigRepository.cpp`、诊断日志、ini 示例、`components/longpet-kws/**`）
   **尚未 `git commit`**。
 - 尚未在原上游仓库复刻/验证该修复；本报告只保证 LongPet 方案内一致。
 - 未做长时间误唤醒率、远场识别率的板端统计。

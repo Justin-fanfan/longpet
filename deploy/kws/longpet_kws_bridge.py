@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stable JSON-lines bridge around the upstream loongpet_kws runtime."""
+"""Stable JSON-lines bridge around the first-party LongPet KWS component."""
 
 import argparse
 import json
@@ -66,8 +66,8 @@ def main():
     kws_root = Path(args.kws_root).resolve()
     sys.path.insert(0, str(kws_root / "src"))
 
-    # Acoustic inference, FBank, VAD and capture stay in the requested upstream
-    # project.  LongPet's C++ business layer only sees the JSONL protocol.
+    # Acoustic inference, FBank, VAD and capture stay in the requested KWS
+    # component root. LongPet's C++ business layer only sees the JSONL protocol.
     from longpet_kws.cli import (  # pylint: disable=import-error,import-outside-toplevel
         ArecordCapture,
         FsmnKws,

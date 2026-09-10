@@ -16,7 +16,11 @@ from pathlib import Path
 
 import numpy as np
 import onnxruntime as ort
-import sounddevice as sd
+
+try:
+    import sounddevice as sd
+except ModuleNotFoundError:
+    sd = None
 
 from .fbank import kaldi_fbank
 from .vad import EnergyVad, VadChunk
@@ -344,12 +348,19 @@ def main() -> None:
     parser.add_argument("--show-scores", action="store_true", help="print best keyword scores for current speech")
     args = parser.parse_args()
     if args.list_devices:
+        if sd is None:
+            parser.error("sounddevice is required for --list-devices")
         print(sd.query_devices())
         return
     device = int(args.device) if isinstance(args.device, str) and args.device.isdigit() else args.device
     capture_backend = args.capture_backend
     if capture_backend == "auto":
         capture_backend = "sounddevice"
+    if capture_backend == "sounddevice" and sd is None:
+        parser.error(
+            "sounddevice is required for the sounddevice capture backend; "
+            "install requirements.txt or select --capture-backend arecord"
+        )
     if capture_backend == "arecord" and not args.alsa_device:
         parser.error("--alsa-device is required with --capture-backend arecord")
 

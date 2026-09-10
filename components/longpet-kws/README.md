@@ -1,5 +1,9 @@
 # 中文关键词唤醒
 
+`components/longpet-kws` 是 LongPet 团队直接维护的第一方组件，可独立运行，也可由
+`deploy/kws/longpet_kws_bridge.py` 启动。它不是第三方源码镜像；当前实现以公开的
+`loongpet_kws` 版本为起点，并包含 LongPet 的板端采集和稳定性修正。
+
 当前方案是 WeKWS FSMN-CTC：约 75.6 万参数，单个 ONNX 文件约 3.07 MB（权重已内嵌）。运行时只依赖 NumPy、ONNX Runtime 和 sounddevice。
 
 ```text
@@ -8,7 +12,10 @@
 
 ## 本地运行
 
+先进入本组件目录：
+
 ```powershell
+Set-Location components/longpet-kws
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 .\.venv\Scripts\python.exe run.py
@@ -89,13 +96,13 @@ python3 run.py --device 2 --input-samplerate 48000 --audio-debug --vad-debug
 
 `AUDIO` 每秒输出一次 RMS/Peak dBFS。说话时 RMS 应明显高于安静时；如果始终接近 `-120 dBFS`，表示录音是全零或输入被静音。
 
-安静说话时不容易开启 VAD，可将绝对门限从默认 `-50 dBFS` 降低：
+安静说话时不容易开启 VAD，可将绝对门限从默认 `-60 dBFS` 降低：
 
 ```powershell
-.\.venv\Scripts\python.exe run.py --vad-threshold-db -55
+.\.venv\Scripts\python.exe run.py --vad-threshold-db -65
 ```
 
-环境噪声容易开启 VAD，可提高至 `-45 dBFS`，或增大 `--vad-noise-ratio`。对照无 VAD 效果可使用 `--no-vad`。
+环境噪声容易开启 VAD，可提高至 `-55 dBFS`，或增大 `--vad-noise-ratio`。对照无 VAD 效果可使用 `--no-vad`。
 
 ## 查看关键词分数
 
@@ -110,7 +117,7 @@ python3 run.py --device 2 --input-samplerate 48000 --audio-debug --vad-debug
 ## 目录结构
 
 ```text
-kws/
+components/longpet-kws/
 ├─ run.py                   # 麦克风运行入口
 ├─ src/longpet_kws/
 │  ├─ cli.py               # 检测器、状态机与录音/ALSA采集
@@ -120,3 +127,20 @@ kws/
 ├─ requirements.txt
 └─ README.md
 ```
+
+`run.py` 和 `src/longpet_kws/cli.py` 都基于自身 `__file__` 定位组件根目录，所以从仓库根或组件
+目录启动时，默认模型与词表都指向同一份 `assets/fsmn`，不依赖当前工作目录。
+
+## 来源、版本与许可证状态
+
+- 起点仓库：<https://github.com/ycxuan0517/loongpet_kws>
+- 固定起点提交：`d349994161b7a2f43e30078a605033b1e2facc25`（另见 `UPSTREAM_COMMIT`）
+- `fsmn_ctc.onnx`：3,065,258 bytes；SHA-256
+  `6febd9f7f15c47caed88d434d810651e34215334c66961b9ba66251fa04d98c4`
+- `tokens.txt`：SHA-256
+  `41b2c566f0d16ed6a0913d7770520c16556a4bcca206e8012676f847be4b0980`
+- 上述起点仓库在该提交没有提供顶层 `LICENSE`，也没有记录声学模型更上游的精确版本与许可文件。
+
+因此这些模型文件是为保持现有 LongPet KWS 可复现性而保留的必要 runtime 资产，但不能据此
+推断其具备对外再分发授权。公开发布前必须补齐 WeKWS/模型原始来源和许可证审查；在此之前，
+不要把“可运行”写成“已完成许可证确认”。

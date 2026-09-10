@@ -47,9 +47,10 @@ V3 已在 V2 `VAD → ASR → SSE LLM → SentenceBuffer → TTS Queue` 链路�
 | 停止 | 复用取消入口 | 调度已预留，当前模型不支持 |
 | 打开提醒 / 现在几点 / 联系家人 / 返回主页 | 对应本地动作 | 当前模型不支持，未伪造 |
 
-LongPet 把上游源码与模型（`fsmn_ctc.onnx`、`tokens.txt`）作为 vendored 依赖放入
-`third_party/longpet-kws`，随仓库一并提交；部署时整目录拷贝到板端 `/home/longpet/longpet-kws/upstream`。
-LongPet 仍不复制或重写 FBank、VAD 或推理代码，只在二者约好的目录结构（`kws_root/src`）之上提供协议 bridge。
+LongPet 最初从公开 `loongpet_kws` 版本引入源码与模型（`fsmn_ctc.onnx`、`tokens.txt`），
+当前以 `components/longpet-kws` 第一方组件继续维护；部署时仍整体复制到板端
+`/home/longpet/longpet-kws/upstream`，以保持既有板端配置兼容。协议 bridge 继续只依赖
+`kws_root/src` 与 `assets/fsmn` 的稳定组件布局。
 
 ## 3. V3 架构
 
@@ -67,7 +68,7 @@ VoiceCapability     KwsPort          LocalCompanion
  + provider health     │          OfflineAudioLibraryPort
         │          JSONL bridge             │
         │               │      OfflineAudioLibraryAdapter
-        │        upstream loongpet_kws       │
+        │       LongPet KWS component       │
         └───────────────┬┴───────────────────┘
                         │ pause/release/resume
                VoiceInteractionService (V2)
@@ -385,7 +386,7 @@ journalctl -b -u longpet.service --no-pager | \
 
 > **补充（2026-08-31，板端实测）**：随后在板端做了 KWS 唤醒实测，发现
 > `capture_backend=arecord` 时**说“小龙小龙”无反应**，根因是 vendored
-> `third_party/longpet-kws/src/longpet_kws/cli.py` 的 `ArecordCapture` 用 `bufsize=0`
+> `components/longpet-kws/src/longpet_kws/cli.py` 的 `ArecordCapture` 用 `bufsize=0`
 > 导致只采到 1 个音频块即退出（识别类误判为 EOF），关键词得分恒为 0。去掉 `bufsize=0`
 > 后修复，并在部署服务上实测 `KWS keyword=小龙小龙 score=0.2994` 成功唤醒 AI。
 > 完整排查、修复与验证见
