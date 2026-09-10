@@ -8,8 +8,16 @@ CMakeUserPresets.json
 *.dll
 *.pdb
 *.log
-__pycache__/
+**/__pycache__/
 *.py[cod]
+
+# Python environments and tool caches
+.venv/
+.venv-*/
+venv/
+**/.pytest_cache/
+**/.mypy_cache/
+**/.ruff_cache/
 
 # Local IDE state is machine-specific
 .vscode/
@@ -18,9 +26,24 @@ __pycache__/
 
 quicktest/
 
-# Vision training products are prepared outside the source tree. These guards
-# prevent accidental commits if a developer points a script at the repository.
-third_party/tinyissimo-yolo/data/
-third_party/tinyissimo-yolo/runs/
-third_party/tinyissimo-yolo/checkpoints/
-third_party/tinyissimo-yolo/*.pt
+# Training products belong in an external ai-work workspace. These guards apply
+# anywhere in the repository in case a script is pointed at the wrong output.
+**/datasets/
+**/runs/
+**/cache/
+**/checkpoints/
+**/predictions/
+**/teacher_models/
+*.pt
+*.pth
+*.ckpt
+
+# Raw datasets and captured media are not source assets.
+*.mp4
+*.mov
+*.avi
+*.mkv
+
+# Local test/report output
+/test-results/
+/result.txt
