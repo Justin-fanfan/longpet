@@ -46,6 +46,10 @@ def main() -> int:
     parser.add_argument("--data", required=True, type=pathlib.Path)
     parser.add_argument("--output-dir", required=True, type=pathlib.Path)
     parser.add_argument("--model-output", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--weights", "--checkpoint", dest="weights", type=pathlib.Path,
+        help="optional existing Tinyissimo person-only best.pt checkpoint to fine-tune",
+    )
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--batch", type=int, default=64)
     parser.add_argument("--workers", type=int, default=4)
@@ -53,6 +57,8 @@ def main() -> int:
     parser.add_argument("--imgsz", type=int, default=128)
     parser.add_argument("--seed", type=int, default=20260901)
     parser.add_argument("--patience", type=int, default=25)
+    parser.add_argument("--lr0", type=float, default=None,
+                        help="optional initial learning rate override, useful for conservative fine-tuning")
     parser.add_argument("--name", default="tinyissimo-v1-small-person-128")
     args = parser.parse_args()
     if args.imgsz % 32 != 0:
@@ -99,7 +105,15 @@ def main() -> int:
         yaml.safe_dump(architecture, sort_keys=False), encoding="utf-8"
     )
 
-    model = YOLO(str(derived_architecture))
+    initial_weights = args.weights.resolve() if args.weights else None
+    model = YOLO(str(initial_weights or derived_architecture))
+    if initial_weights is not None:
+        names = getattr(model, "names", None)
+        if names is not None and len(names) != 1:
+            raise RuntimeError(
+                "--weights must be a one-class person-only checkpoint; "
+                f"received {len(names)} classes"
+            )
     detect_head = model.model.model[-1]
     if getattr(detect_head, "reg_max", None) != 16:
         raise RuntimeError(
@@ -111,7 +125,7 @@ def main() -> int:
     parameter_count = sum(parameter.numel() for parameter in model.model.parameters())
 
     started = time.time()
-    model.train(
+    train_kwargs = dict(
         data=str(args.data.resolve()),
         imgsz=args.imgsz,
         epochs=args.epochs,
@@ -125,10 +139,13 @@ def main() -> int:
         seed=args.seed,
         deterministic=True,
         patience=args.patience,
-        pretrained=False,
+        pretrained=initial_weights is not None,
         plots=True,
         verbose=True,
     )
+    if args.lr0 is not None:
+        train_kwargs["lr0"] = args.lr0
+    model.train(**train_kwargs)
     run_dir = pathlib.Path(model.trainer.save_dir)
     best_checkpoint = run_dir / "weights" / "best.pt"
     if not best_checkpoint.exists():
@@ -174,6 +191,7 @@ def main() -> int:
         "longpet.dataset_manifest_sha256": (
             sha256(manifest_path) if manifest_path.exists() else "unavailable"
         ),
+        "longpet.initial_weights": str(initial_weights or "architecture_initialization"),
     }
     add_metadata(onnx_model, metadata)
     args.model_output.parent.mkdir(parents=True, exist_ok=True)

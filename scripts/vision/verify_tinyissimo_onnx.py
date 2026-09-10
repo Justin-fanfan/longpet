@@ -41,6 +41,8 @@ def main() -> int:
     parser.add_argument("--images", required=True, type=pathlib.Path)
     parser.add_argument("--data", type=pathlib.Path,
                         help="optional dataset YAML for PyTorch/ONNX mAP comparison")
+    parser.add_argument("--split", choices=("train", "val", "test"), default="val",
+                        help="dataset split used for the metric comparison")
     parser.add_argument("--limit", type=int, default=50)
     parser.add_argument("--atol", type=float, default=1e-4)
     parser.add_argument("--output", type=pathlib.Path)
@@ -107,14 +109,15 @@ def main() -> int:
     }
     if args.data:
         pytorch_metrics = pytorch_yolo.val(
-            data=str(args.data.resolve()), imgsz=size, batch=64,
-            device="cpu", plots=False, verbose=False,
+            data=str(args.data.resolve()), imgsz=size, batch=1, rect=False,
+            split=args.split, device="cpu", plots=False, verbose=False,
         )
         onnx_metrics = YOLO(str(args.onnx.resolve())).val(
-            data=str(args.data.resolve()), imgsz=size, batch=1,
-            device="cpu", plots=False, verbose=False,
+            data=str(args.data.resolve()), imgsz=size, batch=1, rect=False,
+            split=args.split, device="cpu", plots=False, verbose=False,
         )
         result["validation"] = {
+            "split": args.split,
             "pytorch": {
                 "precision": float(pytorch_metrics.box.mp),
                 "recall": float(pytorch_metrics.box.mr),

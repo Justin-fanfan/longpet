@@ -9,6 +9,7 @@ import hashlib
 import json
 import pathlib
 import random
+import shutil
 import time
 import urllib.error
 import urllib.request
@@ -55,7 +56,32 @@ def download(url: str, destination: pathlib.Path, retries: int = 5) -> None:
             time.sleep(min(2 ** (attempt - 1), 8))
 
 
-def prepare_annotations(cache: pathlib.Path) -> pathlib.Path:
+def prepare_annotations(
+    cache: pathlib.Path,
+    coco_root: pathlib.Path | None = None,
+) -> pathlib.Path:
+    if coco_root is not None:
+        candidates = [
+            coco_root / "annotations",
+            coco_root,
+        ]
+        for extracted in candidates:
+            train = extracted / "instances_train2017.json"
+            val = extracted / "instances_val2017.json"
+            if train.exists() and val.exists():
+                for annotation in (train, val):
+                    expected = EXPECTED_ANNOTATION_SHA256.get(annotation.name)
+                    if expected and sha256(annotation) != expected:
+                        raise RuntimeError(
+                            f"COCO annotation SHA-256 mismatch: {annotation}"
+                        )
+                return extracted
+        raise RuntimeError(
+            "cannot find COCO annotations under --coco-root; expected "
+            "annotations/instances_train2017.json and "
+            "annotations/instances_val2017.json"
+        )
+
     extracted = cache / "annotations"
     train = extracted / "instances_train2017.json"
     val = extracted / "instances_val2017.json"
@@ -135,10 +161,52 @@ def yolo_lines(image: dict, annotations: list[dict]) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
+def resolve_local_image(
+    coco_root: pathlib.Path,
+    split: str,
+    file_name: str,
+) -> pathlib.Path:
+    candidates = [
+        coco_root / split / file_name,
+        coco_root / "images" / split / file_name,
+    ]
+    for candidate in candidates:
+        if candidate.exists():
+            return candidate
+    raise FileNotFoundError(
+        f"cannot find {file_name} for {split} under --coco-root; "
+        f"tried: {', '.join(str(path) for path in candidates)}"
+    )
+
+
+def materialize_local_file(source: pathlib.Path, destination: pathlib.Path) -> None:
+    """Prefer hard links to avoid duplicating the COCO image files."""
+    if destination.exists() and destination.stat().st_size > 0:
+        return
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        destination.hardlink_to(source)
+    except OSError:
+        shutil.copy2(source, destination)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", required=True, type=pathlib.Path)
-    parser.add_argument("--cache", required=True, type=pathlib.Path)
+    parser.add_argument(
+        "--cache",
+        type=pathlib.Path,
+        help="download cache; required only when --coco-root is not supplied",
+    )
+    parser.add_argument(
+        "--coco-root",
+        type=pathlib.Path,
+        help=(
+            "optional local COCO 2017 root. Expected layout: "
+            "<root>/train2017, <root>/val2017, <root>/annotations. "
+            "When set, images and annotations are read locally."
+        ),
+    )
     parser.add_argument("--train-positive", type=int, default=4000)
     parser.add_argument("--train-negative", type=int, default=1000)
     parser.add_argument("--val-positive", type=int, default=1000)
@@ -151,11 +219,22 @@ def main() -> int:
         parser.error("sample limits must be non-negative")
 
     output = args.output.resolve()
-    cache = args.cache.resolve()
-    annotations_root = prepare_annotations(cache)
+    coco_root = args.coco_root.resolve() if args.coco_root else None
+    if coco_root is not None and not coco_root.exists():
+        parser.error(f"--coco-root does not exist: {coco_root}")
+    if coco_root is None and args.cache is None:
+        parser.error("--cache is required when --coco-root is not supplied")
+    # The cache is not read in local-COCO mode; use a harmless placeholder so
+    # prepare_annotations keeps a single Path-based interface.
+    cache = args.cache.resolve() if args.cache else output
+    annotations_root = prepare_annotations(cache, coco_root)
     manifest: dict = {
         "format": 1,
-        "source": "COCO 2017 train2017 + val2017",
+        "source": (
+            f"COCO 2017 local root: {coco_root}"
+            if coco_root is not None
+            else "COCO 2017 train2017 + val2017"
+        ),
         "class_names": ["person"],
         "seed": args.seed,
         "splits": {},
@@ -204,17 +283,21 @@ def main() -> int:
 
     def fetch(job: tuple[str, dict, pathlib.Path]) -> None:
         split, image, destination = job
-        download(
-            IMAGE_BASE_URL.format(split=split, file_name=image["file_name"]),
-            destination,
-        )
+        if coco_root is not None:
+            source = resolve_local_image(coco_root, split, image["file_name"])
+            materialize_local_file(source, destination)
+        else:
+            download(
+                IMAGE_BASE_URL.format(split=split, file_name=image["file_name"]),
+                destination,
+            )
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = [executor.submit(fetch, job) for job in jobs]
         for index, future in enumerate(concurrent.futures.as_completed(futures), 1):
             future.result()
             if index % 250 == 0 or index == len(futures):
-                print(f"downloaded_or_verified={index}/{len(futures)}", flush=True)
+                print(f"materialized_or_verified={index}/{len(futures)}", flush=True)
 
     dataset_yaml = output / "coco-person.yaml"
     dataset_yaml.write_text(
