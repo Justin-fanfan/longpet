@@ -1,5 +1,8 @@
 # LongPet AI Provider 拆分与阿里云百炼接入报告
 
+> 历史记录：本文中的本机目录和 10.x 板端地址只描述当时环境；当前部署地址和命令见
+> [最新配置说明](../deploy/配置说明.md)。
+
 日期：2026-08-30
 
 项目：`D:\code_qt\longpet_main\longpet`

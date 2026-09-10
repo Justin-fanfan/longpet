@@ -21,17 +21,33 @@ LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本
 ## 目录
 
 ```text
-src/app/       应用组合根与业务流程控制
-src/model/     跨层数据模型
-src/data/      SQLite、Repository 与迁移
-src/services/  提醒、关怀、设置、系统状态
-src/platform/  操作系统与设备能力 Adapter
-src/pages/     正式页面及保留的后续页面
-src/widgets/   可复用视觉组件
-resources/     内嵌样式与图标
-tests/         V0.2 自动化与页面渲染验证
-docs/          版本工作报告
+src/           LongPet 正式 C++ runtime
+components/    LongPet 自维护、可独立运行的第一方组件
+resources/     内嵌样式、图标和声音
+scripts/       构建、训练、验证、benchmark 与数据准备工具
+third_party/   固定上游信息、补丁、许可证/provenance 和必要模型
+deploy/        板端 service、环境变量和配置样例
+tests/         C++ 自动化与页面渲染验证
+tools/         随 C++ 工程构建的辅助程序
+docs/          设计、实验、开发、部署与维护文档
 ```
+
+`components/longpet-kws` 是 LongPet 直接维护的 Python KWS 组件；
+`third_party/tinyissimo-yolo` 则只保存真正第三方 TinyissimoYOLO 的固定版本、补丁、训练依赖和
+正式小型模型。完整边界、目录树和外部训练工作区约定见
+[仓库结构与维护说明](docs/Repository-Structure-and-Maintenance.md)。
+
+## 当前 Vision 方向
+
+- Vision V1：FastestDet 352×352 历史基线，板端数秒一帧，不再作为正式实时 detector；
+- Vision V1.1：TinyissimoYOLO-v1-small 128×128 person-only FP32 ONNX，已完成接入和性能探索；
+- Vision V1.2：完整 COCO person checkpoint 加 LongPet 实拍 domain fine-tune，当前候选模型为
+  `tinyissimo-person-128-longpet-v1.onnx`，尚未替换仓库内 V1.1 runtime baseline，等待用户板端验收。
+
+当前产品主线是本地人物检测、在场/方向感知、低频 detector 配合轻量 tracker、后续人物跟随与
+主动交互，再逐步探索轻量手势识别。固定摄像头视角明显偏上，跌倒检测仅作为历史探索记录，
+不再是当前 roadmap 的下一版本必做项。V1.2 PC 结果与尚未覆盖的无人误报指标见
+[Vision V1.2 报告](docs/LongPet-Vision-V1.2-Domain-Finetune-Report.md)。
 
 ## 构建
 

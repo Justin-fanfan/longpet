@@ -24,3 +24,11 @@ See `docs/LongPet-Vision-V1.1-TinyissimoYOLO-Report.md` before enabling it.
 The pinned upstream source and exported model metadata identify the code as
 AGPL-3.0. Complete a license review before distributing this trained derivative
 beyond the project/team.
+
+## V1.2 candidate
+
+`tinyissimo-person-128-longpet-v1.onnx` is documented in
+`docs/LongPet-Vision-V1.2-Domain-Finetune-Report.md`, but is intentionally not
+checked into this directory yet. The V1.1 file above remains the runtime
+baseline. Do not replace it until the user has accepted the exact V1.2 artifact
+on the 2K300 board and its provenance/SHA-256 have been reviewed.

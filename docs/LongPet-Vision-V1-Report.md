@@ -1,5 +1,9 @@
 # LongPet Vision V1 实现与板端基准报告
 
+> 历史记录：本文保留 Vision V1 benchmark 使用的 10.x 板端地址和 FastestDet 原始数字。
+> 当前部署地址、默认 Tinyissimo 状态和 V1.2 候选说明见
+> [最新配置说明](../deploy/配置说明.md)。
+
 日期：2026-09-01  
 分支基线：`main` / `42ca6a9a5f73b8d32bf4c148177e2556d64f8af8`  
 目标板：Loongson 2K0300，LoongArch64，单核 1 GHz，无 LSX/LASX

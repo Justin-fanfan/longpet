@@ -1,6 +1,9 @@
 # LongPet 视频通话信令第一步实施报告
 
 > 2026-08-29 更新：本文记录上一阶段“仅信令”基线，完整双向媒体已由 `LongPet-LAN-Bidirectional-Voice-Video-Call-Report.md` 取代；不要再把 `connected + mediaReady=false` 当成可用通话。
+>
+> 本文中的 10.x 板端地址是历史实验地址；当前部署地址和命令见
+> [最新配置说明](../deploy/配置说明.md)。
 
 日期：2026-08-29  
 板端地址：`10.240.178.51`

@@ -1,5 +1,8 @@
 # LongPet FamilyLink 远程设置与提醒写入报告
 
+> 历史记录：本文中的 10.x 板端地址是当时实验事实；当前部署地址和命令见
+> [最新配置说明](../deploy/配置说明.md)。
+
 - 日期：2026-08-29
 - 前置提交：`ab45dd1 feat: add authenticated FamilyLink read API`
 - 板端地址：`10.188.219.51`

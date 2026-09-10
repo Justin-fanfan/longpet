@@ -1,4 +1,9 @@
-# Vision V1.1 board artifacts
+# Vision board artifacts
+
+The current checked-in runtime baseline is Vision V1.1. Vision V1.2 has passed
+the documented PC evaluation but remains a candidate pending user board
+acceptance; it is not present in `third_party/tinyissimo-yolo/models/` and does
+not replace the default path below.
 
 Runtime files:
 

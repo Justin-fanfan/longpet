@@ -292,7 +292,7 @@ Weather refresh skipped: network unavailable
 | [SettingsPage.h/.cpp](../src/pages/SettingsPage.cpp) | 「关于设备」副标题承载 QWeather 来源署名（阶段三补充） |
 | [SystemModels.h](../src/model/SystemModels.h) | `SystemStatus.weatherConditionCode` |
 | [QWeatherProvider.cpp](../src/platform/QWeatherProvider.cpp) | 阶段三：`scalarText/scalarDouble` 容忍数字形态 JSON |
-| [resources/resources.qrc](../resources/resources.qrc) + [resources/icons/](resources/icons/) | 注册 8 张新天气 SVG（阶段三） |
+| [resources/resources.qrc](../resources/resources.qrc) + [resources/icons/](../resources/icons/) | 注册 8 张新天气 SVG（阶段三） |
 | [CMakeLists.txt](../CMakeLists.txt) | 新源文件 + `LONGPET_REPO_DIR` 测试宏 |
 | [longpet.service](../deploy/longpet.service) | `LONGPET_WEATHER_CONFIG` 环境变量 |
 | [配置说明.md](../deploy/配置说明.md) | 天气部署/验收/FAQ 章节（含图标与 `missing now.temp` 排障） |
@@ -324,7 +324,7 @@ LongPet.V02: Totals: 31 passed, 0 failed, 1 skipped (3223ms)
 cmake -S . -B build -G "Visual Studio 17 2022" -DLONGPET_BUILD_TESTS=ON
 cmake --build build --config Release
 set PATH=C:\Qt\6.11.2\msvc2022_64\bin;%PATH%
-build\Release\LongPetV02Tests.exe -o result.txt,txt
+ctest --test-dir build -C Release --output-on-failure
 ```
 
 ### LoongArch64 板子（目标环境）

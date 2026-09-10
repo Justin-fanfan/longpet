@@ -1,5 +1,8 @@
 # LongPet 开发板 RTL8188FU 启动自愈与 Qt/linuxfb 抢屏处理报告
 
+> 历史记录：本文中的 10.x 地址、DHCP lease 和网关是当时排障证据；当前部署地址和命令见
+> [最新配置说明](../deploy/配置说明.md)，不要改写下文原始日志。
+
 - 实施日期：2026-08-17（Asia/Shanghai）
 - 目标设备：LongPet 开发板，`10.234.167.51`
 - 系统：Buildroot 2024.08，LoongArch64

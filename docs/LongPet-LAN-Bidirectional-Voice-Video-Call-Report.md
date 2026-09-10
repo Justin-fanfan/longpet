@@ -1,5 +1,8 @@
 # LongPet 局域网双向语音 / 视频通话实施报告
 
+> 历史记录：本文中的本机目录和 10.x 板端地址只描述当时实验；当前部署地址和命令见
+> [最新配置说明](../deploy/配置说明.md)，历史性能和联调事实不作改写。
+
 日期：2026-08-29  
 LongPet 目录：`D:\code_qt\longpet_main\longpet`  
 家属端目录：`D:\code\family-desktop`  
