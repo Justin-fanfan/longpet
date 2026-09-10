@@ -30,6 +30,7 @@ public:
     ProviderHttpClient(QString providerName, int timeoutMs,
                        QObject* parent = nullptr);
 
+    void preconnect(const QUrl& baseUrl);
     void postJson(quint64 sessionId, const QUrl& url, const QString& apiKey,
                   const QByteArray& json, const Headers& extraHeaders = {});
     void postJsonStream(quint64 sessionId, const QUrl& url,

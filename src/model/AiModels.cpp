@@ -46,6 +46,10 @@ QString VoiceInteractionConfiguration::validationError() const
         return QStringLiteral("AI 请求超时必须在 1000 到 300000 毫秒之间");
     if (vadThresholdDb < -96.0 || vadThresholdDb > 0.0)
         return QStringLiteral("VAD 音量阈值必须在 -96 到 0 dBFS 之间");
+    if (!qIsFinite(vadNoiseRatio) || vadNoiseRatio < 1.0
+        || vadNoiseRatio > 20.0) {
+        return QStringLiteral("VAD 噪声倍率必须在 1 到 20 之间");
+    }
     if (vadSilenceTimeoutMs < 200 || vadSilenceTimeoutMs > 10'000)
         return QStringLiteral("VAD 静音等待必须在 200 到 10000 毫秒之间");
     if (recordingMinimumMs < 0 || recordingMinimumMs > 30'000)
@@ -90,13 +94,13 @@ QString KwsConfiguration::validationError() const
     if (inputSampleRate < 8'000 || inputSampleRate > 192'000)
         return QStringLiteral("KWS 采样率必须在 8000 到 192000 Hz 之间");
     for (const double threshold : {wakeThreshold, ignoredHelloThreshold,
-                                   companionThreshold, emergencyThreshold}) {
-        if (threshold <= 0.0 || threshold > 1.0)
+                                   companionThreshold, emergencyThreshold, commandThreshold}) {
+        if (!qIsFinite(threshold) || threshold <= 0.0 || threshold > 1.0)
             return QStringLiteral("KWS 关键词阈值必须大于 0 且不超过 1");
     }
-    if (vadThresholdDb < -96.0 || vadThresholdDb > 0.0)
+    if (!qIsFinite(vadThresholdDb) || vadThresholdDb < -96.0 || vadThresholdDb > 0.0)
         return QStringLiteral("KWS VAD 阈值必须在 -96 到 0 dBFS 之间");
-    if (vadNoiseRatio < 1.0 || vadNoiseRatio > 20.0)
+    if (!qIsFinite(vadNoiseRatio) || vadNoiseRatio < 1.0 || vadNoiseRatio > 20.0)
         return QStringLiteral("KWS VAD 噪声倍率必须在 1 到 20 之间");
     if (commandTimeoutMs < 1'000 || commandTimeoutMs > 60'000)
         return QStringLiteral("KWS 指令窗口必须在 1000 到 60000 毫秒之间");

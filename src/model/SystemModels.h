@@ -10,6 +10,7 @@ struct SystemStatus {
     QString weatherConditionCode;
     bool networkKnown = false;
     bool networkAvailable = false;
+    bool localNetworkAvailable = false;
     QString networkSummary;
     int batteryPercent = -1;
 };

@@ -1,5 +1,10 @@
 # LongPet AI 语音交互 V3 实现与测试报告
 
+> 此文为 2026-08-31 的历史实现记录。2026-09-07 已接入 PR #3 词表并修复暂停握手、
+> 音频释放、离线策略与工具参数校验；当前能力及限制以
+> [V3 / PR #3 接入报告](LongPet-AI-Voice-V3-KWS-PR3-Integration-Report-2026-09-07.md)
+> 和 `deploy/配置说明.md` 为准，尤其不再适用本文“仅四个关键词”的限制。
+
 日期：2026-08-31  
 目标平台：LongPet / LoongArch64 / Qt 6  
 配置文件：`/etc/longpet/ai.ini`

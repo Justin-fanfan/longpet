@@ -37,6 +37,7 @@ void SystemService::setNetworkState(bool known, bool available, const QString& s
 {
     m_status.networkKnown = known;
     m_status.networkAvailable = known && available;
+    m_status.localNetworkAvailable = known && available;
     m_status.networkSummary = summary.simplified();
     if (m_status.networkSummary.isEmpty()) {
         m_status.networkSummary = known
@@ -50,6 +51,14 @@ void SystemService::setNetworkState(bool known, bool available, const QString& s
 void SystemService::setBatteryPercent(int percent)
 {
     m_status.batteryPercent = percent < 0 ? -1 : qBound(0, percent, 100);
+    emit statusChanged(m_status);
+}
+
+void SystemService::setLocalNetworkAvailable(bool available)
+{
+    if (m_status.localNetworkAvailable == available)
+        return;
+    m_status.localNetworkAvailable = available;
     emit statusChanged(m_status);
 }
 

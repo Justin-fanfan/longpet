@@ -195,12 +195,15 @@ bool Application::initialize(QString* error)
             &VoiceCapabilityService::reportProviderAvailability);
     m_kwsProcessAdapter = std::make_unique<KwsProcessAdapter>(
         aiConfiguration.kws);
+    m_mediaSessionCoordinator->setKws(m_kwsProcessAdapter.get(), aiConfiguration.kws);
     m_voiceCommandDispatcher = std::make_unique<VoiceCommandDispatcher>(
         aiConfiguration.kws, m_kwsProcessAdapter.get(),
         m_voiceCapabilityService.get(), m_voiceInteractionService.get(),
         m_localCompanionService.get());
     connect(m_networkStatusAdapter.get(), &NetworkStatusAdapter::networkStateChanged,
             m_systemService.get(), &SystemService::setNetworkState);
+    connect(m_networkStatusAdapter.get(), &NetworkStatusAdapter::localNetworkStateChanged,
+            m_systemService.get(), &SystemService::setLocalNetworkAvailable);
     connect(m_audioVolumeAdapter.get(), &AudioVolumeAdapter::controlStateChanged,
             m_systemService.get(), &SystemService::setAudioControlState);
     connect(m_backlightAdapter.get(), &BacklightAdapter::controlStateChanged,
@@ -251,6 +254,11 @@ bool Application::initialize(QString* error)
         m_systemService.get(), 15'000, m_networkService.get(),
         m_videoCallService.get(), m_voiceInteractionService.get(),
         m_voiceCommandDispatcher.get(), m_voiceToolRegistry.get());
+
+    connect(m_videoCallService.get(), &VideoCallService::callActivityChanged,
+            m_voiceCommandDispatcher.get(),
+            &VoiceCommandDispatcher::notifyExternalMediaActivity);
+
     m_controller->initialize();
     m_voiceCommandDispatcher->start();
     return true;
@@ -271,6 +279,8 @@ void Application::show()
 
 void Application::shutdown()
 {
+    if (m_mediaSessionCoordinator)
+        m_mediaSessionCoordinator->shutdown();
     if (m_voiceCommandDispatcher)
         m_voiceCommandDispatcher->stop();
     if (m_weatherService)

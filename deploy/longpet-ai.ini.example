@@ -24,10 +24,11 @@ voice=Cherry
 [voice]
 system_prompt=你是 LongPet，一位耐心、温和、回答简短的陪伴助手。请使用中文回答，避免使用复杂术语。
 request_timeout_ms=30000
-# 轻量能量 VAD：阈值单位为 dBFS。环境噪声较大时可逐步调高到 -38 左右，
-# 总是误判为静音时可逐步调低到 -48 左右。
+# 轻量自适应能量 VAD：绝对门限是灵敏度下限，实际门限会随背景噪声自动提高。
+# noise_ratio 越大越不容易把噪声当人声；越小越容易检测较轻的讲话声。
 vad_enabled=true
-vad_threshold_db=-42.0
+vad_threshold_db=-55.0
+vad_noise_ratio=2.0
 vad_silence_timeout_ms=900
 recording_minimum_ms=600
 vad_minimum_speech_ms=160
@@ -43,6 +44,8 @@ tts_prebuffer_segments=2
 history_turns=4
 # AI Provider 失败后，KWS 暂时使用离线策略；到期后重新允许在线尝试。
 availability_retry_ms=30000
+# 使用公网 API 保持 true；三套 Provider 都在局域网时可设 false（仍检查本地网络连接）。
+require_internet=true
 
 [tools]
 # 仅开放 LongPet 内置白名单工具，不允许 shell、任意文件或任意 HTTP。
@@ -68,10 +71,13 @@ wake_threshold=0.15
 hello_threshold=0.10
 companion_threshold=0.05
 emergency_threshold=0.05
+# PR #3 新增的停止/提醒/时间/联系家人/主页/音量关键词共用阈值，需板端标定。
+command_threshold=0.05
 vad_threshold_db=-60.0
 vad_noise_ratio=2.5
 command_timeout_ms=10000
-pause_timeout_ms=1500
+# 确认采集进程已释放麦克风的等待上限；超时失败，不继续抢占设备。
+pause_timeout_ms=5000
 resume_cooldown_ms=1200
 restart_delay_ms=2000
 

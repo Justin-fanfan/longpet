@@ -50,6 +50,11 @@ AliyunAsrProvider::AliyunAsrProvider(
             this, &AsrProviderPort::requestFailed);
 }
 
+void AliyunAsrProvider::prepare()
+{
+    m_http.preconnect(m_configuration.apiBaseUrl);
+}
+
 void AliyunAsrProvider::transcribe(quint64 sessionId,
                                    const QByteArray& wavAudio)
 {
@@ -154,6 +159,11 @@ AliyunTtsProvider::AliyunTtsProvider(
             this, &AliyunTtsProvider::handleResponse);
     connect(&m_http, &ProviderHttpClient::failed,
             this, &TtsProviderPort::requestFailed);
+}
+
+void AliyunTtsProvider::prepare()
+{
+    m_http.preconnect(m_configuration.apiBaseUrl);
 }
 
 void AliyunTtsProvider::synthesize(quint64 sessionId, const QString& text)

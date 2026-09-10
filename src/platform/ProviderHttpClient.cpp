@@ -1,6 +1,7 @@
 #include "ProviderHttpClient.h"
 
 #include <QCoreApplication>
+#include <QDebug>
 #include <QHttpMultiPart>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -83,6 +84,25 @@ ProviderHttpClient::ProviderHttpClient(QString providerName, int timeoutMs,
         m_timedOut = true;
         m_reply->abort();
     });
+}
+
+void ProviderHttpClient::preconnect(const QUrl& baseUrl)
+{
+    const QString scheme = baseUrl.scheme().toLower();
+    const QString host = baseUrl.host();
+    if (host.isEmpty() || (scheme != QStringLiteral("http")
+                           && scheme != QStringLiteral("https"))) {
+        return;
+    }
+    const quint16 port = static_cast<quint16>(baseUrl.port(
+        scheme == QStringLiteral("https") ? 443 : 80));
+    if (scheme == QStringLiteral("https"))
+        m_network.connectToHostEncrypted(host, port);
+    else
+        m_network.connectToHost(host, port);
+    qInfo().noquote() << QStringLiteral(
+        "AI network preconnect provider=%1 host=%2 port=%3")
+        .arg(m_providerName, host).arg(port);
 }
 
 void ProviderHttpClient::postJson(quint64 sessionId, const QUrl& url,

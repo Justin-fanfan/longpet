@@ -37,6 +37,7 @@ private:
     QTimer m_captureKillTimer;
     QTimer m_playbackKillTimer;
     QByteArray m_pcm;
+    qsizetype m_progressBytesReported = 0;
     QByteArray m_playbackAudio;
     quint64 m_captureSessionId = 0;
     quint64 m_playbackSessionId = 0;

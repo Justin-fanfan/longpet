@@ -17,6 +17,7 @@ public:
                           VoiceAudioPort* audio,
                           MediaSessionCoordinator* mediaSessions = nullptr,
                           QObject* parent = nullptr);
+    ~LocalCompanionService() override;
 
     bool start(QString* error = nullptr);
     void stop();
@@ -30,6 +31,7 @@ signals:
                         const QString& diagnostic);
 
 private:
+    void playWhenReady();
     void finish(bool success, const QString& userMessage = {},
                 const QString& diagnostic = {});
 
@@ -39,6 +41,9 @@ private:
     VoiceAudioPort* m_audio = nullptr;
     MediaSessionCoordinator* m_mediaSessions = nullptr;
     QString m_lastClipId;
+    QByteArray m_pendingAudio;
+    QString m_failureMessage;
+    QString m_failureDiagnostic;
     quint64 m_nextSession = 0;
     quint64 m_sessionId = 0;
     bool m_active = false;

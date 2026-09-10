@@ -59,9 +59,12 @@ void VoiceCapabilityService::reevaluate()
     } else if (!m_systemService || !m_systemService->status().networkKnown) {
         available = false;
         reason = QStringLiteral("网络状态尚未就绪");
-    } else if (!m_systemService->status().networkAvailable) {
+    } else if (m_configuration.voice.requireInternet
+                   ? !m_systemService->status().networkAvailable
+                   : !m_systemService->status().localNetworkAvailable) {
         available = false;
-        reason = QStringLiteral("设备当前未联网");
+        reason = m_configuration.voice.requireInternet ? QStringLiteral("设备当前未连接互联网")
+                                                      : QStringLiteral("设备当前未连接局域网");
     } else if (m_providerDegraded) {
         available = false;
         reason = m_providerReason.isEmpty()

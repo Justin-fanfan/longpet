@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass
+import math
 
 import numpy as np
 
@@ -36,8 +37,14 @@ class EnergyVad:
         pre_roll_frames = max(self.trigger_frames, pre_roll_ms // frame_ms)
 
         self.noise_floor = self.absolute_threshold / self.noise_ratio
+        self.effective_threshold = self.absolute_threshold
         self._sample_buffer = np.empty(0, dtype=np.float32)
         self._pre_roll: deque[np.ndarray] = deque(maxlen=pre_roll_frames)
+        # One second of low-percentile history lets the gate learn stationary
+        # USB microphone noise even when it starts above the absolute floor.
+        self._noise_history: deque[float] = deque(
+            maxlen=max(pre_roll_frames, 1_000 // frame_ms)
+        )
         self._voiced_frames = 0
         self._silent_frames = 0
         self._active = False
@@ -46,17 +53,26 @@ class EnergyVad:
     def active(self) -> bool:
         return self._active
 
+    @property
+    def noise_floor_db(self) -> float:
+        return 20.0 * math.log10(max(self.noise_floor, 1e-6))
+
+    @property
+    def effective_threshold_db(self) -> float:
+        return 20.0 * math.log10(max(self.effective_threshold, 1e-6))
+
     def _is_voiced(self, frame: np.ndarray) -> bool:
         centered = frame - np.mean(frame, dtype=np.float32)
         rms = float(np.sqrt(np.mean(centered * centered, dtype=np.float32)))
-        threshold = max(self.absolute_threshold, self.noise_floor * self.noise_ratio)
-        voiced = rms >= threshold
-        if not self._active and not voiced:
-            # Learn stationary background slowly, but never let one loud frame
-            # immediately redefine the noise floor.
-            limited = min(rms, threshold)
-            self.noise_floor = 0.98 * self.noise_floor + 0.02 * limited
-        return voiced
+        if not self._active:
+            self._noise_history.append(rms)
+            levels = np.fromiter(self._noise_history, dtype=np.float32)
+            index = (len(levels) - 1) // 5
+            self.noise_floor = float(np.partition(levels, index)[index])
+            self.effective_threshold = max(
+                self.absolute_threshold, self.noise_floor * self.noise_ratio
+            )
+        return rms >= self.effective_threshold
 
     def accept(self, audio: np.ndarray) -> list[VadChunk]:
         samples = np.concatenate((self._sample_buffer, np.asarray(audio, dtype=np.float32)))

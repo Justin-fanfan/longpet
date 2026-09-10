@@ -41,9 +41,22 @@ VoiceInteractionService::VoiceInteractionService(
       m_vad(configuration.voice.vadThresholdDb,
             configuration.voice.vadSilenceTimeoutMs,
             configuration.voice.recordingMinimumMs,
-            configuration.voice.vadMinimumSpeechMs)
+            configuration.voice.vadMinimumSpeechMs,
+            configuration.voice.vadNoiseRatio)
 {
     m_recordingDeadline.setSingleShot(true);
+    if (m_mediaSessions) {
+        connect(m_mediaSessions, &MediaSessionCoordinator::mediaReady, this,
+                [this](const QString& owner) {
+            if (owner == MediaOwner)
+                startRecordingWhenReady();
+        });
+        connect(m_mediaSessions, &MediaSessionCoordinator::mediaFailed, this,
+                [this](const QString& owner, const QString& message) {
+            if (owner == MediaOwner && m_waitingForMedia)
+                fail(QStringLiteral("Media"), message);
+        });
+    }
     m_recordingDeadline.setInterval(qMax(1'000, configuration.voice.recordingMaximumMs));
     connect(&m_recordingDeadline, &QTimer::timeout, this, [this] {
         if (m_snapshot.state == VoiceInteractionState::Listening) {
@@ -121,7 +134,8 @@ VoiceInteractionSnapshot VoiceInteractionService::snapshot() const
 
 VoiceInteractionResult VoiceInteractionService::startInteraction()
 {
-    if (m_snapshot.isActive() || m_restartPending)
+    if (m_snapshot.isActive() || m_restartPending
+        || (m_resourcesActive && m_audioCancellationSessionId == 0))
         return {false, QStringLiteral("语音交互正在进行"), m_snapshot};
     if (m_audioCancellationSessionId != 0) {
         m_restartPending = true;
@@ -158,7 +172,15 @@ VoiceInteractionResult VoiceInteractionService::beginInteraction()
     if (m_mediaSessions && !m_mediaSessions->tryAcquire(MediaOwner))
         return fail(QStringLiteral("Media"), QStringLiteral("设备正在通话，请稍后再试"));
 
+    // Resolve DNS and establish reusable TCP/TLS connections while the user is
+    // speaking. This is best-effort and never blocks recording or changes the
+    // normal request timeout/error path.
+    m_asrProvider->prepare();
+    m_llmProvider->prepare();
+    m_ttsProvider->prepare();
+
     m_resourcesActive = true;
+    m_waitingForMedia = true;
     emit activityChanged(true);
     qInfo().noquote() << QStringLiteral(
         "Voice interaction session=%1 event=start vad=%2 llm_stream=%3 sentence_tts=%4")
@@ -167,14 +189,23 @@ VoiceInteractionResult VoiceInteractionService::beginInteraction()
             .arg(m_configuration.voice.llmStreamEnabled)
             .arg(m_configuration.voice.sentenceTtsEnabled);
     publish(VoiceInteractionState::Listening, QStringLiteral("正在打开麦克风"));
+    startRecordingWhenReady();
+    return {true, {}, m_snapshot};
+}
+
+void VoiceInteractionService::startRecordingWhenReady()
+{
+    if (!m_waitingForMedia || !m_resourcesActive || !m_snapshot.isActive()
+        || (m_mediaSessions && !m_mediaSessions->isReady(MediaOwner)))
+        return;
+    m_waitingForMedia = false;
     m_recordingDeadline.start();
     m_audio->startRecording(m_snapshot.sessionId);
-    return {true, {}, m_snapshot};
 }
 
 VoiceInteractionResult VoiceInteractionService::finishRecording()
 {
-    if (m_snapshot.state != VoiceInteractionState::Listening) {
+    if (m_snapshot.state != VoiceInteractionState::Listening || m_waitingForMedia) {
         return {false, QStringLiteral("当前没有正在进行的录音"), m_snapshot};
     }
     m_recordingDeadline.stop();
@@ -252,14 +283,20 @@ void VoiceInteractionService::handleRecordingProgress(
         m_snapshot.speechDetected = true;
         m_snapshot.statusMessage = QStringLiteral("听到您说话了");
         qInfo().noquote() << QStringLiteral(
-            "Voice interaction session=%1 event=vad_speech_detected captured_ms=%2 level_db=%3")
-                .arg(sessionId).arg(capturedMs).arg(levelDb, 0, 'f', 1);
+            "Voice interaction session=%1 event=vad_speech_detected captured_ms=%2 "
+            "level_db=%3 noise_db=%4 threshold_db=%5")
+                .arg(sessionId).arg(capturedMs).arg(levelDb, 0, 'f', 1)
+                .arg(update.noiseFloorDb, 0, 'f', 1)
+                .arg(update.effectiveThresholdDb, 0, 'f', 1);
         emit snapshotChanged(m_snapshot);
     }
     if (update.shouldStop) {
         qInfo().noquote() << QStringLiteral(
-            "Voice interaction session=%1 event=vad_end_of_speech captured_ms=%2")
-                .arg(sessionId).arg(capturedMs);
+            "Voice interaction session=%1 event=vad_end_of_speech captured_ms=%2 "
+            "noise_db=%3 threshold_db=%4")
+                .arg(sessionId).arg(capturedMs)
+                .arg(update.noiseFloorDb, 0, 'f', 1)
+                .arg(update.effectiveThresholdDb, 0, 'f', 1);
         finishRecording();
     }
 }
@@ -315,7 +352,7 @@ void VoiceInteractionService::handleLlmDelta(quint64 sessionId,
                                               const QString& delta)
 {
     if (!acceptsSession(sessionId) || !m_snapshot.generationActive
-        || delta.isEmpty()) {
+        || m_toolExecuting || delta.isEmpty()) {
         return;
     }
     const qint64 now = elapsedMs();
@@ -336,7 +373,7 @@ void VoiceInteractionService::handleLlmDelta(quint64 sessionId,
 void VoiceInteractionService::handleChatCompletion(quint64 sessionId,
                                                     const QString& text)
 {
-    if (!acceptsSession(sessionId) || !m_snapshot.generationActive)
+    if (!acceptsSession(sessionId) || !m_snapshot.generationActive || m_toolExecuting)
         return;
     const QString response = text.trimmed();
     if (response.isEmpty()) {
@@ -392,54 +429,81 @@ void VoiceInteractionService::handleChatCompletion(quint64 sessionId,
 void VoiceInteractionService::handleToolCalls(
     quint64 sessionId, const QString& content, const QList<AiToolCall>& calls)
 {
-    if (!acceptsSession(sessionId) || !m_snapshot.generationActive)
+    if (!acceptsSession(sessionId) || !m_snapshot.generationActive || m_toolExecuting)
         return;
+    if (!m_toolDecisionPending || !m_toolRegistry || calls.isEmpty() || calls.size() > 8
+        || m_toolRounds >= m_configuration.tools.maximumRounds) {
+        fail(QStringLiteral("Tool"), QStringLiteral("这次操作步骤异常，请换一种说法"),
+             QStringLiteral("unsolicited tool call or tool loop limit exceeded"));
+        return;
+    }
+    QSet<QString> ids;
+    for (const auto& call : calls) {
+        const bool repeated = m_executedToolCalls.contains(call.id);
+        const AiToolCall previous = m_executedToolCalls.value(call.id);
+        if (call.id.isEmpty() || call.id.size() > 128 || call.name.isEmpty()
+            || call.name.size() > 64 || call.argumentsJson.size() > 32 * 1024
+            || ids.contains(call.id)
+            || (repeated && (previous.name != call.name || previous.argumentsJson != call.argumentsJson))) {
+            fail(QStringLiteral("Tool"), QStringLiteral("语音操作参数异常，请再试一次"),
+                 QStringLiteral("malformed or conflicting tool call id"));
+            return;
+        }
+        ids.insert(call.id);
+    }
+    m_toolExecuting = true;
     m_toolDecisionPending = false;
     m_sentenceBuffer.clear();
-    if (!m_toolRegistry || calls.isEmpty()) {
-        fail(QStringLiteral("Tool"), QStringLiteral("语音操作暂时无法执行"),
-             QStringLiteral("tool call response received without registry or calls"));
-        return;
-    }
-    if (m_toolRounds >= m_configuration.tools.maximumRounds) {
-        fail(QStringLiteral("Tool"), QStringLiteral("这次操作步骤太多，请换一种说法"),
-             QStringLiteral("tool loop exceeded maximum_rounds=%1")
-                 .arg(m_configuration.tools.maximumRounds));
-        return;
-    }
-
+    m_snapshot.response.clear();
+    m_snapshot.statusMessage = QStringLiteral("正在执行操作");
     AiChatMessage assistant;
     assistant.role = QStringLiteral("assistant");
     assistant.content = content;
     assistant.toolCalls = calls;
     m_toolMessages.append(assistant);
-
-    for (const AiToolCall& call : calls) {
-        if (call.id.trimmed().isEmpty() || call.name.trimmed().isEmpty()) {
-            fail(QStringLiteral("Tool"), QStringLiteral("语音操作参数不完整，请再试一次"),
-                 QStringLiteral("tool call is missing id or name"));
-            return;
-        }
-        const AiToolExecutionResult result = m_toolRegistry->execute(call);
-        qInfo().noquote() << QStringLiteral(
-            "Voice interaction session=%1 stage=Tool name=%2 success=%3 args_chars=%4 result_chars=%5")
-                .arg(sessionId).arg(call.name).arg(result.success)
-                .arg(call.argumentsJson.size()).arg(result.content.size());
-        AiChatMessage toolMessage;
-        toolMessage.role = QStringLiteral("tool");
-        toolMessage.content = result.content;
-        toolMessage.toolCallId = call.id;
-        toolMessage.name = call.name;
-        m_toolMessages.append(toolMessage);
-        if (!result.success && !result.userMessage.isEmpty())
-            m_snapshot.errorMessage = result.userMessage;
-    }
-
-    ++m_toolRounds;
-    m_snapshot.response.clear();
-    m_snapshot.statusMessage = QStringLiteral("操作完成，正在整理回答");
     emit snapshotChanged(m_snapshot);
-    requestLlm();
+    QTimer::singleShot(0, this, [this, sessionId, calls] { executeNextTool(sessionId, calls, 0); });
+}
+
+void VoiceInteractionService::executeNextTool(
+    quint64 sessionId, const QList<AiToolCall>& calls, int index)
+{
+    if (!acceptsSession(sessionId) || !m_toolExecuting)
+        return;
+    if (index == calls.size()) {
+        ++m_toolRounds;
+        m_toolExecuting = false;
+        m_snapshot.statusMessage = QStringLiteral("操作完成，正在整理回答");
+        emit snapshotChanged(m_snapshot);
+        requestLlm();
+        return;
+    }
+    const AiToolCall& call = calls.at(index);
+    QElapsedTimer clock;
+    clock.start();
+    const bool cached = m_toolResults.contains(call.id);
+    const AiToolExecutionResult result = cached ? m_toolResults.value(call.id)
+                                               : m_toolRegistry->execute(call);
+    // A service can synchronously emit navigation/cancellation during execution.
+    // The mutation remains committed, but a cancelled conversation must not continue.
+    if (!acceptsSession(sessionId))
+        return;
+    m_executedToolCalls.insert(call.id, call);
+    m_toolResults.insert(call.id, result);
+    qInfo().noquote() << QStringLiteral(
+        "Voice interaction session=%1 stage=Tool name=%2 success=%3 duration_ms=%4 cached=%5")
+        .arg(sessionId).arg(call.name).arg(result.success).arg(clock.elapsed()).arg(cached);
+    AiChatMessage message;
+    message.role = QStringLiteral("tool");
+    message.content = result.content;
+    message.toolCallId = call.id;
+    message.name = call.name;
+    m_toolMessages.append(message);
+    if (!result.success && !result.userMessage.isEmpty())
+        m_snapshot.errorMessage = result.userMessage;
+    QTimer::singleShot(0, this, [this, sessionId, calls, index] {
+        executeNextTool(sessionId, calls, index + 1);
+    });
 }
 
 void VoiceInteractionService::requestLlm()
@@ -588,13 +652,16 @@ void VoiceInteractionService::handleAudioCancellationFinished(quint64 sessionId)
     if (sessionId != m_audioCancellationSessionId)
         return;
     m_audioCancellationSessionId = 0;
+    releaseResources();
     if (!m_restartPending || sessionId != m_restartWaitingSessionId)
         return;
-    m_restartPending = false;
-    m_restartWaitingSessionId = 0;
-    QTimer::singleShot(0, this, [this] {
-        if (!m_snapshot.isActive())
+    QTimer::singleShot(0, this, [this, sessionId] {
+        if (m_restartPending && m_restartWaitingSessionId == sessionId
+            && !m_snapshot.isActive()) {
+            m_restartPending = false;
+            m_restartWaitingSessionId = 0;
             beginInteraction();
+        }
     });
 }
 
@@ -667,7 +734,6 @@ void VoiceInteractionService::maybeCompleteInteraction()
         return;
     }
     appendHistory(m_snapshot.transcript, m_snapshot.response.trimmed());
-    releaseResources();
     m_snapshot.generationActive = false;
     m_snapshot.playbackActive = false;
     const bool speechFailed = m_ttsSuccessCount == 0 && m_ttsFailureCount > 0;
@@ -687,6 +753,8 @@ void VoiceInteractionService::maybeCompleteInteraction()
     if (m_ttsFailureCount == 0)
         emit providerAvailabilityChanged(true, {});
     emit snapshotChanged(m_snapshot);
+    emit interactionCompleted(m_snapshot.sessionId);
+    releaseResources();
 }
 
 QList<AiChatMessage> VoiceInteractionService::messagesFor(
@@ -766,10 +834,14 @@ void VoiceInteractionService::resetSessionWork()
     m_ttsFailureCount = 0;
     m_toolRounds = 0;
     m_toolMessages.clear();
+    m_executedToolCalls.clear();
+    m_toolResults.clear();
+    m_toolExecuting = false;
     m_llmFinished = false;
     m_ttsInFlight = false;
     m_audioPlaying = false;
     m_toolDecisionPending = false;
+    m_waitingForMedia = false;
 }
 
 void VoiceInteractionService::cancelSession(bool restartAfterCancellation)
@@ -779,6 +851,8 @@ void VoiceInteractionService::cancelSession(bool restartAfterCancellation)
     m_restartPending = restartAfterCancellation;
     m_restartWaitingSessionId = restartAfterCancellation ? sessionId : 0;
     m_audioCancellationSessionId = m_audio ? sessionId : 0;
+    // Fence old provider callbacks before aborting anything (including synchronous ports).
+    m_snapshot.state = VoiceInteractionState::Cancelled;
     m_recordingDeadline.stop();
     m_uiUpdateTimer.stop();
     if (m_asrProvider)
@@ -793,7 +867,6 @@ void VoiceInteractionService::cancelSession(bool restartAfterCancellation)
             .arg(restartAfterCancellation);
     logFinalMetrics(QStringLiteral("cancelled"));
     resetSessionWork();
-    releaseResources();
     m_snapshot.generationActive = false;
     m_snapshot.playbackActive = false;
     m_snapshot.state = VoiceInteractionState::Cancelled;
@@ -805,8 +878,11 @@ void VoiceInteractionService::cancelSession(bool restartAfterCancellation)
     emit snapshotChanged(m_snapshot);
     if (m_audio)
         m_audio->cancel(sessionId);
-    else if (restartAfterCancellation)
+    else {
+        releaseResources();
+        m_audioCancellationSessionId = sessionId;
         handleAudioCancellationFinished(sessionId);
+    }
 }
 
 void VoiceInteractionService::publish(VoiceInteractionState state,
@@ -823,6 +899,9 @@ VoiceInteractionResult VoiceInteractionService::fail(
     const QString& diagnostic, VoiceInteractionState terminalState)
 {
     const quint64 sessionId = m_snapshot.sessionId;
+    const bool ownsAudio = m_resourcesActive;
+    m_audioCancellationSessionId = ownsAudio && m_audio ? sessionId : 0;
+    m_snapshot.state = terminalState;
     m_recordingDeadline.stop();
     m_uiUpdateTimer.stop();
     if (m_asrProvider)
@@ -831,16 +910,11 @@ VoiceInteractionResult VoiceInteractionService::fail(
         m_llmProvider->cancel(sessionId);
     if (m_ttsProvider)
         m_ttsProvider->cancel(sessionId);
-    if (m_audio) {
-        m_audioCancellationSessionId = sessionId;
-        m_audio->cancel(sessionId);
-    }
     qWarning().noquote() << QStringLiteral(
         "Voice interaction session=%1 stage=%2 event=failed diagnostic=%3")
             .arg(sessionId).arg(stage, diagnostic.left(600));
     logFinalMetrics(QStringLiteral("failed_%1").arg(stage.toLower()));
     resetSessionWork();
-    releaseResources();
     m_snapshot.generationActive = false;
     m_snapshot.playbackActive = false;
     m_snapshot.state = terminalState;
@@ -849,6 +923,12 @@ VoiceInteractionResult VoiceInteractionService::fail(
     m_snapshot.errorMessage = userMessage.isEmpty()
         ? QStringLiteral("服务暂时不可用，请稍后再试") : userMessage;
     emit snapshotChanged(m_snapshot);
+    if (ownsAudio && m_audio) {
+        m_audioCancellationSessionId = sessionId;
+        m_audio->cancel(sessionId);
+    } else {
+        releaseResources();
+    }
     return {false, m_snapshot.errorMessage, m_snapshot};
 }
 

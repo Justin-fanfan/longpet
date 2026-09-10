@@ -9,6 +9,7 @@
 #include <QObject>
 #include <QQueue>
 #include <QTimer>
+#include <QHash>
 
 #include <functional>
 #include <optional>
@@ -34,6 +35,7 @@ public:
     ~VoiceInteractionService() override;
 
     VoiceInteractionSnapshot snapshot() const;
+    bool mediaActive() const { return m_resourcesActive || m_restartPending; }
     VoiceInteractionResult startInteraction();
     VoiceInteractionResult restartInteraction();
     VoiceInteractionResult finishRecording();
@@ -48,6 +50,7 @@ public:
 signals:
     void snapshotChanged(const VoiceInteractionSnapshot& snapshot);
     void activityChanged(bool active);
+    void interactionCompleted(quint64 sessionId);
     void providerAvailabilityChanged(bool available, const QString& reason);
 
 private:
@@ -67,6 +70,7 @@ private:
     };
 
     VoiceInteractionResult beginInteraction();
+    void startRecordingWhenReady();
     bool acceptsSession(quint64 sessionId) const;
     void handleRecordingStarted(quint64 sessionId);
     void handleRecordingProgress(quint64 sessionId, qint64 capturedMs,
@@ -77,6 +81,7 @@ private:
     void handleChatCompletion(quint64 sessionId, const QString& text);
     void handleToolCalls(quint64 sessionId, const QString& content,
                          const QList<AiToolCall>& calls);
+    void executeNextTool(quint64 sessionId, const QList<AiToolCall>& calls, int index);
     void handleSpeech(quint64 sessionId, const QByteArray& audio);
     void handlePlaybackStarted(quint64 sessionId);
     void handlePlaybackFinished(quint64 sessionId);
@@ -118,6 +123,8 @@ private:
     VoiceInteractionSnapshot m_snapshot;
     QList<AiChatMessage> m_history;
     QList<AiChatMessage> m_toolMessages;
+    QHash<QString, AiToolCall> m_executedToolCalls;
+    QHash<QString, AiToolExecutionResult> m_toolResults;
     SentenceBuffer m_sentenceBuffer;
     VoiceActivityDetector m_vad;
     QQueue<QString> m_ttsTextQueue;
@@ -136,9 +143,11 @@ private:
     int m_ttsFailureCount = 0;
     int m_toolRounds = 0;
     bool m_resourcesActive = false;
+    bool m_waitingForMedia = false;
     bool m_restartPending = false;
     bool m_llmFinished = false;
     bool m_ttsInFlight = false;
     bool m_audioPlaying = false;
     bool m_toolDecisionPending = false;
+    bool m_toolExecuting = false;
 };

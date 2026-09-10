@@ -72,4 +72,5 @@ private:
     VoiceToolRegistry* m_voiceToolRegistry = nullptr;
     QTimer m_controlTimeout;
     QString m_pendingVoiceToolPage;
+    bool m_localCompanionActive = false;
 };

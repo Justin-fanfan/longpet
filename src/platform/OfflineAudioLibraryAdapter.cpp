@@ -24,7 +24,7 @@ QStringList OfflineAudioLibraryAdapter::clipIds(QString* error) const
     return directory.entryList(
         {QStringLiteral("*.wav"), QStringLiteral("*.mp3"),
          QStringLiteral("*.ogg"), QStringLiteral("*.flac")},
-        QDir::Files | QDir::Readable, QDir::Name);
+        QDir::Files | QDir::Readable | QDir::NoSymLinks, QDir::Name);
 }
 
 QByteArray OfflineAudioLibraryAdapter::loadClip(const QString& clipId,
@@ -39,6 +39,11 @@ QByteArray OfflineAudioLibraryAdapter::loadClip(const QString& clipId,
         return {};
     }
     const QString path = QDir(m_directory).filePath(fileName);
+    if (QFileInfo(path).isSymLink() || !QFileInfo(path).isFile()) {
+        if (error)
+            *error = QStringLiteral("离线音频必须是目录中的普通文件");
+        return {};
+    }
     constexpr qint64 MaximumOfflineClipBytes = 16 * 1024 * 1024;
     if (QFileInfo(path).size() > MaximumOfflineClipBytes) {
         if (error)
@@ -52,7 +57,12 @@ QByteArray OfflineAudioLibraryAdapter::loadClip(const QString& clipId,
                 .arg(fileName, file.errorString());
         return {};
     }
-    const QByteArray audio = file.readAll();
+    const QByteArray audio = file.read(MaximumOfflineClipBytes + 1);
+    if (audio.size() > MaximumOfflineClipBytes) {
+        if (error)
+            *error = QStringLiteral("离线音频超过 16 MiB 限制");
+        return {};
+    }
     if (audio.isEmpty() && error)
         *error = QStringLiteral("离线音频 %1 为空").arg(fileName);
     return audio;

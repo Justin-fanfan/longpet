@@ -9,6 +9,9 @@
 #include "platform/VideoCallMediaAdapter.h"
 #include "services/VisionPorts.h"
 #include "services/VisionService.h"
+#include "services/KwsPorts.h"
+#include "services/MediaSessionCoordinator.h"
+#include "services/VideoCallService.h"
 
 #include <QMutex>
 #include <QMutexLocker>
@@ -104,6 +107,61 @@ public:
     mutable QMutex sequenceMutex;
     QList<quint64> detectedSequences;
 };
+
+class DelayedKwsPort final : public KwsPort {
+public:
+    void start() override { running = true; }
+    void pause() override { ++pauseCount; }
+    void resume() override { paused = false; }
+    void stop() override { running = false; emit kwsStopped(); }
+    bool isRunning() const override { return running; }
+    bool isPaused() const override { return paused; }
+    void acknowledge() { paused = true; emit kwsPaused(); }
+    int pauseCount = 0;
+    bool running = true;
+    bool paused = false;
+};
+
+class VisionAwareCallMedia final : public VideoCallMediaPort {
+public:
+    VisionAwareCallMedia(CameraSourcePort* camera, VisionService* vision)
+        : camera(camera), vision(vision) {}
+    quint16 port() const override { return 8788; }
+    bool prepare(const VideoCallSnapshot& snapshot, bool audioEnabled, QString* error) override
+    {
+        pausedAtPrepare = vision->isPaused();
+        audio = audioEnabled;
+        if (failPrepare) {
+            if (error)
+                *error = QStringLiteral("test media preparation failure");
+            return false;
+        }
+        if (snapshot.mode == VideoCallMode::Video)
+            acquired = camera->acquire(this, error);
+        return snapshot.mode == VideoCallMode::Voice || acquired;
+    }
+    void enableAudio() override { audio = true; }
+    void stop() override
+    {
+        if (acquired)
+            camera->release(this);
+        acquired = audio = false;
+    }
+    CameraSourcePort* camera;
+    VisionService* vision;
+    bool failPrepare = false;
+    bool pausedAtPrepare = false;
+    bool acquired = false;
+    bool audio = false;
+};
+
+class TestCallPrompt final : public CallPromptPlayerPort {
+public:
+    bool play(VideoCallMode, QString*) override { playing = true; return true; }
+    void stop() override { playing = false; }
+    void complete() { playing = false; emit finished(); }
+    bool playing = false;
+};
 }
 
 class VisionV1Test final : public QObject {
@@ -117,6 +175,7 @@ private slots:
     void detectorFactoryDefaultsToTinyissimoAndKeepsFastestDetFallback();
     void visionServiceUsesLatestFrameOnlyAndPauses();
     void videoCallAndVisionShareOneCameraSource();
+    void kwsGatedCallsPreserveVisionLifecycle();
     void missingModelAndCameraDegradeWithoutCrash();
 };
 
@@ -340,6 +399,81 @@ void VisionV1Test::videoCallAndVisionShareOneCameraSource()
         qunsetenv("LONGPET_MEDIA_PORT");
     else
         qputenv("LONGPET_MEDIA_PORT", originalPort);
+}
+
+void VisionV1Test::kwsGatedCallsPreserveVisionLifecycle()
+{
+    TestCameraCaptureAdapter camera;
+    FakeVisionDetector detector;
+    VisionService vision(&camera, &detector, 1);
+    vision.start();
+    QTRY_VERIFY(vision.isAvailable());
+    DelayedKwsPort kws;
+    KwsConfiguration config;
+    config.enabled = true;
+    config.pauseTimeoutMs = 100;
+    config.resumeCooldownMs = 1;
+    MediaSessionCoordinator coordinator;
+    coordinator.setKws(&kws, config);
+    VisionAwareCallMedia media(&camera, &vision);
+    TestCallPrompt prompt;
+    VideoCallService call(&media, &prompt, &coordinator);
+    connect(&call, &VideoCallService::callActivityChanged,
+            &vision, &VisionService::setVideoCallActive);
+    QSignalSpy activity(&call, &VideoCallService::callActivityChanged);
+
+    // Repeated voice/video calls share the existing camera and defer audio.
+    for (int cycle = 0; cycle < 10; ++cycle) {
+        const auto mode = cycle % 2 ? VideoCallMode::Voice : VideoCallMode::Video;
+        QVERIFY(call.startIncomingCall(mode).success);
+        QVERIFY(media.pausedAtPrepare);
+        QVERIFY(vision.isPaused());
+        QCOMPARE(camera.consumerCount(), mode == VideoCallMode::Video ? 2 : 1);
+        QVERIFY(!media.audio);
+        QVERIFY(!prompt.playing);
+        kws.acknowledge();
+        QVERIFY(prompt.playing);
+        QVERIFY(!media.audio);
+        prompt.complete();
+        QVERIFY(media.audio);
+        QVERIFY(call.hangUpFromDevice().success);
+        QVERIFY(!vision.isPaused());
+        QVERIFY(coordinator.owner().isEmpty());
+        QCOMPARE(camera.consumerCount(), 1);
+        QCOMPARE(camera.startCount, 1);
+        QCOMPARE(camera.stopCount, 0);
+    }
+    QCOMPARE(activity.count(), 20);
+
+    // Preparation failure and KWS timeout both unpause vision and release only
+    // the call's camera reference; a late pause ACK cannot resurrect the call.
+    media.failPrepare = true;
+    QVERIFY(!call.startOutgoingCall().success);
+    QVERIFY(media.pausedAtPrepare);
+    QVERIFY(!vision.isPaused());
+    QVERIFY(coordinator.owner().isEmpty());
+    media.failPrepare = false;
+    QVERIFY(call.startIncomingCall(VideoCallMode::Video).success);
+    QTRY_COMPARE(call.snapshot().state, VideoCallState::Failed);
+    QVERIFY(!vision.isPaused());
+    QCOMPARE(camera.consumerCount(), 1);
+    kws.acknowledge();
+    QVERIFY(!media.audio);
+    QVERIFY(!prompt.playing);
+
+    // A user's explicit vision pause survives a call; ending a call must not
+    // turn a separately paused detector back on.
+    vision.setPaused(true);
+    QVERIFY(call.startOutgoingCall().success);
+    QVERIFY(call.hangUpFromDevice().success);
+    QVERIFY(vision.isPaused());
+    vision.setPaused(false);
+    camera.feed(jpegPayload("after-calls"));
+    QTRY_VERIFY(detector.detectCount.load() > 0);
+    coordinator.shutdown();
+    vision.stop();
+    QCOMPARE(camera.consumerCount(), 0);
+    QCOMPARE(camera.stopCount, 1);
 }
 
 void VisionV1Test::missingModelAndCameraDegradeWithoutCrash()

@@ -14,6 +14,7 @@ public:
     OpenAiAsrProvider(const AsrProviderConfiguration& configuration,
                       int timeoutMs, QObject* parent = nullptr);
 
+    void prepare() override;
     void transcribe(quint64 sessionId, const QByteArray& wavAudio) override;
     void cancel(quint64 sessionId) override;
 
@@ -31,6 +32,7 @@ public:
     OpenAiCompatibleLlmProvider(const LlmProviderConfiguration& configuration,
                                 int timeoutMs, QObject* parent = nullptr);
 
+    void prepare() override;
     void completeChat(quint64 sessionId,
                       const QList<AiChatMessage>& messages) override;
     void streamChat(quint64 sessionId,
@@ -54,9 +56,11 @@ private:
     ProviderHttpClient m_http;
     SseEventParser m_sseParser;
     quint64 m_streamSessionId = 0;
+    qint64 m_streamBytesReceived = 0;
     QString m_streamText;
     bool m_streamDone = false;
     bool m_streamFinishReasonSeen = false;
+    QString m_streamFinishReason;
     QMap<int, AiToolCall> m_streamToolCalls;
 };
 
@@ -67,6 +71,7 @@ public:
     OpenAiTtsProvider(const TtsProviderConfiguration& configuration,
                       int timeoutMs, QObject* parent = nullptr);
 
+    void prepare() override;
     void synthesize(quint64 sessionId, const QString& text) override;
     void cancel(quint64 sessionId) override;
 

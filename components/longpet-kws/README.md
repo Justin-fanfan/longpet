@@ -6,6 +6,13 @@
 
 当前方案是 WeKWS FSMN-CTC：约 75.6 万参数，单个 ONNX 文件约 3.07 MB（权重已内嵌）。运行时只依赖 NumPy、ONNX Runtime 和 sounddevice。
 
+以下 `run.py` 用法描述组件的独立四词调试入口，不是 LongPet 产品的完整指令策略。
+正式应用由 `deploy/kws/longpet_kws_bridge.py` 加载同一个模型，覆盖为 11 个识别词条，
+使用暂停启动及带 `command_id` 的麦克风交接协议；不要与 `run.py` 同时启动而抢占设备。
+产品策略、半双工限制及部署方法见
+[配置说明](../../deploy/配置说明.md)和
+[KWS → Vision 迁移报告](../../docs/LongPet-KWS-to-Vision-v1.1-Migration-Audit-2026-09-11.md)。
+
 ```text
 待机 --“小龙小龙”--> 等待一条指令（最多 10 秒） --“你好 / 陪我说话 / 救命”--> 执行后立即回到待机
 ```
@@ -82,7 +89,7 @@ python3 run.py \
 
 ## VAD
 
-默认启用纯 NumPy 自适应能量 VAD：门限为 `-60 dBFS`，保留 300 ms 语音前缀，连续静音 500 ms 后结束一句并重置 FSMN 流式缓存。查看 VAD 开始/结束日志：
+默认启用纯 NumPy 自适应能量 VAD：`-60 dBFS` 是绝对灵敏度下限，实际门限取“绝对门限”和“滚动背景噪声 × `vad_noise_ratio`”中的较高值。滚动低分位估计可在 USB 麦克风启动底噪高于绝对门限时继续学习，避免 VAD 永久 active、ONNX 一直满负荷运行。程序保留 300 ms 语音前缀，连续静音 500 ms 后结束一句并重置 FSMN 流式缓存。查看 VAD 开始/结束日志：
 
 ```powershell
 .\.venv\Scripts\python.exe run.py --vad-debug
@@ -96,13 +103,15 @@ python3 run.py --device 2 --input-samplerate 48000 --audio-debug --vad-debug
 
 `AUDIO` 每秒输出一次 RMS/Peak dBFS。说话时 RMS 应明显高于安静时；如果始终接近 `-120 dBFS`，表示录音是全零或输入被静音。
 
-安静说话时不容易开启 VAD，可将绝对门限从默认 `-60 dBFS` 降低：
+安静说话时不容易开启 VAD，优先减小 `--vad-noise-ratio`；只有实际环境十分安静且仍达不到绝对门限时，才将 `--vad-threshold-db` 从默认 `-60 dBFS` 继续降低：
 
 ```powershell
 .\.venv\Scripts\python.exe run.py --vad-threshold-db -65
 ```
 
-环境噪声容易开启 VAD，可提高至 `-55 dBFS`，或增大 `--vad-noise-ratio`。对照无 VAD 效果可使用 `--no-vad`。
+环境噪声容易开启 VAD时，优先增大 `--vad-noise-ratio`，不要把绝对门限提高到接近正常讲话电平。对照无 VAD 效果可使用 `--no-vad`。
+
+LongPet bridge 每 30 秒输出 `KWS VAD` 汇总；`inference_ratio` 是实际送进 ONNX 的音频占比。安静时应明显低于 `100%`，持续接近 `100%` 表示噪声仍在触发门控。VAD 只能跳过静音推理，采集、重采样和能量计算仍会占用少量 CPU；持续讲话时推理占用恢复是预期行为。
 
 ## 查看关键词分数
 

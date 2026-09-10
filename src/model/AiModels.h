@@ -109,7 +109,8 @@ struct VoiceInteractionConfiguration {
     QString systemPrompt;
     int requestTimeoutMs = 30'000;
     bool vadEnabled = true;
-    double vadThresholdDb = -42.0;
+    double vadThresholdDb = -55.0;
+    double vadNoiseRatio = 2.0;
     int vadSilenceTimeoutMs = 900;
     int recordingMinimumMs = 600;
     int vadMinimumSpeechMs = 160;
@@ -121,6 +122,7 @@ struct VoiceInteractionConfiguration {
     int ttsPrebufferSegments = 2;
     int historyTurns = 4;
     int availabilityRetryMs = 30'000;
+    bool requireInternet = true;
 
     QString validationError() const;
 };
@@ -140,10 +142,11 @@ struct KwsConfiguration {
     double ignoredHelloThreshold = 0.10;
     double companionThreshold = 0.05;
     double emergencyThreshold = 0.05;
+    double commandThreshold = 0.05;
     double vadThresholdDb = -60.0;
     double vadNoiseRatio = 2.5;
     int commandTimeoutMs = 10'000;
-    int pauseTimeoutMs = 1'500;
+    int pauseTimeoutMs = 5'000;
     int resumeCooldownMs = 1'200;
     int restartDelayMs = 2'000;
 

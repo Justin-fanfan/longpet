@@ -11,6 +11,7 @@ public:
     AliyunAsrProvider(const AsrProviderConfiguration& configuration,
                       int timeoutMs, QObject* parent = nullptr);
 
+    void prepare() override;
     void transcribe(quint64 sessionId, const QByteArray& wavAudio) override;
     void cancel(quint64 sessionId) override;
 
@@ -29,6 +30,7 @@ public:
     AliyunTtsProvider(const TtsProviderConfiguration& configuration,
                       int timeoutMs, QObject* parent = nullptr);
 
+    void prepare() override;
     void synthesize(quint64 sessionId, const QString& text) override;
     void cancel(quint64 sessionId) override;
 

@@ -12,6 +12,7 @@ public:
     using QObject::QObject;
     ~AsrProviderPort() override = default;
 
+    virtual void prepare() {}
     virtual void transcribe(quint64 sessionId, const QByteArray& wavAudio) = 0;
     virtual void cancel(quint64 sessionId) = 0;
 
@@ -27,6 +28,7 @@ public:
     using QObject::QObject;
     ~LlmProviderPort() override = default;
 
+    virtual void prepare() {}
     virtual void completeChat(quint64 sessionId,
                               const QList<AiChatMessage>& messages) = 0;
     virtual void streamChat(quint64 sessionId,
@@ -65,6 +67,7 @@ public:
     using QObject::QObject;
     ~TtsProviderPort() override = default;
 
+    virtual void prepare() {}
     virtual void synthesize(quint64 sessionId, const QString& text) = 0;
     virtual void cancel(quint64 sessionId) = 0;
 

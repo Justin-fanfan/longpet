@@ -54,6 +54,10 @@ def resample_block(audio: np.ndarray, input_rate: int, output_rate: int = SAMPLE
     samples = np.asarray(audio, dtype=np.float32)
     if input_rate == output_rate or len(samples) == 0:
         return samples
+    if input_rate > output_rate and input_rate % output_rate == 0:
+        # The board uses exact 48 kHz -> 16 kHz blocks. Avoid constructing two
+        # interpolation arrays for every 100 ms capture block.
+        return samples[:: input_rate // output_rate].astype(np.float32, copy=True)
     output_count = max(1, round(len(samples) * output_rate / input_rate))
     source_positions = np.linspace(0.0, len(samples) - 1, output_count, dtype=np.float32)
     return np.interp(source_positions, np.arange(len(samples), dtype=np.float32), samples).astype(np.float32)

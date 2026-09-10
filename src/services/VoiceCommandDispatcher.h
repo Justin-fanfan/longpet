@@ -26,18 +26,31 @@ public:
     void requestStartInteraction();
     void requestRestartInteraction();
     void requestCancelInteraction();
+    void notifyExternalMediaActivity(bool active);
+    void notifyEmergencyActivity(bool active) { m_emergencyActive = active; }
 
 signals:
     void emergencyRequested();
+    void remindersRequested();
+    void familyContactRequested();
+    void homeRequested();
+    void volumeDeltaRequested(int delta);
+    void localTimeRequested(const QString& time);
+    void companionActivityChanged(bool active);
     void userMessage(const QString& message);
 
 private:
-    enum class PendingAction { None, StartVoice, RestartVoice, PlayCompanion };
+    enum class PendingAction {
+        None,
+        StartVoice,
+        RestartVoice,
+        PlayCompanion
+    };
 
     void handleKeyword(const KwsEvent& event);
     void prepare(PendingAction action);
     void performPending();
-    void scheduleKwsResume();
+    void clearCommandWindow();
     bool mediaBusy() const;
 
     KwsConfiguration m_configuration;
@@ -45,10 +58,10 @@ private:
     VoiceCapabilityService* m_capability = nullptr;
     VoiceInteractionService* m_voice = nullptr;
     LocalCompanionService* m_companion = nullptr;
-    QTimer m_pauseTimeout;
-    QTimer m_resumeTimer;
     QTimer m_commandWindow;
     PendingAction m_pending = PendingAction::None;
-    qint64 m_ignoreKeywordsUntilMs = 0;
+    bool m_started = false;
+    bool m_externalMediaActive = false;
+    bool m_emergencyActive = false;
     bool m_offlineArmed = false;
 };

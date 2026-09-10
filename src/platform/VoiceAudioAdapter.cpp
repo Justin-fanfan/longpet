@@ -42,11 +42,20 @@ VoiceAudioAdapter::VoiceAudioAdapter(QObject* parent)
     connect(&m_captureProcess, &QProcess::readyReadStandardOutput, this, [this] {
         const QByteArray chunk = m_captureProcess.readAllStandardOutput();
         m_pcm.append(chunk);
-        if (m_captureSessionId != 0 && !chunk.isEmpty()) {
-            constexpr qint64 bytesPerSecond = 16'000 * 2;
-            const qint64 capturedMs = m_pcm.size() * 1'000 / bytesPerSecond;
+        // QProcess readyRead chunks are not audio frames and varied from tens
+        // of milliseconds to over a second on the board. Feed VAD fixed 20 ms
+        // frames so trigger and hangover times match their configuration.
+        constexpr qsizetype frameBytes = 16'000 * 2 * 20 / 1'000;
+        constexpr qint64 bytesPerSecond = 16'000 * 2;
+        while (m_captureSessionId != 0
+               && m_pcm.size() - m_progressBytesReported >= frameBytes) {
+            const QByteArray frame = m_pcm.mid(m_progressBytesReported,
+                                               frameBytes);
+            m_progressBytesReported += frameBytes;
+            const qint64 capturedMs = m_progressBytesReported * 1'000
+                / bytesPerSecond;
             emit recordingProgress(m_captureSessionId, capturedMs,
-                                   pcmS16LeLevelDb(chunk));
+                                   pcmS16LeLevelDb(frame));
         }
     });
     connect(&m_captureProcess,
@@ -228,6 +237,7 @@ double VoiceAudioAdapter::pcmS16LeLevelDb(const QByteArray& pcm)
     if (sampleCount <= 0)
         return -96.0;
 
+    long double sum = 0.0;
     long double sumSquares = 0.0;
     for (qsizetype i = 0; i < sampleCount; ++i) {
         const int offset = static_cast<int>(i * 2);
@@ -235,9 +245,15 @@ double VoiceAudioAdapter::pcmS16LeLevelDb(const QByteArray& pcm)
             | (static_cast<quint16>(static_cast<quint8>(pcm.at(offset + 1))) << 8);
         const qint16 sample = static_cast<qint16>(raw);
         const long double normalized = static_cast<long double>(sample) / 32'768.0L;
+        sum += normalized;
         sumSquares += normalized * normalized;
     }
-    const long double rms = std::sqrt(sumSquares / sampleCount);
+    const long double mean = sum / sampleCount;
+    // Match the Python KWS energy definition: a DC offset is microphone bias,
+    // not speech, and must not hold the endpoint detector open.
+    const long double variance = qMax<long double>(
+        0.0L, sumSquares / sampleCount - mean * mean);
+    const long double rms = std::sqrt(variance);
     if (rms <= 0.0000158489L)
         return -96.0;
     return qMax(-96.0, 20.0 * std::log10(static_cast<double>(rms)));
@@ -324,6 +340,7 @@ void VoiceAudioAdapter::resetCapture()
 {
     m_captureKillTimer.stop();
     m_pcm.clear();
+    m_progressBytesReported = 0;
     m_captureSessionId = 0;
     m_finishingCapture = false;
     m_cancelingCapture = false;
