@@ -1,6 +1,7 @@
 #include "FamilyLinkService.h"
 
 #include "services/CareService.h"
+#include "services/AutomaticHeadTrackingService.h"
 #include "services/FamilyVisionMonitorService.h"
 #include "services/MotionService.h"
 #include "services/ReminderService.h"
@@ -39,14 +40,17 @@ FamilyLinkService::FamilyLinkService(ReminderService* reminderService,
                                      SystemService* systemService,
                                      VideoCallService* videoCallService,
                                      FamilyVisionMonitorService* visionMonitorService,
-                                     MotionService* motionService)
+                                     MotionService* motionService,
+                                     AutomaticHeadTrackingService*
+                                         automaticHeadTrackingService)
     : m_reminderService(reminderService),
       m_careService(careService),
       m_settingsService(settingsService),
       m_systemService(systemService),
       m_videoCallService(videoCallService),
       m_visionMonitorService(visionMonitorService),
-      m_motionService(motionService)
+      m_motionService(motionService),
+      m_automaticHeadTrackingService(automaticHeadTrackingService)
 {
 }
 
@@ -238,6 +242,38 @@ FamilyMotionSession FamilyLinkService::createMotionControlSession(
 bool FamilyLinkService::motionControlAvailable() const
 {
     return m_motionService && m_motionService->isAvailable();
+}
+
+bool FamilyLinkService::automaticHeadTracking(
+    AutomaticHeadTrackingSnapshot* snapshot, QString* error) const
+{
+    if (!snapshot || !m_automaticHeadTrackingService) {
+        if (error)
+            *error = QStringLiteral("自动跟头服务未初始化");
+        return false;
+    }
+    *snapshot = m_automaticHeadTrackingService->snapshot();
+    return true;
+}
+
+bool FamilyLinkService::setAutomaticHeadTracking(
+    bool enabled, AutomaticHeadTrackingSnapshot* snapshot,
+    QString* error) const
+{
+    if (!snapshot || !m_automaticHeadTrackingService) {
+        if (error)
+            *error = QStringLiteral("自动跟头服务未初始化");
+        return false;
+    }
+    if (!m_automaticHeadTrackingService->setEnabled(enabled, error))
+        return false;
+    *snapshot = m_automaticHeadTrackingService->snapshot();
+    return true;
+}
+
+bool FamilyLinkService::automaticHeadTrackingAvailable() const
+{
+    return m_automaticHeadTrackingService != nullptr;
 }
 
 QString FamilyLinkService::configuredDeviceId()

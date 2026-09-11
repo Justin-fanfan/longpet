@@ -20,10 +20,13 @@ QJsonObject statusObject(const MotionStatusSnapshot& status)
         {QStringLiteral("mcu_online"), status.mcuOnline},
         {QStringLiteral("fault"), status.fault},
         {QStringLiteral("remote_control_active"), status.remoteControlActive},
+        {QStringLiteral("automatic_head_tracking_active"),
+         status.automaticHeadTrackingActive},
         {QStringLiteral("mode"), motionControlModeName(status.mode)},
         {QStringLiteral("motion"), chassisMotionName(status.motion)},
         {QStringLiteral("stop_reason"), status.stopReason},
         {QStringLiteral("servo_us"), status.servoPulseUs},
+        {QStringLiteral("target_available"), status.targetAvailable},
         {QStringLiteral("imu_available"), status.imuAvailable},
         {QStringLiteral("detail"), status.detail},
         {QStringLiteral("updated_at"), status.updatedAt.isValid()

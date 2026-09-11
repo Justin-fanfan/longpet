@@ -31,13 +31,23 @@ struct MotionStatusSnapshot {
     bool mcuOnline = false;
     bool fault = false;
     bool remoteControlActive = false;
+    bool automaticHeadTrackingActive = false;
     MotionControlMode mode = MotionControlMode::Unknown;
     ChassisMotion motion = ChassisMotion::Stopped;
     QString stopReason;
     int servoPulseUs = -1;
+    bool targetAvailable = false;
     bool imuAvailable = false;
     QString detail;
     QDateTime updatedAt;
+};
+
+struct MotionTargetFrame {
+    int dx = 0;
+    int dy = 0;
+    int area = 0;
+
+    bool isLost() const { return area == 0; }
 };
 
 struct FamilyMotionSession {
@@ -67,3 +77,4 @@ bool headMotionFromName(const QString& name, HeadMotion* motion);
 Q_DECLARE_METATYPE(MotionStatusSnapshot)
 Q_DECLARE_METATYPE(ChassisMotion)
 Q_DECLARE_METATYPE(HeadMotion)
+Q_DECLARE_METATYPE(MotionTargetFrame)

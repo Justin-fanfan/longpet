@@ -6,6 +6,7 @@
 #include <memory>
 
 class AppController;
+class AutomaticHeadTrackingService;
 class AiConfigRepository;
 class AsrProviderPort;
 class AudioVolumeAdapter;
@@ -105,6 +106,8 @@ private:
     std::unique_ptr<EspSerialAdapter> m_espSerialAdapter;
     std::unique_ptr<FamilyMotionControlAdapter> m_familyMotionControlAdapter;
     std::unique_ptr<MotionService> m_motionService;
+    std::unique_ptr<AutomaticHeadTrackingService>
+        m_automaticHeadTrackingService;
     std::unique_ptr<VideoCallMediaAdapter> m_videoCallMediaAdapter;
     std::unique_ptr<CallPromptPlayerAdapter> m_callPromptPlayerAdapter;
     std::unique_ptr<VideoCallService> m_videoCallService;

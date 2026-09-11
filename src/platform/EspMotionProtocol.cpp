@@ -35,6 +35,18 @@ QByteArray EspMotionProtocol::headCommand(HeadMotion motion, int stepUs)
         + ' ' + QByteArray::number(stepUs) + '\n';
 }
 
+QByteArray EspMotionProtocol::targetCommand(const MotionTargetFrame& target)
+{
+    if (target.dx < -4'096 || target.dx > 4'096
+        || target.dy < -4'096 || target.dy > 4'096
+        || target.area < 0 || target.area > 16'777'216) {
+        return {};
+    }
+    return QByteArrayLiteral("TARGET ") + QByteArray::number(target.dx)
+        + ' ' + QByteArray::number(target.dy)
+        + ' ' + QByteArray::number(target.area) + '\n';
+}
+
 QByteArray EspMotionProtocol::statusCommand()
 {
     return QByteArrayLiteral("STATUS\n");
@@ -70,6 +82,7 @@ bool EspMotionProtocol::parseStatusLine(const QByteArray& line,
     status->motion = motion;
     status->stopReason = match.captured(3);
     status->fault = match.captured(4) == QStringLiteral("1");
+    status->targetAvailable = match.captured(5) == QStringLiteral("1");
     status->servoPulseUs = match.captured(6).toInt();
     status->imuAvailable = match.captured(7) == QStringLiteral("1");
     status->updatedAt = QDateTime::currentDateTimeUtc();

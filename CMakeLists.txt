@@ -41,6 +41,8 @@ set(
     src/app/FamilyLinkController.cpp
     src/app/FamilyLinkController.h
     src/model/ReminderModels.h
+    src/model/AutomaticHeadTrackingModels.cpp
+    src/model/AutomaticHeadTrackingModels.h
     src/model/AiModels.cpp
     src/model/AiModels.h
     src/model/WeatherModels.cpp
@@ -132,6 +134,8 @@ set(
     src/data/WeatherConfigRepository.h
     src/services/ReminderService.cpp
     src/services/ReminderService.h
+    src/services/AutomaticHeadTrackingService.cpp
+    src/services/AutomaticHeadTrackingService.h
     src/services/NetworkService.cpp
     src/services/NetworkService.h
     src/services/CareService.cpp

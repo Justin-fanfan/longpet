@@ -32,6 +32,9 @@ private:
     FamilyLinkHttpResponse videoCallActionResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse startVisionMonitorResponse() const;
     FamilyLinkHttpResponse startMotionControlResponse() const;
+    FamilyLinkHttpResponse automaticHeadTrackingResponse() const;
+    FamilyLinkHttpResponse updateAutomaticHeadTrackingResponse(
+        const QByteArray& body) const;
     FamilyLinkHttpResponse updateSettingsResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse createReminderResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse updateReminderResponse(ReminderId id,

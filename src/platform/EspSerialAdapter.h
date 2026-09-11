@@ -25,6 +25,8 @@ public:
                   QString* error = nullptr) override;
     bool sendHead(HeadMotion motion, int stepUs,
                   QString* error = nullptr) override;
+    bool sendTarget(const MotionTargetFrame& target,
+                    QString* error = nullptr) override;
     bool requestStatus(QString* error = nullptr) override;
 
 private:
@@ -42,4 +44,3 @@ private:
     QByteArray m_readBuffer;
     bool m_running = false;
 };
-

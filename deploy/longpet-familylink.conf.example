@@ -6,6 +6,9 @@ Environment="LONGPET_FAMILY_LINK_PORT=8787"
 Environment="LONGPET_FAMILY_LINK_TOKEN=replace-with-a-random-token"
 Environment="LONGPET_VISION_MONITOR_PORT=8789"
 Environment="LONGPET_VISION_MONITOR_FPS=7"
+Environment="LONGPET_AUTO_HEAD_ENABLED=0"
+Environment="LONGPET_AUTO_HEAD_MAX_TARGET_AGE_MS=500"
+Environment="LONGPET_AUTO_HEAD_TARGET_EXPIRY_MS=500"
 
 # 可选的家属端显示信息。
 # Environment="LONGPET_DEVICE_ID=longpet-ls-gd"

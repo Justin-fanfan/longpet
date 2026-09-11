@@ -134,6 +134,27 @@ QJsonObject motionControlSessionObject(const FamilyMotionSession& session)
     };
 }
 
+QJsonObject automaticHeadTrackingObject(
+    const AutomaticHeadTrackingSnapshot& snapshot)
+{
+    return {
+        {QStringLiteral("enabled"), snapshot.enabled},
+        {QStringLiteral("active"), snapshot.active},
+        {QStringLiteral("state"),
+         automaticHeadTrackingStateName(snapshot.state)},
+        {QStringLiteral("visionStatus"),
+         targetTrackingStatusName(snapshot.visionStatus)},
+        {QStringLiteral("frameSequence"),
+         static_cast<qint64>(snapshot.frameSequence)},
+        {QStringLiteral("targetAgeMs"), snapshot.targetAgeMs},
+        {QStringLiteral("dx"), snapshot.dx},
+        {QStringLiteral("dy"), snapshot.dy},
+        {QStringLiteral("area"), snapshot.area},
+        {QStringLiteral("detail"), snapshot.detail},
+        {QStringLiteral("updatedAt"), dateTimeValue(snapshot.updatedAt)}
+    };
+}
+
 bool reminderTypeFromName(const QString& value, ReminderType* type)
 {
     if (value == QStringLiteral("medicine")) {
@@ -568,6 +589,11 @@ FamilyLinkHttpResponse FamilyLinkController::handleRequest(
     } else if (path == QStringLiteral("/api/v1/motion-control/sessions")) {
         if (request.method == QByteArrayLiteral("POST"))
             return startMotionControlResponse();
+    } else if (path == QStringLiteral("/api/v1/automatic-head-tracking")) {
+        if (request.method == QByteArrayLiteral("GET"))
+            return automaticHeadTrackingResponse();
+        if (request.method == QByteArrayLiteral("PUT"))
+            return updateAutomaticHeadTrackingResponse(request.body);
     } else {
         ReminderId id = 0;
         if (!reminderIdFromPath(path, &id)) {
@@ -610,7 +636,9 @@ FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
         {QStringLiteral("remindersWrite"), true},
         {QStringLiteral("videoCallSignaling"), m_service->videoCallAvailable()},
         {QStringLiteral("visionMonitor"), m_service->visionMonitorAvailable()},
-        {QStringLiteral("motionControl"), m_service->motionControlAvailable()}
+        {QStringLiteral("motionControl"), m_service->motionControlAvailable()},
+        {QStringLiteral("automaticHeadTracking"),
+         m_service->automaticHeadTrackingAvailable()}
     };
     const QJsonObject device {
         {QStringLiteral("id"), snapshot.deviceId},
@@ -796,6 +824,63 @@ FamilyLinkHttpResponse FamilyLinkController::startMotionControlResponse() const
     }
     return jsonResponse(201, QByteArrayLiteral("Created"),
                         motionControlSessionObject(session));
+}
+
+FamilyLinkHttpResponse
+FamilyLinkController::automaticHeadTrackingResponse() const
+{
+    if (!m_service || !m_service->automaticHeadTrackingAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("AUTO_HEAD_UNAVAILABLE"),
+                             QStringLiteral("自动跟头服务尚未就绪"));
+    }
+    AutomaticHeadTrackingSnapshot snapshot;
+    QString error;
+    if (!m_service->automaticHeadTracking(&snapshot, &error)) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("AUTO_HEAD_UNAVAILABLE"), error);
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"),
+                        automaticHeadTrackingObject(snapshot));
+}
+
+FamilyLinkHttpResponse
+FamilyLinkController::updateAutomaticHeadTrackingResponse(
+    const QByteArray& body) const
+{
+    if (!m_service || !m_service->automaticHeadTrackingAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("AUTO_HEAD_UNAVAILABLE"),
+                             QStringLiteral("自动跟头服务尚未就绪"));
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"),
+                             QStringLiteral("请求必须是 JSON 对象"));
+    }
+    const QJsonObject object = document.object();
+    if (object.size() != 1
+        || !object.contains(QStringLiteral("enabled"))
+        || !object.value(QStringLiteral("enabled")).isBool()) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"),
+                             QStringLiteral("只允许布尔字段 enabled"));
+    }
+    AutomaticHeadTrackingSnapshot snapshot;
+    QString error;
+    if (!m_service->setAutomaticHeadTracking(
+            object.value(QStringLiteral("enabled")).toBool(),
+            &snapshot, &error)) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("AUTO_HEAD_UNAVAILABLE"),
+                             error.isEmpty()
+                                 ? QStringLiteral("自动跟头设置失败") : error);
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"),
+                        automaticHeadTrackingObject(snapshot));
 }
 
 FamilyLinkHttpResponse FamilyLinkController::remindersResponse() const

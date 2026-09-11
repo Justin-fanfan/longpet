@@ -36,9 +36,17 @@ public:
     bool isAvailable() const;
     FamilyMotionSession createRemoteSession(QString* error = nullptr);
     MotionStatusSnapshot status() const;
+    bool beginAutomaticHeadControl(QString* error = nullptr);
+    void endAutomaticHeadControl(const QString& reason = {});
+    bool sendAutomaticTarget(const MotionTargetFrame& target,
+                             QString* error = nullptr);
+    bool isAutomaticHeadControlActive() const;
+    bool isManualControlActive() const;
 
 signals:
     void statusChanged(const MotionStatusSnapshot& status);
+    void manualControlChanged(bool active);
+    void automaticHeadControlChanged(bool active, const QString& reason);
 
 private:
     void handleControllerStart(const QString& sessionId);
@@ -67,6 +75,7 @@ private:
     QTimer m_refreshTimer;
     QTimer m_statusTimer;
     QString m_activeSessionId;
+    bool m_automaticHeadControlActive = false;
     ChassisMotion m_requestedMotion = ChassisMotion::Stopped;
     int m_requestedSpeed = 0;
     qint64 m_lastRemoteRefreshMs = -1;
@@ -75,4 +84,3 @@ private:
     bool m_started = false;
     bool m_stopping = false;
 };
-

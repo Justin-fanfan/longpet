@@ -109,6 +109,9 @@ ctest --test-dir build --output-on-failure
 - `LONGPET_MOTION_DEVICE`：Motion MCU 串口，当前板卡为 `/dev/ttyS2`；
 - `LONGPET_MOTION_CONTROL_PORT`：独立运动控制 WebSocket 端口，默认 `8790`；
 - `LONGPET_MOTION_REFRESH_MS`、`LONGPET_MOTION_REMOTE_LEASE_MS`：MOVE 刷新与 LongPet 停车租约；
+- `LONGPET_AUTO_HEAD_ENABLED`：启动时是否开启视觉自动跟头，默认关闭；家属端可在 AI 视野页动态切换；
+- `LONGPET_AUTO_HEAD_MAX_TARGET_AGE_MS`：单个 observation 可用于控制的最大年龄，默认 `500` ms；
+- `LONGPET_AUTO_HEAD_TARGET_EXPIRY_MS`：收到有效目标后等待下一新帧的最长时间，默认 `500` ms；超时只发送一次 target lost；
 - `LONGPET_DEVICE_ID`、`LONGPET_DEVICE_NAME`：家属端显示的设备标识和名称。
 
 局域网监听必须使用 Token，且不得将端口映射到公网。只读连接基线见 [FamilyLink 只读连接报告](docs/LongPet-FamilyLink-ReadOnly-Report.md)，写入实现、测试方法与回滚记录见 [FamilyLink 写入报告](docs/LongPet-FamilyLink-Write-Report.md)。

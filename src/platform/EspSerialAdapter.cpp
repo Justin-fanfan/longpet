@@ -91,6 +91,12 @@ bool EspSerialAdapter::sendHead(HeadMotion motion, int stepUs,
     return sendBytes(EspMotionProtocol::headCommand(motion, stepUs), error);
 }
 
+bool EspSerialAdapter::sendTarget(const MotionTargetFrame& target,
+                                  QString* error)
+{
+    return sendBytes(EspMotionProtocol::targetCommand(target), error);
+}
+
 bool EspSerialAdapter::requestStatus(QString* error)
 {
     return sendBytes(EspMotionProtocol::statusCommand(), error);

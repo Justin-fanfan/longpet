@@ -1,6 +1,7 @@
 #pragma once
 
 #include "model/FamilyVisionModels.h"
+#include "model/AutomaticHeadTrackingModels.h"
 #include "model/MotionModels.h"
 #include "model/ReminderModels.h"
 #include "model/SettingsModels.h"
@@ -12,6 +13,7 @@
 #include <QString>
 
 class CareService;
+class AutomaticHeadTrackingService;
 class FamilyVisionMonitorService;
 class MotionService;
 class ReminderService;
@@ -42,7 +44,9 @@ public:
                       SystemService* systemService,
                       VideoCallService* videoCallService = nullptr,
                       FamilyVisionMonitorService* visionMonitorService = nullptr,
-                      MotionService* motionService = nullptr);
+                      MotionService* motionService = nullptr,
+                      AutomaticHeadTrackingService* automaticHeadTrackingService =
+                          nullptr);
 
     bool status(FamilyLinkStatusSnapshot* snapshot, QString* error = nullptr) const;
     bool settings(FamilyLinkSettingsSnapshot* snapshot, QString* error = nullptr) const;
@@ -58,6 +62,13 @@ public:
     bool visionMonitorAvailable() const;
     FamilyMotionSession createMotionControlSession(QString* error = nullptr) const;
     bool motionControlAvailable() const;
+    bool automaticHeadTracking(
+        AutomaticHeadTrackingSnapshot* snapshot,
+        QString* error = nullptr) const;
+    bool setAutomaticHeadTracking(
+        bool enabled, AutomaticHeadTrackingSnapshot* snapshot,
+        QString* error = nullptr) const;
+    bool automaticHeadTrackingAvailable() const;
 
 private:
     static QString configuredDeviceId();
@@ -70,4 +81,5 @@ private:
     VideoCallService* m_videoCallService = nullptr;
     FamilyVisionMonitorService* m_visionMonitorService = nullptr;
     MotionService* m_motionService = nullptr;
+    AutomaticHeadTrackingService* m_automaticHeadTrackingService = nullptr;
 };

@@ -23,6 +23,8 @@ public:
                           QString* error = nullptr) = 0;
     virtual bool sendHead(HeadMotion motion, int stepUs,
                           QString* error = nullptr) = 0;
+    virtual bool sendTarget(const MotionTargetFrame& target,
+                            QString* error = nullptr) = 0;
     virtual bool requestStatus(QString* error = nullptr) = 0;
 
 signals:
@@ -64,4 +66,3 @@ signals:
     void headCommandRequested(HeadMotion motion, int stepUs);
     void controllerStopped(const QString& reason);
 };
-

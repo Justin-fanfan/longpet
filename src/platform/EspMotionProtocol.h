@@ -10,8 +10,8 @@ QByteArray stopCommand();
 QByteArray modeCommand(MotionControlMode mode);
 QByteArray moveCommand(ChassisMotion motion, int speed);
 QByteArray headCommand(HeadMotion motion, int stepUs);
+QByteArray targetCommand(const MotionTargetFrame& target);
 QByteArray statusCommand();
 bool parseStatusLine(const QByteArray& line, MotionStatusSnapshot* status,
                      QString* error = nullptr);
 }
-

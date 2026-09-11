@@ -29,6 +29,7 @@
 #include "platform/WeatherProviderFactory.h"
 #include "data/WeatherConfigRepository.h"
 #include "services/CareService.h"
+#include "services/AutomaticHeadTrackingService.h"
 #include "services/FamilyLinkService.h"
 #include "services/FamilyVisionMonitorService.h"
 #include "services/MotionService.h"
@@ -100,6 +101,14 @@ bool configuredMotionEnabled()
 {
     const QString value = qEnvironmentVariable("LONGPET_MOTION_ENABLED")
                               .trimmed().toLower();
+    return value == QStringLiteral("1") || value == QStringLiteral("true")
+        || value == QStringLiteral("yes") || value == QStringLiteral("on");
+}
+
+bool configuredAutomaticHeadTrackingEnabled()
+{
+    const QString value = qEnvironmentVariable(
+        "LONGPET_AUTO_HEAD_ENABLED").trimmed().toLower();
     return value == QStringLiteral("1") || value == QStringLiteral("true")
         || value == QStringLiteral("yes") || value == QStringLiteral("on");
 }
@@ -210,6 +219,23 @@ bool Application::initialize(QString* error)
     m_motionService = std::make_unique<MotionService>(
         m_espSerialAdapter.get(), m_familyMotionControlAdapter.get(),
         motionConfiguration);
+    AutomaticHeadTrackingConfiguration headTrackingConfiguration;
+    headTrackingConfiguration.maximumTargetAgeMs = configuredMotionInteger(
+        "LONGPET_AUTO_HEAD_MAX_TARGET_AGE_MS", 500, 100, 2'500);
+    headTrackingConfiguration.targetExpiryMs = configuredMotionInteger(
+        "LONGPET_AUTO_HEAD_TARGET_EXPIRY_MS", 500, 200, 2'500);
+    m_automaticHeadTrackingService =
+        std::make_unique<AutomaticHeadTrackingService>(
+            m_motionService.get(), headTrackingConfiguration);
+    connect(m_visionService.get(), &VisionService::targetObservationReady,
+            m_automaticHeadTrackingService.get(),
+            &AutomaticHeadTrackingService::handleTargetObservation);
+    connect(m_visionService.get(), &VisionService::availabilityChanged,
+            m_automaticHeadTrackingService.get(),
+            &AutomaticHeadTrackingService::setVisionAvailable);
+    connect(m_visionService.get(), &VisionService::pausedChanged,
+            m_automaticHeadTrackingService.get(),
+            &AutomaticHeadTrackingService::setVisionPaused);
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>(
         m_cameraCaptureAdapter.get());
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
@@ -218,6 +244,9 @@ bool Application::initialize(QString* error)
         m_mediaSessionCoordinator.get());
     connect(m_videoCallService.get(), &VideoCallService::callActivityChanged,
             m_visionService.get(), &VisionService::setVideoCallActive);
+    connect(m_videoCallService.get(), &VideoCallService::callActivityChanged,
+            m_automaticHeadTrackingService.get(),
+            &AutomaticHeadTrackingService::setVideoCallActive);
     connect(m_visionService.get(), &VisionService::visionResultReady, this,
             [](const VisionFrameResult& result) {
         qInfo().noquote()
@@ -302,7 +331,8 @@ bool Application::initialize(QString* error)
     m_familyLinkService = std::make_unique<FamilyLinkService>(
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
         m_systemService.get(), m_videoCallService.get(),
-        m_familyVisionMonitorService.get(), m_motionService.get());
+        m_familyVisionMonitorService.get(), m_motionService.get(),
+        m_automaticHeadTrackingService.get());
     m_familyLinkHttpAdapter = std::make_unique<FamilyLinkHttpAdapter>();
     const QByteArray familyLinkToken = qEnvironmentVariable("LONGPET_FAMILY_LINK_TOKEN").toUtf8();
     const QHostAddress familyLinkAddress = configuredFamilyLinkAddress();
@@ -330,6 +360,13 @@ bool Application::initialize(QString* error)
                     serialDevice, 115'200, &motionError)) {
                 qWarning("Family motion control unavailable: %s",
                          qPrintable(motionError));
+            } else if (configuredAutomaticHeadTrackingEnabled()) {
+                QString autoHeadError;
+                if (!m_automaticHeadTrackingService->setEnabled(
+                        true, &autoHeadError)) {
+                    qWarning("Automatic head tracking unavailable: %s",
+                             qPrintable(autoHeadError));
+                }
             }
         }
     }
@@ -382,6 +419,8 @@ void Application::shutdown()
         m_weatherService->stop();
     if (m_visionService)
         m_visionService->stop();
+    if (m_automaticHeadTrackingService)
+        m_automaticHeadTrackingService->setEnabled(false);
     if (m_motionService)
         m_motionService->stop();
     if (m_familyVisionMonitorService)
@@ -428,6 +467,7 @@ void Application::shutdown()
     m_videoCallMediaAdapter.reset();
     m_familyVisionMonitorService.reset();
     m_familyVisionStreamAdapter.reset();
+    m_automaticHeadTrackingService.reset();
     m_motionService.reset();
     m_familyMotionControlAdapter.reset();
     m_espSerialAdapter.reset();
