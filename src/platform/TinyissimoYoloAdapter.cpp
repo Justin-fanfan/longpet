@@ -88,10 +88,10 @@ TinyissimoYoloConfiguration TinyissimoYoloConfiguration::fromEnvironment()
     if (configuration.modelPath.isEmpty()) {
 #ifdef Q_OS_LINUX
         configuration.modelPath = QStringLiteral(
-            "/home/longpet/models/tinyissimo-yolo-v1-small-person-128.onnx");
+            "/home/longpet/models/tinyissimo-person-128-longpet-v1.onnx");
 #else
         configuration.modelPath = QStringLiteral(
-            "models/tinyissimo-yolo-v1-small-person-128.onnx");
+            "models/tinyissimo-person-128-longpet-v1.onnx");
 #endif
     }
     configuration.confidenceThreshold = configuredFloat(

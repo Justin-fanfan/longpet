@@ -3,6 +3,7 @@
 #include "platform/CameraCaptureAdapter.h"
 #include "platform/FastestDetAdapter.h"
 #include "platform/TinyissimoYoloAdapter.h"
+#include "platform/SparseOpticalFlowTracker.h"
 #include "services/VisionPorts.h"
 #include "services/VisionService.h"
 
@@ -74,6 +75,37 @@ void printFrame(const VisionFrameResult& result, bool warmup)
                .arg(result.persons.size());
 }
 
+void printObservation(const TargetObservation& observation, bool measured)
+{
+    const QRectF box = observation.target.boundingBox;
+    qInfo().noquote()
+        << QStringLiteral(
+               "target_status=%1 frame=%2 measured=%3 present=%4 fresh=%5 "
+               "age_ms=%6 detector_ran=%7 detector_ms=%8 tracker_ms=%9 "
+               "tracker_confidence=%10 points=%11 bbox=%12,%13,%14,%15 "
+               "detail=%16")
+               .arg(targetTrackingStatusName(observation.status))
+               .arg(observation.frameSequence)
+               .arg(measured ? QStringLiteral("true")
+                             : QStringLiteral("false"))
+               .arg(observation.present ? QStringLiteral("true")
+                                        : QStringLiteral("false"))
+               .arg(observation.fresh ? QStringLiteral("true")
+                                      : QStringLiteral("false"))
+               .arg(observation.ageMs)
+               .arg(observation.detectorRan ? QStringLiteral("true")
+                                            : QStringLiteral("false"))
+               .arg(observation.detectorMs, 0, 'f', 3)
+               .arg(observation.trackerMs, 0, 'f', 3)
+               .arg(observation.trackerConfidence, 0, 'f', 3)
+               .arg(observation.trackedPointCount)
+               .arg(box.x(), 0, 'f', 1)
+               .arg(box.y(), 0, 'f', 1)
+               .arg(box.width(), 0, 'f', 1)
+               .arg(box.height(), 0, 'f', 1)
+               .arg(observation.diagnostic);
+}
+
 double percentile(std::vector<double> values, double percentileValue)
 {
     if (values.empty())
@@ -90,6 +122,63 @@ double average(const std::vector<double>& values)
         return 0.0;
     return std::accumulate(values.begin(), values.end(), 0.0)
         / static_cast<double>(values.size());
+}
+
+void printTrackingSummary(const std::vector<TargetObservation>& observations,
+                          int detectorCount, double measurementSeconds)
+{
+    std::vector<double> trackerTimes;
+    int presentCount = 0;
+    int corrections = 0;
+    int lost = 0;
+    int reacquired = 0;
+    int searching = 0;
+    int stale = 0;
+    for (const TargetObservation& observation : observations) {
+        if (observation.trackerMs > 0.0)
+            trackerTimes.push_back(observation.trackerMs);
+        if (observation.present)
+            ++presentCount;
+        if (!observation.fresh)
+            ++stale;
+        switch (observation.status) {
+        case TargetTrackingStatus::Corrected:
+            ++corrections;
+            break;
+        case TargetTrackingStatus::Lost:
+            ++lost;
+            break;
+        case TargetTrackingStatus::Reacquired:
+            ++reacquired;
+            break;
+        case TargetTrackingStatus::Searching:
+            ++searching;
+            break;
+        default:
+            break;
+        }
+    }
+    qInfo().noquote() << "summary_target_observations="
+                      << observations.size();
+    qInfo().noquote() << "summary_present_observations=" << presentCount;
+    qInfo().noquote() << "summary_stale_observations=" << stale;
+    qInfo().noquote() << "summary_detector_triggers=" << detectorCount;
+    qInfo().noquote() << "summary_detector_trigger_hz="
+                      << (measurementSeconds > 0.0
+                              ? detectorCount / measurementSeconds : 0.0);
+    qInfo().noquote() << "summary_target_update_hz="
+                      << (measurementSeconds > 0.0
+                              ? presentCount / measurementSeconds : 0.0);
+    qInfo().noquote() << "summary_tracker_updates=" << trackerTimes.size();
+    qInfo().noquote() << "summary_avg_tracker_ms=" << average(trackerTimes);
+    qInfo().noquote() << "summary_p50_tracker_ms="
+                      << percentile(trackerTimes, 0.50);
+    qInfo().noquote() << "summary_p95_tracker_ms="
+                      << percentile(trackerTimes, 0.95);
+    qInfo().noquote() << "summary_corrections=" << corrections;
+    qInfo().noquote() << "summary_tracker_failures=" << lost;
+    qInfo().noquote() << "summary_reacquired=" << reacquired;
+    qInfo().noquote() << "summary_searching_updates=" << searching;
 }
 
 QString linuxMemoryValue(const QByteArray& key)
@@ -317,27 +406,60 @@ int runCameraBenchmark(const BenchmarkDetectorConfiguration& configuration,
                        const QString& cameraDevice,
                        int warmupCount,
                        int durationSeconds,
-                       int intervalMs)
+                       int intervalMs,
+                       bool trackingEnabled,
+                       VisionTrackingConfiguration trackingConfiguration)
 {
     qputenv("LONGPET_CAMERA_DEVICE", cameraDevice.toUtf8());
     CameraCaptureAdapter camera;
     std::unique_ptr<VisionDetectorPort> detector = createDetector(configuration);
-    VisionService service(&camera, detector.get(), intervalMs);
+    SparseOpticalFlowTracker tracker;
+    std::unique_ptr<VisionService> service;
+    if (trackingEnabled) {
+        trackingConfiguration.trackingEnabled = true;
+        service = std::make_unique<VisionService>(
+            &camera, detector.get(), &tracker, trackingConfiguration);
+    } else {
+        service = std::make_unique<VisionService>(
+            &camera, detector.get(), intervalMs);
+    }
     QEventLoop loop;
     std::vector<VisionFrameResult> measured;
+    std::vector<TargetObservation> measuredObservations;
     int receivedCount = 0;
     int exitCode = 0;
     QElapsedTimer totalRuntime;
     QElapsedTimer measurementRuntime;
     double cpuStartSeconds = -1.0;
 
-    QObject::connect(&service, &VisionService::detectorInfoReady,
+    QObject::connect(service.get(), &VisionService::detectorInfoReady,
                      &loop, [&](const VisionDetectorInfo& info) {
         printDetectorInfo(info, cameraDevice);
         qInfo().noquote() << "mode=camera duration_seconds="
                           << durationSeconds;
+        qInfo().noquote() << "tracking_enabled=" << trackingEnabled;
+        if (trackingEnabled) {
+            qInfo().noquote() << "tracker_interval_ms="
+                              << trackingConfiguration.trackerIntervalMs;
+            qInfo().noquote() << "detector_correction_ms="
+                              << trackingConfiguration.detectorCorrectionIntervalMs;
+            qInfo().noquote() << "search_interval_ms="
+                              << trackingConfiguration.searchDetectorIntervalMs;
+            qInfo().noquote() << "lost_interval_ms="
+                              << trackingConfiguration.lostDetectorIntervalMs;
+        }
     });
-    QObject::connect(&service, &VisionService::availabilityChanged,
+    QObject::connect(service.get(), &VisionService::trackerInfoReady,
+                     &loop, [](const VisionTrackerInfo& info) {
+        qInfo().noquote() << "tracker=" << info.trackerName;
+        qInfo().noquote() << "tracker_processing_scale="
+                          << info.processingScale;
+        qInfo().noquote() << "tracker_points="
+                          << QStringLiteral("%1/%2")
+                                 .arg(info.minimumPoints)
+                                 .arg(info.maximumPoints);
+    });
+    QObject::connect(service.get(), &VisionService::availabilityChanged,
                      &loop, [&](bool available, const QString& message) {
         qInfo().noquote() << "vision_available=" << available
                           << "message=" << message;
@@ -349,7 +471,7 @@ int runCameraBenchmark(const BenchmarkDetectorConfiguration& configuration,
             }
         }
     });
-    QObject::connect(&service, &VisionService::visionResultReady,
+    QObject::connect(service.get(), &VisionService::visionResultReady,
                      &loop, [&](const VisionFrameResult& result) {
         const bool warmup = receivedCount++ < warmupCount;
         printFrame(result, warmup);
@@ -361,7 +483,22 @@ int runCameraBenchmark(const BenchmarkDetectorConfiguration& configuration,
             cpuStartSeconds = processCpuSeconds();
         }
     });
-    QObject::connect(&service, &VisionService::failed,
+    QObject::connect(service.get(), &VisionService::targetObservationReady,
+                     &loop, [&](const TargetObservation& observation) {
+        const bool measuredNow = measurementRuntime.isValid();
+        printObservation(observation, measuredNow);
+        if (measuredNow)
+            measuredObservations.push_back(observation);
+    });
+    QObject::connect(service.get(), &VisionService::trackingTransition,
+                     &loop, [](TargetTrackingStatus status, quint64 sequence,
+                               const QString& diagnostic) {
+        qInfo().noquote() << "tracking_transition="
+                          << targetTrackingStatusName(status)
+                          << "frame=" << sequence
+                          << "detail=" << diagnostic;
+    });
+    QObject::connect(service.get(), &VisionService::failed,
                      &loop, [&](const QString& stage, const QString& message) {
         qCritical().noquote() << "vision_error_stage=" << stage
                               << "message=" << message;
@@ -369,14 +506,14 @@ int runCameraBenchmark(const BenchmarkDetectorConfiguration& configuration,
         loop.quit();
     });
     QTimer::singleShot(durationSeconds * 1'000, &loop, &QEventLoop::quit);
-    service.start();
+    service->start();
     loop.exec();
     const double runtimeSeconds = totalRuntime.isValid()
         ? totalRuntime.nsecsElapsed() / 1'000'000'000.0 : 0.0;
     const double measurementSeconds = measurementRuntime.isValid()
         ? measurementRuntime.nsecsElapsed() / 1'000'000'000.0 : 0.0;
     const double cpuEndSeconds = processCpuSeconds();
-    service.stop();
+    service->stop();
     if (exitCode != 0)
         return exitCode;
     if (measured.empty()) {
@@ -386,6 +523,11 @@ int runCameraBenchmark(const BenchmarkDetectorConfiguration& configuration,
     printSummary(measured, std::min(receivedCount, warmupCount),
                  runtimeSeconds, measurementSeconds,
                  cpuStartSeconds, cpuEndSeconds);
+    if (trackingEnabled) {
+        printTrackingSummary(measuredObservations,
+                             static_cast<int>(measured.size()),
+                             measurementSeconds);
+    }
     return 0;
 }
 }
@@ -438,10 +580,31 @@ int main(int argc, char* argv[])
     const QCommandLineOption threadsOption(
         QStringLiteral("threads"), QStringLiteral("ORT intra-op threads"),
         QStringLiteral("count"), QStringLiteral("1"));
+    const QCommandLineOption trackingOption(
+        QStringLiteral("tracking"),
+        QStringLiteral("Enable Vision V2 detector + tracker scheduling"));
+    const QCommandLineOption trackerIntervalOption(
+        QStringLiteral("tracker-interval-ms"),
+        QStringLiteral("Minimum interval between tracker updates"),
+        QStringLiteral("milliseconds"), QStringLiteral("100"));
+    const QCommandLineOption correctionIntervalOption(
+        QStringLiteral("correction-ms"),
+        QStringLiteral("Stable tracking detector correction period"),
+        QStringLiteral("milliseconds"), QStringLiteral("8000"));
+    const QCommandLineOption searchIntervalOption(
+        QStringLiteral("search-interval-ms"),
+        QStringLiteral("SEARCHING detector interval"),
+        QStringLiteral("milliseconds"), QStringLiteral("250"));
+    const QCommandLineOption lostIntervalOption(
+        QStringLiteral("lost-interval-ms"),
+        QStringLiteral("LOST detector interval"),
+        QStringLiteral("milliseconds"), QStringLiteral("250"));
     parser.addOptions({detectorOption, modelOption, imageOption, cameraOption,
                        iterationsOption, warmupOption, durationOption,
                        intervalOption, thresholdOption, nmsOption,
-                       threadsOption});
+                       threadsOption, trackingOption, trackerIntervalOption,
+                       correctionIntervalOption, searchIntervalOption,
+                       lostIntervalOption});
     parser.process(application);
 
     if (!parser.isSet(modelOption)
@@ -476,14 +639,31 @@ int main(int argc, char* argv[])
     configuration.inferenceThreads = positiveInteger(
         parser, threadsOption, 1);
 
-    const int warmup = nonNegativeInteger(parser, warmupOption, 10);
+    const bool trackingEnabled = parser.isSet(trackingOption);
+    const int warmup = parser.isSet(warmupOption)
+        ? nonNegativeInteger(parser, warmupOption, trackingEnabled ? 1 : 10)
+        : (trackingEnabled ? 1 : 10);
     if (parser.isSet(imageOption)) {
         return runImageBenchmark(
             configuration, parser.value(imageOption), warmup,
             positiveInteger(parser, iterationsOption, 100));
     }
+    VisionTrackingConfiguration trackingConfiguration =
+        VisionTrackingConfiguration::fromEnvironment();
+    trackingConfiguration.trackerIntervalMs = positiveInteger(
+        parser, trackerIntervalOption, trackingConfiguration.trackerIntervalMs);
+    trackingConfiguration.detectorCorrectionIntervalMs = positiveInteger(
+        parser, correctionIntervalOption,
+        trackingConfiguration.detectorCorrectionIntervalMs);
+    trackingConfiguration.searchDetectorIntervalMs = positiveInteger(
+        parser, searchIntervalOption,
+        trackingConfiguration.searchDetectorIntervalMs);
+    trackingConfiguration.lostDetectorIntervalMs = positiveInteger(
+        parser, lostIntervalOption,
+        trackingConfiguration.lostDetectorIntervalMs);
     return runCameraBenchmark(
         configuration, parser.value(cameraOption), warmup,
         positiveInteger(parser, durationOption, 60),
-        positiveInteger(parser, intervalOption, 1));
+        positiveInteger(parser, intervalOption, 1), trackingEnabled,
+        trackingConfiguration);
 }

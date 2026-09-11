@@ -102,6 +102,8 @@ set(
     src/platform/TinyissimoYoloPostProcessor.h
     src/platform/VisionDetectorFactory.cpp
     src/platform/VisionDetectorFactory.h
+    src/platform/SparseOpticalFlowTracker.cpp
+    src/platform/SparseOpticalFlowTracker.h
     src/data/DatabaseManager.cpp
     src/data/DatabaseManager.h
     src/data/ReminderRepository.cpp
@@ -220,7 +222,7 @@ if(ALSA_FOUND)
 endif()
 
 if(LONGPET_ENABLE_VISION)
-    find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc)
+    find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc video)
 
     set(ONNXRUNTIME_ROOT "" CACHE PATH "ONNX Runtime installation prefix")
     find_path(

@@ -30,3 +30,22 @@ PersonDetection VisionGeometry::personFromNormalizedRect(
         clipped.height() * sourceSize.height());
     return detection;
 }
+
+QString targetTrackingStatusName(TargetTrackingStatus status)
+{
+    switch (status) {
+    case TargetTrackingStatus::Searching:
+        return QStringLiteral("SEARCHING");
+    case TargetTrackingStatus::Detected:
+        return QStringLiteral("DETECTED");
+    case TargetTrackingStatus::Tracking:
+        return QStringLiteral("TRACKING");
+    case TargetTrackingStatus::Corrected:
+        return QStringLiteral("CORRECTED");
+    case TargetTrackingStatus::Lost:
+        return QStringLiteral("LOST");
+    case TargetTrackingStatus::Reacquired:
+        return QStringLiteral("REACQUIRED");
+    }
+    return QStringLiteral("SEARCHING");
+}

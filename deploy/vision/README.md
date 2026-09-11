@@ -1,16 +1,15 @@
 # Vision board artifacts
 
-The current checked-in runtime baseline is Vision V1.1. Vision V1.2 has passed
-the documented PC evaluation but remains a candidate pending user board
-acceptance; it is not present in `third_party/tinyissimo-yolo/models/` and does
-not replace the default path below.
+Vision V2.0 uses the frozen V1.2 domain-finetuned detector from
+`D:\LongPet-Vision-Final-Handoff\03_models\V1.2_FINAL` and a lightweight
+sparse Lucas-Kanade tracker. Training artifacts remain outside this repository.
 
 Runtime files:
 
 - `/home/longpet/LongPet` — application, built with `LONGPET_ENABLE_VISION=ON`
 - `/home/longpet/LongPetVisionBench` — optional standalone benchmark
-- `/home/longpet/models/tinyissimo-yolo-v1-small-person-128.onnx` — static
-  person-only FP32 model
+- `/home/longpet/models/tinyissimo-person-128-longpet-v1.onnx` — frozen V1.2
+  static person-only FP32 model (SHA256 `cb3defed...f822f89c`)
 
 The repository service example keeps Vision disabled. Benchmark a candidate on
 the target before enabling the drop-in in this directory. `LONGPET_VISION_DETECTOR`
@@ -22,8 +21,18 @@ Example:
 ```sh
 /home/longpet/LongPetVisionBench \
   --detector tinyissimo \
-  --model /home/longpet/models/tinyissimo-yolo-v1-small-person-128.onnx \
+  --model /home/longpet/models/tinyissimo-person-128-longpet-v1.onnx \
   --image /tmp/person-test.jpg --warmup 10 --iterations 100
+```
+
+Detector + tracker camera benchmark:
+
+```sh
+/home/longpet/LongPetVisionBench \
+  --detector tinyissimo \
+  --model /home/longpet/models/tinyissimo-person-128-longpet-v1.onnx \
+  --camera /dev/video0 --tracking --warmup 1 --duration 60 \
+  --tracker-interval-ms 100 --correction-ms 8000
 ```
 
 Do not enable both a standalone camera benchmark and a video call at the same

@@ -33,6 +33,7 @@ class VideoCallService;
 class VideoCallMediaAdapter;
 class VisionService;
 class VisionDetectorPort;
+class VisionTrackerPort;
 class CallPromptPlayerAdapter;
 class VoiceAudioAdapter;
 class VoiceInteractionService;
@@ -92,6 +93,7 @@ private:
     std::unique_ptr<WeatherService> m_weatherService;
     std::unique_ptr<CameraCaptureAdapter> m_cameraCaptureAdapter;
     std::unique_ptr<VisionDetectorPort> m_visionDetector;
+    std::unique_ptr<VisionTrackerPort> m_visionTracker;
     std::unique_ptr<VisionService> m_visionService;
     std::unique_ptr<VideoCallMediaAdapter> m_videoCallMediaAdapter;
     std::unique_ptr<CallPromptPlayerAdapter> m_callPromptPlayerAdapter;

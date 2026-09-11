@@ -82,6 +82,10 @@ public:
         result.timestamp = frame.timestamp;
         result.sourceSize = QSize(640, 480);
         result.totalMs = delayMs;
+        if (returnPerson.load()) {
+            result.persons.append(VisionGeometry::personFromNormalizedRect(
+                0.85F, QRectF(0.30, 0.10, 0.35, 0.75), result.sourceSize));
+        }
         return result;
     }
 
@@ -104,8 +108,69 @@ public:
     bool available = false;
     int delayMs = 0;
     std::atomic<int> detectCount {0};
+    std::atomic<bool> returnPerson {false};
     mutable QMutex sequenceMutex;
     QList<quint64> detectedSequences;
+};
+
+class FakeVisionTracker final : public VisionTrackerPort {
+public:
+    bool start(const CameraFrame&, const PersonDetection& target,
+               QString* error) override
+    {
+        ++startCount;
+        if (!startSucceeds.load()) {
+            if (error)
+                *error = QStringLiteral("fake tracker start failure");
+            active = false;
+            return false;
+        }
+        trackedTarget = target;
+        active = true;
+        return true;
+    }
+
+    VisionTrackerResult update(const CameraFrame& frame,
+                               QString* error) override
+    {
+        ++updateCount;
+        VisionTrackerResult result;
+        result.frameSequence = frame.sequence;
+        result.timestamp = frame.timestamp;
+        result.sourceSize = QSize(640, 480);
+        result.totalMs = 2.0;
+        result.trackingMs = 1.0;
+        if (!active || !updateSucceeds.load()) {
+            if (error)
+                *error = QStringLiteral("fake tracker lost target");
+            active = false;
+            return result;
+        }
+        result.success = true;
+        result.target = trackedTarget;
+        result.confidence = 0.8F;
+        result.trackedPointCount = 20;
+        return result;
+    }
+
+    void reset() override { active = false; ++resetCount; }
+    bool isActive() const override { return active; }
+    VisionTrackerInfo info() const override
+    {
+        VisionTrackerInfo value;
+        value.trackerName = QStringLiteral("fake-tracker");
+        value.maximumPoints = 30;
+        value.minimumPoints = 5;
+        return value;
+    }
+
+    PersonDetection trackedTarget;
+    std::atomic<bool> startSucceeds {true};
+    std::atomic<bool> updateSucceeds {true};
+    std::atomic<int> startCount {0};
+    std::atomic<int> updateCount {0};
+    std::atomic<int> resetCount {0};
+    bool active = false;
 };
 
 class DelayedKwsPort final : public KwsPort {
@@ -174,6 +239,7 @@ private slots:
     void tinyissimoPostprocessMapsLetterboxAndAppliesNms();
     void detectorFactoryDefaultsToTinyissimoAndKeepsFastestDetFallback();
     void visionServiceUsesLatestFrameOnlyAndPauses();
+    void visionServiceTracksCorrectsLosesAndReacquires();
     void videoCallAndVisionShareOneCameraSource();
     void kwsGatedCallsPreserveVisionLifecycle();
     void missingModelAndCameraDegradeWithoutCrash();
@@ -366,6 +432,76 @@ void VisionV1Test::visionServiceUsesLatestFrameOnlyAndPauses()
     service.stop();
     QCOMPARE(camera.consumerCount(), 0);
     QCOMPARE(camera.stopCount, 1);
+}
+
+void VisionV1Test::visionServiceTracksCorrectsLosesAndReacquires()
+{
+    TestCameraCaptureAdapter camera;
+    FakeVisionDetector detector;
+    detector.returnPerson = true;
+    FakeVisionTracker tracker;
+    VisionTrackingConfiguration configuration;
+    configuration.trackerIntervalMs = 1;
+    configuration.searchDetectorIntervalMs = 1;
+    configuration.lostDetectorIntervalMs = 1;
+    configuration.detectorCorrectionIntervalMs = 500;
+    configuration.freshnessTimeoutMs = 1'000;
+    VisionService service(&camera, &detector, &tracker, configuration);
+    QSignalSpy observations(&service, &VisionService::targetObservationReady);
+    QSignalSpy transitions(&service, &VisionService::trackingTransition);
+
+    const auto containsStatus = [](const QSignalSpy& spy,
+                                   TargetTrackingStatus expected) {
+        for (const QList<QVariant>& arguments : spy) {
+            if (arguments.front().value<TargetObservation>().status == expected)
+                return true;
+        }
+        return false;
+    };
+
+    service.start();
+    QTRY_VERIFY_WITH_TIMEOUT(service.isAvailable(), 1'000);
+    camera.feed(jpegPayload("detected"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        containsStatus(observations, TargetTrackingStatus::Detected), 500);
+    QCOMPARE(detector.detectCount.load(), 1);
+    QCOMPARE(tracker.startCount.load(), 1);
+
+    QTest::qWait(525);
+    camera.feed(jpegPayload("corrected"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        containsStatus(observations, TargetTrackingStatus::Corrected), 500);
+    QVERIFY(detector.detectCount.load() >= 2);
+    QVERIFY(tracker.startCount.load() >= 2);
+
+    camera.feed(jpegPayload("tracked"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        containsStatus(observations, TargetTrackingStatus::Tracking), 500);
+    QVERIFY(tracker.updateCount.load() >= 1);
+
+    tracker.updateSucceeds = false;
+    camera.feed(jpegPayload("lost"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        containsStatus(observations, TargetTrackingStatus::Lost), 500);
+    tracker.updateSucceeds = true;
+    camera.feed(jpegPayload("reacquired"));
+    QTRY_VERIFY_WITH_TIMEOUT(
+        containsStatus(observations, TargetTrackingStatus::Reacquired), 500);
+
+    const int observationsBeforePause = observations.count();
+    service.setVideoCallActive(true);
+    camera.feed(jpegPayload("during-call"));
+    QTest::qWait(30);
+    QCOMPARE(observations.count(), observationsBeforePause);
+    service.setVideoCallActive(false);
+    camera.feed(jpegPayload("after-call"));
+    QTRY_VERIFY_WITH_TIMEOUT(observations.count() > observationsBeforePause,
+                             500);
+    QVERIFY(containsStatus(observations,
+                           TargetTrackingStatus::Reacquired));
+    QVERIFY(transitions.count() >= 5);
+    service.stop();
+    QCOMPARE(camera.consumerCount(), 0);
 }
 
 void VisionV1Test::videoCallAndVisionShareOneCameraSource()

@@ -36,14 +36,18 @@ Environment="LONGPET_ALSA_MIXER_DEVICE=hw:CARD=Device"
 Environment="LONGPET_AI_CAPTURE_DEVICE=plughw:CARD=Device,DEV=0"
 Environment="LONGPET_AI_PLAYBACK_DEVICE=plughw:CARD=Device,DEV=0"
 
-# Vision V1 默认不在正式进程中常驻推理；先运行 LongPetVisionBench 取得板端数据。
+# Vision V2 默认不在正式进程中常驻；先运行 detector + tracker benchmark。
 # 确认性能可接受后，用 systemd drop-in 设置 LONGPET_VISION_ENABLED=1。
 # LONGPET_CAMERA_DEVICE 优先于旧 LONGPET_CALL_CAMERA_DEVICE。
 Environment="LONGPET_VISION_ENABLED=0"
 Environment="LONGPET_CAMERA_DEVICE=/dev/video0"
 Environment="LONGPET_VISION_DETECTOR=tinyissimo"
-Environment="LONGPET_VISION_MODEL_PATH=/home/longpet/models/tinyissimo-yolo-v1-small-person-128.onnx"
-Environment="LONGPET_VISION_INTERVAL_MS=300"
+Environment="LONGPET_VISION_MODEL_PATH=/home/longpet/models/tinyissimo-person-128-longpet-v1.onnx"
+Environment="LONGPET_VISION_TRACKING_ENABLED=1"
+Environment="LONGPET_VISION_TRACKER_INTERVAL_MS=100"
+Environment="LONGPET_VISION_DETECTOR_CORRECTION_MS=8000"
+Environment="LONGPET_VISION_SEARCH_INTERVAL_MS=250"
+Environment="LONGPET_VISION_LOST_INTERVAL_MS=250"
 
 Restart=always
 RestartSec=2

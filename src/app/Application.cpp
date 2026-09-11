@@ -14,6 +14,7 @@
 #include "platform/CallPromptPlayerAdapter.h"
 #include "platform/FamilyLinkHttpAdapter.h"
 #include "platform/VisionDetectorFactory.h"
+#include "platform/SparseOpticalFlowTracker.h"
 #include "platform/NetworkStatusAdapter.h"
 #include "platform/NetworkManagerAdapter.h"
 #include "platform/AiProviderFactory.h"
@@ -145,8 +146,10 @@ bool Application::initialize(QString* error)
         });
     m_cameraCaptureAdapter = std::make_unique<CameraCaptureAdapter>();
     m_visionDetector = VisionDetectorFactory::createFromEnvironment();
+    m_visionTracker = std::make_unique<SparseOpticalFlowTracker>();
     m_visionService = std::make_unique<VisionService>(
-        m_cameraCaptureAdapter.get(), m_visionDetector.get());
+        m_cameraCaptureAdapter.get(), m_visionDetector.get(),
+        m_visionTracker.get());
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>(
         m_cameraCaptureAdapter.get());
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
@@ -173,6 +176,15 @@ bool Application::initialize(QString* error)
             [](const QString& stage, const QString& message) {
         qWarning().noquote() << QStringLiteral("Vision %1 unavailable: %2")
                                     .arg(stage, message);
+    });
+    connect(m_visionService.get(), &VisionService::trackingTransition, this,
+            [](TargetTrackingStatus status, quint64 sequence,
+               const QString& diagnostic) {
+        qInfo().noquote()
+            << QStringLiteral("Vision target status=%1 frame=%2 detail=%3")
+                   .arg(targetTrackingStatusName(status))
+                   .arg(sequence)
+                   .arg(diagnostic);
     });
     if (configuredVisionEnabled())
         m_visionService->start();
