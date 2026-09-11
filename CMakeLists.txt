@@ -53,6 +53,8 @@ set(
     src/model/MediaFrameProtocol.h
     src/model/CameraModels.h
     src/model/FamilyVisionModels.h
+    src/model/MotionModels.cpp
+    src/model/MotionModels.h
     src/model/VisionModels.cpp
     src/model/VisionModels.h
     src/platform/NetworkStatusAdapter.cpp
@@ -91,6 +93,12 @@ set(
     src/platform/FamilyVisionProtocol.h
     src/platform/FamilyVisionStreamAdapter.cpp
     src/platform/FamilyVisionStreamAdapter.h
+    src/platform/FamilyMotionControlAdapter.cpp
+    src/platform/FamilyMotionControlAdapter.h
+    src/platform/EspMotionProtocol.cpp
+    src/platform/EspMotionProtocol.h
+    src/platform/EspSerialAdapter.cpp
+    src/platform/EspSerialAdapter.h
     src/platform/CallPromptPlayerAdapter.cpp
     src/platform/CallPromptPlayerAdapter.h
     src/platform/VideoCallMediaAdapter.cpp
@@ -137,6 +145,9 @@ set(
     src/services/FamilyVisionMonitorService.cpp
     src/services/FamilyVisionMonitorService.h
     src/services/FamilyVisionPorts.h
+    src/services/MotionService.cpp
+    src/services/MotionService.h
+    src/services/MotionPorts.h
     src/services/VideoCallService.cpp
     src/services/VideoCallService.h
     src/services/VideoCallPorts.h
@@ -364,6 +375,24 @@ if(LONGPET_BUILD_TESTS)
     add_test(NAME LongPet.VisionV1 COMMAND LongPetVisionV1Tests)
     set_tests_properties(
         LongPet.VisionV1
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+    )
+
+    qt_add_executable(
+        LongPetMotionV1Tests
+        tests/MotionV1Test.cpp
+    )
+    target_link_libraries(
+        LongPetMotionV1Tests
+        PRIVATE
+            LongPetCore
+            Qt6::Test
+    )
+    longpet_enable_warnings(LongPetMotionV1Tests)
+    add_test(NAME LongPet.MotionV1 COMMAND LongPetMotionV1Tests)
+    set_tests_properties(
+        LongPet.MotionV1
         PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
     )

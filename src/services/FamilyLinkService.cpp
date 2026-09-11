@@ -2,6 +2,7 @@
 
 #include "services/CareService.h"
 #include "services/FamilyVisionMonitorService.h"
+#include "services/MotionService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
@@ -37,13 +38,15 @@ FamilyLinkService::FamilyLinkService(ReminderService* reminderService,
                                      SettingsService* settingsService,
                                      SystemService* systemService,
                                      VideoCallService* videoCallService,
-                                     FamilyVisionMonitorService* visionMonitorService)
+                                     FamilyVisionMonitorService* visionMonitorService,
+                                     MotionService* motionService)
     : m_reminderService(reminderService),
       m_careService(careService),
       m_settingsService(settingsService),
       m_systemService(systemService),
       m_videoCallService(videoCallService),
-      m_visionMonitorService(visionMonitorService)
+      m_visionMonitorService(visionMonitorService),
+      m_motionService(motionService)
 {
 }
 
@@ -219,6 +222,22 @@ FamilyVisionSession FamilyLinkService::createVisionMonitorSession(
 bool FamilyLinkService::visionMonitorAvailable() const
 {
     return m_visionMonitorService && m_visionMonitorService->isAvailable();
+}
+
+FamilyMotionSession FamilyLinkService::createMotionControlSession(
+    QString* error) const
+{
+    if (!m_motionService) {
+        if (error)
+            *error = QStringLiteral("远程运动控制服务未初始化");
+        return {};
+    }
+    return m_motionService->createRemoteSession(error);
+}
+
+bool FamilyLinkService::motionControlAvailable() const
+{
+    return m_motionService && m_motionService->isAvailable();
 }
 
 QString FamilyLinkService::configuredDeviceId()

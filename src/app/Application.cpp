@@ -14,6 +14,8 @@
 #include "platform/CallPromptPlayerAdapter.h"
 #include "platform/FamilyLinkHttpAdapter.h"
 #include "platform/FamilyVisionStreamAdapter.h"
+#include "platform/FamilyMotionControlAdapter.h"
+#include "platform/EspSerialAdapter.h"
 #include "platform/VisionDetectorFactory.h"
 #include "platform/SparseOpticalFlowTracker.h"
 #include "platform/NetworkStatusAdapter.h"
@@ -29,6 +31,7 @@
 #include "services/CareService.h"
 #include "services/FamilyLinkService.h"
 #include "services/FamilyVisionMonitorService.h"
+#include "services/MotionService.h"
 #include "services/ReminderService.h"
 #include "services/NetworkService.h"
 #include "services/MediaSessionCoordinator.h"
@@ -51,6 +54,8 @@
 #include <QDir>
 #include <QHostAddress>
 #include <QStandardPaths>
+
+#include <algorithm>
 
 namespace {
 quint16 configuredFamilyLinkPort()
@@ -89,6 +94,28 @@ bool configuredVisionEnabled()
         || value == QStringLiteral("true")
         || value == QStringLiteral("yes")
         || value == QStringLiteral("on");
+}
+
+bool configuredMotionEnabled()
+{
+    const QString value = qEnvironmentVariable("LONGPET_MOTION_ENABLED")
+                              .trimmed().toLower();
+    return value == QStringLiteral("1") || value == QStringLiteral("true")
+        || value == QStringLiteral("yes") || value == QStringLiteral("on");
+}
+
+int configuredMotionInteger(const char* name, int fallback,
+                            int minimum, int maximum)
+{
+    bool valid = false;
+    const int value = qEnvironmentVariableIntValue(name, &valid);
+    return valid ? std::clamp(value, minimum, maximum) : fallback;
+}
+
+quint16 configuredMotionControlPort()
+{
+    return static_cast<quint16>(configuredMotionInteger(
+        "LONGPET_MOTION_CONTROL_PORT", 8'790, 1, 65'535));
 }
 }
 
@@ -168,6 +195,21 @@ bool Application::initialize(QString* error)
         std::make_unique<FamilyVisionMonitorService>(
             m_cameraCaptureAdapter.get(), m_visionService.get(),
             m_familyVisionStreamAdapter.get());
+    m_espSerialAdapter = std::make_unique<EspSerialAdapter>();
+    m_familyMotionControlAdapter =
+        std::make_unique<FamilyMotionControlAdapter>();
+    MotionServiceConfiguration motionConfiguration;
+    motionConfiguration.moveRefreshIntervalMs = configuredMotionInteger(
+        "LONGPET_MOTION_REFRESH_MS", 150, 100, 200);
+    motionConfiguration.remoteLeaseTimeoutMs = configuredMotionInteger(
+        "LONGPET_MOTION_REMOTE_LEASE_MS", 350, 200, 450);
+    motionConfiguration.defaultSpeed = configuredMotionInteger(
+        "LONGPET_MOTION_DEFAULT_SPEED", 20, 1, 100);
+    motionConfiguration.headStepUs = configuredMotionInteger(
+        "LONGPET_MOTION_HEAD_STEP_US", 20, 1, 100);
+    m_motionService = std::make_unique<MotionService>(
+        m_espSerialAdapter.get(), m_familyMotionControlAdapter.get(),
+        motionConfiguration);
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>(
         m_cameraCaptureAdapter.get());
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
@@ -260,7 +302,7 @@ bool Application::initialize(QString* error)
     m_familyLinkService = std::make_unique<FamilyLinkService>(
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
         m_systemService.get(), m_videoCallService.get(),
-        m_familyVisionMonitorService.get());
+        m_familyVisionMonitorService.get(), m_motionService.get());
     m_familyLinkHttpAdapter = std::make_unique<FamilyLinkHttpAdapter>();
     const QByteArray familyLinkToken = qEnvironmentVariable("LONGPET_FAMILY_LINK_TOKEN").toUtf8();
     const QHostAddress familyLinkAddress = configuredFamilyLinkAddress();
@@ -278,6 +320,17 @@ bool Application::initialize(QString* error)
                 &visionMonitorError)) {
             qWarning("Family AI View unavailable: %s",
                      qPrintable(visionMonitorError));
+        }
+        if (configuredMotionEnabled()) {
+            QString motionError;
+            const QString serialDevice = qEnvironmentVariable(
+                "LONGPET_MOTION_DEVICE", QStringLiteral("/dev/ttyS2")).trimmed();
+            if (!m_motionService->start(
+                    familyLinkAddress, configuredMotionControlPort(),
+                    serialDevice, 115'200, &motionError)) {
+                qWarning("Family motion control unavailable: %s",
+                         qPrintable(motionError));
+            }
         }
     }
     if (!(remoteAddress && familyLinkToken.isEmpty())
@@ -329,6 +382,8 @@ void Application::shutdown()
         m_weatherService->stop();
     if (m_visionService)
         m_visionService->stop();
+    if (m_motionService)
+        m_motionService->stop();
     if (m_familyVisionMonitorService)
         m_familyVisionMonitorService->stop();
     if (m_familyLinkController)
@@ -373,6 +428,9 @@ void Application::shutdown()
     m_videoCallMediaAdapter.reset();
     m_familyVisionMonitorService.reset();
     m_familyVisionStreamAdapter.reset();
+    m_motionService.reset();
+    m_familyMotionControlAdapter.reset();
+    m_espSerialAdapter.reset();
     m_visionService.reset();
     m_visionDetector.reset();
     m_cameraCaptureAdapter.reset();

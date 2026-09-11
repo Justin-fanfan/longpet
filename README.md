@@ -13,6 +13,7 @@ LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本
 - 状态栏真实时钟，以及基于 QNetworkInformation 的事件驱动网络状态；
 - power-supply 电池状态读取，以及无电池设备的正常降级；
 - FamilyLink 局域网 API，可读取设备状态并远程管理设置与提醒；
+- Family Remote Control V1：FamilyLink 临时会话、独立 WebSocket、`MotionService` 与 `/dev/ttyS2` Motion MCU 串口链路；
 - QRC 内嵌 QSS/SVG，保留后续版本会使用的页面与资源；
 - 正式页面全部使用语义信号，页面不直接访问 SQL 或硬件。
 
@@ -78,6 +79,7 @@ ctest --test-dir build --output-on-failure
 - `CareService::recordActivityMinutes / recordInteraction`
 - `ReminderService::reminderTriggered`
 - `FamilyLinkHttpAdapter → FamilyLinkController → FamilyLinkService`
+- `FamilyMotionControlAdapter → MotionService → MotionPort → EspSerialAdapter`
 
 具体上机验证项和当前限制见 [V0.2 工作报告](docs/LongPet-V0.2-Work-Report.md)。
 
@@ -92,6 +94,7 @@ ctest --test-dir build --output-on-failure
 - `POST /api/v1/reminders`
 - `PUT /api/v1/reminders/{id}`
 - `DELETE /api/v1/reminders/{id}?expectedRevision={revision}`
+- `POST /api/v1/motion-control/sessions`
 
 设置与提醒写入均使用持久化 revision 做乐观锁；旧版本写入返回 HTTP 409，客户端刷新后再提交。音量或亮度 Adapter 不可用时，对应远程字段返回 HTTP 503，不会写入数据库。
 
@@ -102,10 +105,15 @@ ctest --test-dir build --output-on-failure
 - `LONGPET_FAMILY_LINK_TOKEN`：Bearer Token；非回环监听时必须配置；
 - `LONGPET_VISION_MONITOR_PORT`：家属端“AI 视野”WebSocket 端口，默认 `8789`；
 - `LONGPET_VISION_MONITOR_FPS`：AI 视野 JPEG 发送帧率，范围 `1~10`，默认 `7`；
+- `LONGPET_MOTION_ENABLED`：是否启用 Family Remote Control；
+- `LONGPET_MOTION_DEVICE`：Motion MCU 串口，当前板卡为 `/dev/ttyS2`；
+- `LONGPET_MOTION_CONTROL_PORT`：独立运动控制 WebSocket 端口，默认 `8790`；
+- `LONGPET_MOTION_REFRESH_MS`、`LONGPET_MOTION_REMOTE_LEASE_MS`：MOVE 刷新与 LongPet 停车租约；
 - `LONGPET_DEVICE_ID`、`LONGPET_DEVICE_NAME`：家属端显示的设备标识和名称。
 
 局域网监听必须使用 Token，且不得将端口映射到公网。只读连接基线见 [FamilyLink 只读连接报告](docs/LongPet-FamilyLink-ReadOnly-Report.md)，写入实现、测试方法与回滚记录见 [FamilyLink 写入报告](docs/LongPet-FamilyLink-Write-Report.md)。
 systemd drop-in 示例见 `deploy/longpet-familylink.conf.example`，示例中的 Token 占位值必须替换。
+运动控制架构、协议、安全策略与实机验收边界见 [Family Remote Control V1 报告](docs/LongPet-Family-Remote-Control-V1-Report.md)。
 
 ## LS2K300 板端运行
 

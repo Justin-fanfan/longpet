@@ -8,7 +8,7 @@ Type=simple
 
 User=longpet
 Group=longpet
-SupplementaryGroups=video input audio tty
+SupplementaryGroups=video input audio tty dialout
 
 WorkingDirectory=/home/longpet
 ExecStart=/home/longpet/LongPet
@@ -50,6 +50,17 @@ Environment="LONGPET_VISION_SEARCH_INTERVAL_MS=250"
 Environment="LONGPET_VISION_LOST_INTERVAL_MS=250"
 Environment="LONGPET_VISION_MONITOR_PORT=8789"
 Environment="LONGPET_VISION_MONITOR_FPS=7"
+
+# Family Remote Control V1：2K300 二号串口实际枚举为 ttyS2。
+# 远控使用独立 WebSocket，MOVE 每 150 ms 刷新；LongPet 350 ms 租约
+# 早于 Motion MCU 的 500 ms watchdog 停车。
+Environment="LONGPET_MOTION_ENABLED=1"
+Environment="LONGPET_MOTION_DEVICE=/dev/ttyS2"
+Environment="LONGPET_MOTION_CONTROL_PORT=8790"
+Environment="LONGPET_MOTION_REFRESH_MS=150"
+Environment="LONGPET_MOTION_REMOTE_LEASE_MS=350"
+Environment="LONGPET_MOTION_DEFAULT_SPEED=20"
+Environment="LONGPET_MOTION_HEAD_STEP_US=20"
 
 Restart=always
 RestartSec=2

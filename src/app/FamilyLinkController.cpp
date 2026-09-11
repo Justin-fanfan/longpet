@@ -118,6 +118,22 @@ QJsonObject visionMonitorSessionObject(const FamilyVisionSession& session)
     };
 }
 
+QJsonObject motionControlSessionObject(const FamilyMotionSession& session)
+{
+    return {
+        {QStringLiteral("sessionId"), session.sessionId},
+        {QStringLiteral("sessionToken"), session.token},
+        {QStringLiteral("port"), session.port},
+        {QStringLiteral("protocolVersion"), session.protocolVersion},
+        {QStringLiteral("mediaFrameVersion"), MediaFrameProtocol::Version},
+        {QStringLiteral("refreshIntervalMs"), session.refreshIntervalMs},
+        {QStringLiteral("leaseTimeoutMs"), session.leaseTimeoutMs},
+        {QStringLiteral("defaultSpeed"), session.defaultSpeed},
+        {QStringLiteral("headStepUs"), session.headStepUs},
+        {QStringLiteral("expiresAt"), dateTimeValue(session.expiresAt)}
+    };
+}
+
 bool reminderTypeFromName(const QString& value, ReminderType* type)
 {
     if (value == QStringLiteral("medicine")) {
@@ -549,6 +565,9 @@ FamilyLinkHttpResponse FamilyLinkController::handleRequest(
     } else if (path == QStringLiteral("/api/v1/vision-monitor/sessions")) {
         if (request.method == QByteArrayLiteral("POST"))
             return startVisionMonitorResponse();
+    } else if (path == QStringLiteral("/api/v1/motion-control/sessions")) {
+        if (request.method == QByteArrayLiteral("POST"))
+            return startMotionControlResponse();
     } else {
         ReminderId id = 0;
         if (!reminderIdFromPath(path, &id)) {
@@ -590,7 +609,8 @@ FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
         {QStringLiteral("remindersRead"), true},
         {QStringLiteral("remindersWrite"), true},
         {QStringLiteral("videoCallSignaling"), m_service->videoCallAvailable()},
-        {QStringLiteral("visionMonitor"), m_service->visionMonitorAvailable()}
+        {QStringLiteral("visionMonitor"), m_service->visionMonitorAvailable()},
+        {QStringLiteral("motionControl"), m_service->motionControlAvailable()}
     };
     const QJsonObject device {
         {QStringLiteral("id"), snapshot.deviceId},
@@ -751,6 +771,31 @@ FamilyLinkHttpResponse FamilyLinkController::startVisionMonitorResponse() const
     }
     return jsonResponse(201, QByteArrayLiteral("Created"),
                         visionMonitorSessionObject(session));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::startMotionControlResponse() const
+{
+    if (!m_service || !m_service->motionControlAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("MOTION_CONTROL_UNAVAILABLE"),
+                             QStringLiteral("远程运动控制服务尚未就绪"));
+    }
+    QString error;
+    const FamilyMotionSession session =
+        m_service->createMotionControlSession(&error);
+    if (!session.isValid()) {
+        const bool busy = error.contains(QStringLiteral("正在远程控制"));
+        return errorResponse(busy ? 409 : 503,
+                             busy ? QByteArrayLiteral("Conflict")
+                                  : QByteArrayLiteral("Service Unavailable"),
+                             busy ? QStringLiteral("MOTION_CONTROL_BUSY")
+                                  : QStringLiteral("MOTION_CONTROL_UNAVAILABLE"),
+                             error.isEmpty()
+                                 ? QStringLiteral("无法创建远程运动控制会话")
+                                 : error);
+    }
+    return jsonResponse(201, QByteArrayLiteral("Created"),
+                        motionControlSessionObject(session));
 }
 
 FamilyLinkHttpResponse FamilyLinkController::remindersResponse() const
