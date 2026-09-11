@@ -1,5 +1,6 @@
 #include "FamilyLinkController.h"
 
+#include "model/MediaFrameProtocol.h"
 #include "services/FamilyLinkService.h"
 
 #include <QDebug>
@@ -101,6 +102,19 @@ QJsonObject videoCallObject(const VideoCallSnapshot& snapshot)
              ? QJsonValue(QJsonValue::Null) : QJsonValue(snapshot.errorCode)},
         {QStringLiteral("errorMessage"), snapshot.errorMessage.isEmpty()
              ? QJsonValue(QJsonValue::Null) : QJsonValue(snapshot.errorMessage)}
+    };
+}
+
+QJsonObject visionMonitorSessionObject(const FamilyVisionSession& session)
+{
+    return {
+        {QStringLiteral("sessionId"), session.sessionId},
+        {QStringLiteral("sessionToken"), session.token},
+        {QStringLiteral("port"), session.port},
+        {QStringLiteral("protocolVersion"), session.protocolVersion},
+        {QStringLiteral("mediaFrameVersion"), MediaFrameProtocol::Version},
+        {QStringLiteral("frameRate"), session.frameRate},
+        {QStringLiteral("expiresAt"), dateTimeValue(session.expiresAt)}
     };
 }
 
@@ -532,6 +546,9 @@ FamilyLinkHttpResponse FamilyLinkController::handleRequest(
     } else if (path == QStringLiteral("/api/v1/video-call/actions")) {
         if (request.method == QByteArrayLiteral("POST"))
             return videoCallActionResponse(request.body);
+    } else if (path == QStringLiteral("/api/v1/vision-monitor/sessions")) {
+        if (request.method == QByteArrayLiteral("POST"))
+            return startVisionMonitorResponse();
     } else {
         ReminderId id = 0;
         if (!reminderIdFromPath(path, &id)) {
@@ -572,7 +589,8 @@ FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
         {QStringLiteral("settingsWrite"), true},
         {QStringLiteral("remindersRead"), true},
         {QStringLiteral("remindersWrite"), true},
-        {QStringLiteral("videoCallSignaling"), m_service->videoCallAvailable()}
+        {QStringLiteral("videoCallSignaling"), m_service->videoCallAvailable()},
+        {QStringLiteral("visionMonitor"), m_service->visionMonitorAvailable()}
     };
     const QJsonObject device {
         {QStringLiteral("id"), snapshot.deviceId},
@@ -709,6 +727,30 @@ FamilyLinkHttpResponse FamilyLinkController::startVideoCallResponse(
     }
     return jsonResponse(201, QByteArrayLiteral("Created"),
                         videoCallObject(result.snapshot));
+}
+
+FamilyLinkHttpResponse FamilyLinkController::startVisionMonitorResponse() const
+{
+    if (!m_service || !m_service->visionMonitorAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("VISION_MONITOR_UNAVAILABLE"),
+                             QStringLiteral("AI 视野服务尚未就绪"));
+    }
+    QString error;
+    const FamilyVisionSession session =
+        m_service->createVisionMonitorSession(&error);
+    if (!session.isValid()) {
+        const bool busy = error.contains(QStringLiteral("正在查看"));
+        return errorResponse(busy ? 409 : 503,
+                             busy ? QByteArrayLiteral("Conflict")
+                                  : QByteArrayLiteral("Service Unavailable"),
+                             busy ? QStringLiteral("VISION_MONITOR_BUSY")
+                                  : QStringLiteral("VISION_MONITOR_UNAVAILABLE"),
+                             error.isEmpty() ? QStringLiteral("无法创建 AI 视野会话")
+                                             : error);
+    }
+    return jsonResponse(201, QByteArrayLiteral("Created"),
+                        visionMonitorSessionObject(session));
 }
 
 FamilyLinkHttpResponse FamilyLinkController::remindersResponse() const

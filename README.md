@@ -96,6 +96,8 @@ ctest --test-dir build --output-on-failure
 - `LONGPET_FAMILY_LINK_PORT`：监听端口，默认 `8787`；
 - `LONGPET_FAMILY_LINK_ADDRESS`：监听地址，默认 `127.0.0.1`；
 - `LONGPET_FAMILY_LINK_TOKEN`：Bearer Token；非回环监听时必须配置；
+- `LONGPET_VISION_MONITOR_PORT`：家属端“AI 视野”WebSocket 端口，默认 `8789`；
+- `LONGPET_VISION_MONITOR_FPS`：AI 视野 JPEG 发送帧率，范围 `1~10`，默认 `7`；
 - `LONGPET_DEVICE_ID`、`LONGPET_DEVICE_NAME`：家属端显示的设备标识和名称。
 
 局域网监听必须使用 Token，且不得将端口映射到公网。只读连接基线见 [FamilyLink 只读连接报告](docs/LongPet-FamilyLink-ReadOnly-Report.md)，写入实现、测试方法与回滚记录见 [FamilyLink 写入报告](docs/LongPet-FamilyLink-Write-Report.md)。

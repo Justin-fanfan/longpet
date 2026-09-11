@@ -334,7 +334,45 @@ SEARCHING → DETECTED → TRACKING
 CPU 百分比是 VisionBench 自身在单核竞争下获得的时间，不含另一个 LongPet/KWS 进程；并发时
 tracker P95 上升但目标更新仍超过 8 Hz，说明本方案在 KWS 负载下仍有实际价值。
 
-### 12.4 与 V1.2 detector-only 的含义对比
+### 12.4 真人走动最终动态验收
+
+本轮最终验收由用户本人在摄像头前持续走动完成，不是静态站立样本。Benchmark 预热 1 次，
+统计 14 次 detector 推理，完整测量窗口 56.7213 秒。
+
+| 分类 | 指标 | 实测 |
+|---|---|---:|
+| 解码/预处理 | decode avg | 25.9575 ms |
+|  | preprocess avg | 8.73368 ms |
+| CNN | inference avg | **993.922 ms** |
+|  | inference min / max | 771.484 / 1255.04 ms |
+|  | inference P50 / P95 | 861.258 / 1255.04 ms |
+| Detector 总链路 | total avg | 1028.81 ms |
+|  | total P50 / P95 | 893.722 / 1297.06 ms |
+|  | effective inference FPS | 0.246821 |
+| 调度 | detector triggers | 14（**0.246821 Hz**） |
+| 目标输出 | observations / present / stale | 420 / 410 / **0** |
+|  | target update rate | **7.22833 Hz** |
+| Tracker | updates | 400 |
+|  | tracker avg | 31.6458 ms |
+|  | tracker P50 / P95 | 21.4568 / 68.7476 ms |
+| 恢复 | corrections | 3 |
+|  | failures / reacquired | **6 / 6** |
+|  | searching updates | 4 |
+| 资源 | runtime / measurement | 59.3991 / 56.7213 s |
+|  | process CPU | 36.21% |
+|  | RSS / peak RSS | 46,112 / 46,320 kB |
+
+这组动态结果验证了 V2.0 的核心假设：CNN 单次仍约需 1 秒，实际仅约 0.25 Hz 触发，
+但 Sparse LK 在两次 detector 之间持续更新目标，使上层 `TargetObservation` 达到约 7.23 Hz。
+真人移动中发生的 6 次 tracker failure 全部由 detector 成功 reacquire，420 次 observation 中没有
+stale observation。换言之，上层不再受限于 detector-only 的约 1 FPS，而能获得连续、带新鲜度
+约束且可自动恢复的人物位置流。
+
+因此 Vision V2.0 的 Detector + Tracker 架构目标已经达到，算法开发阶段在此正式结束。
+后续仍可继续做场景覆盖、参数调优和重新捕获耗时统计，但它们属于产品验证与可观测性增强，
+不再阻塞 V2.1，也不构成继续更换 detector/tracker 的理由。
+
+### 12.5 与 V1.2 detector-only 的含义对比
 
 V1.2 detector-only 历史实测约 1.285 FPS（独占）/ 0.738 FPS（KWS）。V2.0 的 detector 本身
 没有变快，而是把 detector 降到稳定时约 0.12 Hz，并由 tracker 提供 7.7～8.8 Hz 位置更新。
@@ -373,7 +411,10 @@ KWS 并发测试时不要停止 `longpet.service`，直接重复 Benchmark。不
 正式启用前复制 `deploy/vision/longpet-vision.conf.example` 为 systemd drop-in，确认模型路径，
 再把 `LONGPET_VISION_ENABLED` 改为 1。仓库示例仍保持 0，等待十组人工场景验收。
 
-## 14. 尚未完成的人工场景
+## 14. 人工场景与封版边界
+
+真人走动最终验收已经覆盖连续移动、tracker 失败和自动重新捕获，足以结束 V2.0 算法开发阶段。
+下表保留的场景用于后续产品参数验证，不表示 V2.0 架构尚未完成。
 
 | 场景 | 本轮状态 |
 |---|---|
@@ -399,11 +440,9 @@ KWS 并发测试时不要停止 `longpet.service`，直接重复 Benchmark。不
 7. 本轮没有增加视觉 UI overlay；目标通过 Service 信号和 Benchmark 日志输出。
 8. 正式 service 仍默认禁用 Vision；这避免在人工动作验收前直接改变常驻负载。
 
-## 16. V2.1 建议
+## 16. V2.0 封版结论与后续建议
 
-1. 先用同一 Benchmark 完成十组受控动作，各跑无 KWS/KWS 两轮并保存日志。
-2. 根据 LOST 与漂移数据调整 100 ms tracker 周期、8 s correction 周期和低可信门限。
-3. 在上层增加 LEFT/CENTER/RIGHT、bbox 面积/远近和观察稳定窗口，但仍不直接驱动电机。
-4. 增加目标切换策略和短时 LOST grace，必要时再评估 MOSSE，而不是直接引入重 tracker。
-5. 电机阶段必须增加 observation freshness、最大转向时间、急停和视频通话/语音优先级保护。
-
+1. V2.1 直接复用稳定的 `TargetObservation`，把 JPEG 与轻量元数据提供给家属端可视化。
+2. 后续产品验证可补齐受控动作，并在 Benchmark 中追加 failure→reacquire latency；不阻塞 AI View。
+3. 再后续可在上层增加 LEFT/CENTER/RIGHT、bbox 面积/远近和观察稳定窗口，但仍不直接驱动电机。
+4. 电机阶段必须增加 observation freshness、最大转向时间、急停和视频通话/语音优先级保护。

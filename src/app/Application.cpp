@@ -13,6 +13,7 @@
 #include "platform/CameraCaptureAdapter.h"
 #include "platform/CallPromptPlayerAdapter.h"
 #include "platform/FamilyLinkHttpAdapter.h"
+#include "platform/FamilyVisionStreamAdapter.h"
 #include "platform/VisionDetectorFactory.h"
 #include "platform/SparseOpticalFlowTracker.h"
 #include "platform/NetworkStatusAdapter.h"
@@ -27,6 +28,7 @@
 #include "data/WeatherConfigRepository.h"
 #include "services/CareService.h"
 #include "services/FamilyLinkService.h"
+#include "services/FamilyVisionMonitorService.h"
 #include "services/ReminderService.h"
 #include "services/NetworkService.h"
 #include "services/MediaSessionCoordinator.h"
@@ -57,6 +59,16 @@ quint16 configuredFamilyLinkPort()
     const int configured = qEnvironmentVariableIntValue("LONGPET_FAMILY_LINK_PORT", &valid);
     if (!valid || configured < 0 || configured > 65'535)
         return 8'787;
+    return static_cast<quint16>(configured);
+}
+
+quint16 configuredVisionMonitorPort()
+{
+    bool valid = false;
+    const int configured = qEnvironmentVariableIntValue(
+        "LONGPET_VISION_MONITOR_PORT", &valid);
+    if (!valid || configured <= 0 || configured > 65'535)
+        return 8'789;
     return static_cast<quint16>(configured);
 }
 
@@ -150,6 +162,12 @@ bool Application::initialize(QString* error)
     m_visionService = std::make_unique<VisionService>(
         m_cameraCaptureAdapter.get(), m_visionDetector.get(),
         m_visionTracker.get());
+    m_familyVisionStreamAdapter =
+        std::make_unique<FamilyVisionStreamAdapter>();
+    m_familyVisionMonitorService =
+        std::make_unique<FamilyVisionMonitorService>(
+            m_cameraCaptureAdapter.get(), m_visionService.get(),
+            m_familyVisionStreamAdapter.get());
     m_videoCallMediaAdapter = std::make_unique<VideoCallMediaAdapter>(
         m_cameraCaptureAdapter.get());
     m_callPromptPlayerAdapter = std::make_unique<CallPromptPlayerAdapter>();
@@ -241,7 +259,8 @@ bool Application::initialize(QString* error)
     m_backlightAdapter->applyBrightness(currentSettings.brightness);
     m_familyLinkService = std::make_unique<FamilyLinkService>(
         m_reminderService.get(), m_careService.get(), m_settingsService.get(),
-        m_systemService.get(), m_videoCallService.get());
+        m_systemService.get(), m_videoCallService.get(),
+        m_familyVisionMonitorService.get());
     m_familyLinkHttpAdapter = std::make_unique<FamilyLinkHttpAdapter>();
     const QByteArray familyLinkToken = qEnvironmentVariable("LONGPET_FAMILY_LINK_TOKEN").toUtf8();
     const QHostAddress familyLinkAddress = configuredFamilyLinkAddress();
@@ -252,10 +271,21 @@ bool Application::initialize(QString* error)
         && familyLinkAddress != QHostAddress(QHostAddress::LocalHostIPv6);
     if (remoteAddress && familyLinkToken.isEmpty()) {
         qWarning("FamilyLink remote listener disabled: LONGPET_FAMILY_LINK_TOKEN is required");
-    } else if (!m_familyLinkController->start(configuredFamilyLinkPort(), familyLinkAddress,
-                                               &familyLinkError)) {
-        qWarning("FamilyLink HTTP service unavailable: %s", qPrintable(familyLinkError));
     } else {
+        QString visionMonitorError;
+        if (!m_familyVisionMonitorService->start(
+                familyLinkAddress, configuredVisionMonitorPort(),
+                &visionMonitorError)) {
+            qWarning("Family AI View unavailable: %s",
+                     qPrintable(visionMonitorError));
+        }
+    }
+    if (!(remoteAddress && familyLinkToken.isEmpty())
+        && !m_familyLinkController->start(configuredFamilyLinkPort(),
+                                          familyLinkAddress,
+                                          &familyLinkError)) {
+        qWarning("FamilyLink HTTP service unavailable: %s", qPrintable(familyLinkError));
+    } else if (!(remoteAddress && familyLinkToken.isEmpty())) {
         qInfo("FamilyLink API listening on %s:%u",
               qPrintable(familyLinkAddress.toString()),
               static_cast<unsigned>(m_familyLinkController->port()));
@@ -299,6 +329,8 @@ void Application::shutdown()
         m_weatherService->stop();
     if (m_visionService)
         m_visionService->stop();
+    if (m_familyVisionMonitorService)
+        m_familyVisionMonitorService->stop();
     if (m_familyLinkController)
         m_familyLinkController->stop();
     if (m_reminderService)
@@ -339,6 +371,8 @@ void Application::shutdown()
     m_videoCallService.reset();
     m_callPromptPlayerAdapter.reset();
     m_videoCallMediaAdapter.reset();
+    m_familyVisionMonitorService.reset();
+    m_familyVisionStreamAdapter.reset();
     m_visionService.reset();
     m_visionDetector.reset();
     m_cameraCaptureAdapter.reset();

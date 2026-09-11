@@ -17,6 +17,8 @@ class DatabaseManager;
 class FamilyLinkController;
 class FamilyLinkHttpAdapter;
 class FamilyLinkService;
+class FamilyVisionMonitorService;
+class FamilyVisionStreamAdapter;
 class MainWindow;
 class MediaSessionCoordinator;
 class NetworkStatusAdapter;
@@ -95,6 +97,8 @@ private:
     std::unique_ptr<VisionDetectorPort> m_visionDetector;
     std::unique_ptr<VisionTrackerPort> m_visionTracker;
     std::unique_ptr<VisionService> m_visionService;
+    std::unique_ptr<FamilyVisionStreamAdapter> m_familyVisionStreamAdapter;
+    std::unique_ptr<FamilyVisionMonitorService> m_familyVisionMonitorService;
     std::unique_ptr<VideoCallMediaAdapter> m_videoCallMediaAdapter;
     std::unique_ptr<CallPromptPlayerAdapter> m_callPromptPlayerAdapter;
     std::unique_ptr<VideoCallService> m_videoCallService;

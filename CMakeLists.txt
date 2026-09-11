@@ -52,6 +52,7 @@ set(
     src/model/MediaFrameProtocol.cpp
     src/model/MediaFrameProtocol.h
     src/model/CameraModels.h
+    src/model/FamilyVisionModels.h
     src/model/VisionModels.cpp
     src/model/VisionModels.h
     src/platform/NetworkStatusAdapter.cpp
@@ -86,6 +87,10 @@ set(
     src/platform/PowerStatusAdapter.h
     src/platform/FamilyLinkHttpAdapter.cpp
     src/platform/FamilyLinkHttpAdapter.h
+    src/platform/FamilyVisionProtocol.cpp
+    src/platform/FamilyVisionProtocol.h
+    src/platform/FamilyVisionStreamAdapter.cpp
+    src/platform/FamilyVisionStreamAdapter.h
     src/platform/CallPromptPlayerAdapter.cpp
     src/platform/CallPromptPlayerAdapter.h
     src/platform/VideoCallMediaAdapter.cpp
@@ -128,6 +133,9 @@ set(
     src/services/SystemService.h
     src/services/FamilyLinkService.cpp
     src/services/FamilyLinkService.h
+    src/services/FamilyVisionMonitorService.cpp
+    src/services/FamilyVisionMonitorService.h
+    src/services/FamilyVisionPorts.h
     src/services/VideoCallService.cpp
     src/services/VideoCallService.h
     src/services/VideoCallPorts.h

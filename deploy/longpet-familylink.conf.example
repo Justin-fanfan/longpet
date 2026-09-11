@@ -4,6 +4,8 @@
 Environment="LONGPET_FAMILY_LINK_ADDRESS=0.0.0.0"
 Environment="LONGPET_FAMILY_LINK_PORT=8787"
 Environment="LONGPET_FAMILY_LINK_TOKEN=replace-with-a-random-token"
+Environment="LONGPET_VISION_MONITOR_PORT=8789"
+Environment="LONGPET_VISION_MONITOR_FPS=7"
 
 # 可选的家属端显示信息。
 # Environment="LONGPET_DEVICE_ID=longpet-ls-gd"

@@ -3,21 +3,28 @@
 #include "platform/CameraCaptureAdapter.h"
 #include "platform/FastestDetAdapter.h"
 #include "platform/FastestDetPostProcessor.h"
+#include "platform/FamilyVisionProtocol.h"
+#include "platform/FamilyVisionStreamAdapter.h"
 #include "platform/TinyissimoYoloAdapter.h"
 #include "platform/TinyissimoYoloPostProcessor.h"
 #include "platform/VisionDetectorFactory.h"
 #include "platform/VideoCallMediaAdapter.h"
 #include "services/VisionPorts.h"
 #include "services/VisionService.h"
+#include "services/FamilyVisionMonitorService.h"
+#include "services/FamilyVisionPorts.h"
 #include "services/KwsPorts.h"
 #include "services/MediaSessionCoordinator.h"
 #include "services/VideoCallService.h"
 
 #include <QMutex>
 #include <QMutexLocker>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTest>
 #include <QThread>
+#include <QWebSocket>
 
 #include <atomic>
 #include <memory>
@@ -227,6 +234,81 @@ public:
     void complete() { playing = false; emit finished(); }
     bool playing = false;
 };
+
+class FakeFamilyVisionStream final : public FamilyVisionStreamPort {
+public:
+    using FamilyVisionStreamPort::FamilyVisionStreamPort;
+
+    bool start(QHostAddress, quint16 requestedPort, QString*) override
+    {
+        started = true;
+        listeningPort = requestedPort == 0 ? 18'790 : requestedPort;
+        return true;
+    }
+    void stop() override
+    {
+        if (viewer)
+            emit viewerStopped(QStringLiteral("test stop"));
+        viewer = false;
+        started = false;
+    }
+    quint16 port() const override { return listeningPort; }
+    FamilyVisionSession createSession(int frameRate, QString* error) override
+    {
+        if (!started || viewer) {
+            if (error)
+                *error = viewer ? QStringLiteral("已有家属正在查看 AI 视野")
+                                : QStringLiteral("not started");
+            return {};
+        }
+        FamilyVisionSession value;
+        value.sessionId = QStringLiteral("fake-session");
+        value.token = QStringLiteral("fake-token");
+        value.port = listeningPort;
+        value.frameRate = frameRate;
+        value.expiresAt = QDateTime::currentDateTimeUtc().addSecs(30);
+        return value;
+    }
+    void acceptViewer(const QString& sessionId) override
+    {
+        acceptedSession = sessionId;
+        viewer = true;
+    }
+    void rejectViewer(const QString&, const QString& code,
+                      const QString& message) override
+    {
+        rejectedCode = code;
+        rejectedMessage = message;
+        viewer = false;
+    }
+    void publishCameraFrame(const CameraFrame& frame) override
+    {
+        frames.append(frame);
+    }
+    void publishTelemetry(const FamilyVisionTelemetry& value) override
+    {
+        telemetry.append(value);
+    }
+    bool hasViewer() const override { return viewer; }
+    void requestViewer(const QString& sessionId)
+    {
+        emit viewerStartRequested(sessionId);
+    }
+    void disconnectViewer()
+    {
+        viewer = false;
+        emit viewerStopped(QStringLiteral("test disconnect"));
+    }
+
+    QList<CameraFrame> frames;
+    QList<FamilyVisionTelemetry> telemetry;
+    QString acceptedSession;
+    QString rejectedCode;
+    QString rejectedMessage;
+    quint16 listeningPort = 0;
+    bool started = false;
+    bool viewer = false;
+};
 }
 
 class VisionV1Test final : public QObject {
@@ -241,6 +323,9 @@ private slots:
     void visionServiceUsesLatestFrameOnlyAndPauses();
     void visionServiceTracksCorrectsLosesAndReacquires();
     void videoCallAndVisionShareOneCameraSource();
+    void familyAiViewSharesCameraWithoutPausingVision();
+    void familyAiViewProtocolSerializesSafeNormalizedTargets();
+    void familyAiViewWebSocketRequiresEphemeralAuthentication();
     void kwsGatedCallsPreserveVisionLifecycle();
     void missingModelAndCameraDegradeWithoutCrash();
 };
@@ -535,6 +620,168 @@ void VisionV1Test::videoCallAndVisionShareOneCameraSource()
         qunsetenv("LONGPET_MEDIA_PORT");
     else
         qputenv("LONGPET_MEDIA_PORT", originalPort);
+}
+
+void VisionV1Test::familyAiViewSharesCameraWithoutPausingVision()
+{
+    TestCameraCaptureAdapter camera;
+    FakeVisionDetector detector;
+    detector.returnPerson = false;
+    VisionService vision(&camera, &detector, 1);
+    FakeFamilyVisionStream stream;
+    FamilyVisionMonitorService monitor(&camera, &vision, &stream, 10);
+
+    vision.start();
+    QTRY_VERIFY_WITH_TIMEOUT(vision.isAvailable(), 1'000);
+    QString error;
+    QVERIFY(monitor.start(QHostAddress::LocalHost, 0, &error));
+    const FamilyVisionSession session = monitor.createSession(&error);
+    QVERIFY2(session.isValid(), qPrintable(error));
+    stream.requestViewer(session.sessionId);
+    QCOMPARE(stream.acceptedSession, session.sessionId);
+    QCOMPARE(camera.consumerCount(), 2);
+    QCOMPARE(camera.startCount, 1);
+    QVERIFY(!vision.isPaused());
+
+    camera.feed(jpegPayload("ai-view-without-target"));
+    QTRY_VERIFY_WITH_TIMEOUT(!stream.frames.isEmpty(), 500);
+    QVERIFY(!vision.isPaused());
+
+    detector.returnPerson = true;
+    QTest::qWait(110);
+    camera.feed(jpegPayload("ai-view-person"));
+    QTRY_VERIFY_WITH_TIMEOUT(!stream.telemetry.isEmpty()
+        && stream.telemetry.constLast().observation.present, 1'000);
+    QVERIFY(!vision.isPaused());
+
+    stream.disconnectViewer();
+    QCOMPARE(camera.consumerCount(), 1);
+    QCOMPARE(camera.stopCount, 0);
+
+    for (int cycle = 0; cycle < 5; ++cycle) {
+        const FamilyVisionSession next = monitor.createSession(&error);
+        QVERIFY2(next.isValid(), qPrintable(error));
+        stream.requestViewer(next.sessionId);
+        QCOMPARE(camera.consumerCount(), 2);
+        stream.disconnectViewer();
+        QCOMPARE(camera.consumerCount(), 1);
+    }
+
+    monitor.stop();
+    vision.stop();
+    QCOMPARE(camera.consumerCount(), 0);
+    QCOMPARE(camera.stopCount, 1);
+}
+
+void VisionV1Test::familyAiViewProtocolSerializesSafeNormalizedTargets()
+{
+    FamilyVisionTelemetry telemetry;
+    telemetry.detectorName = QStringLiteral("TinyissimoYOLO-v1.2");
+    telemetry.trackerName = QStringLiteral("Sparse LK");
+    telemetry.targetUpdateHz = 7.23;
+    telemetry.observation.present = true;
+    telemetry.observation.fresh = true;
+    telemetry.observation.status = TargetTrackingStatus::Tracking;
+    telemetry.observation.frameSequence = 1718;
+    telemetry.observation.ageMs = 49;
+    telemetry.observation.target = VisionGeometry::personFromNormalizedRect(
+        0.86F, QRectF(0.75, -0.1, 0.5, 0.7), QSize(640, 480));
+    telemetry.observation.detectorConfidence = 0.86F;
+    telemetry.observation.trackerConfidence = 0.93F;
+    telemetry.observation.trackedPointCount = 49;
+
+    const QJsonObject object = FamilyVisionProtocol::telemetryObject(telemetry);
+    QCOMPARE(object.value(QStringLiteral("protocol_version")).toInt(), 1);
+    QCOMPARE(object.value(QStringLiteral("state")).toString(),
+             QStringLiteral("TRACKING"));
+    const QJsonObject box = object.value(QStringLiteral("bbox")).toObject();
+    QVERIFY(qAbs(box.value(QStringLiteral("x")).toDouble() - 0.75) < 0.0001);
+    QVERIFY(qAbs(box.value(QStringLiteral("y")).toDouble()) < 0.0001);
+    QVERIFY(qAbs(box.value(QStringLiteral("w")).toDouble() - 0.25) < 0.0001);
+    QVERIFY(qAbs(box.value(QStringLiteral("h")).toDouble() - 0.6) < 0.0001);
+
+    telemetry.observation.status = TargetTrackingStatus::Lost;
+    QVERIFY(FamilyVisionProtocol::telemetryObject(telemetry)
+                .value(QStringLiteral("bbox")).isNull());
+    telemetry.observation.status = TargetTrackingStatus::Searching;
+    QVERIFY(FamilyVisionProtocol::telemetryObject(telemetry)
+                .value(QStringLiteral("bbox")).isNull());
+    telemetry.observation.status = TargetTrackingStatus::Tracking;
+    telemetry.observation.fresh = false;
+    QVERIFY(FamilyVisionProtocol::telemetryObject(telemetry)
+                .value(QStringLiteral("bbox")).isNull());
+}
+
+void VisionV1Test::familyAiViewWebSocketRequiresEphemeralAuthentication()
+{
+    FamilyVisionStreamAdapter adapter;
+    QString error;
+    QVERIFY2(adapter.start(QHostAddress::LocalHost, 0, &error), qPrintable(error));
+    FamilyVisionSession session = adapter.createSession(7, &error);
+    QVERIFY2(session.isValid(), qPrintable(error));
+
+    QWebSocket unauthenticated;
+    QSignalSpy unauthConnected(&unauthenticated, &QWebSocket::connected);
+    QSignalSpy unauthFrames(&unauthenticated, &QWebSocket::binaryMessageReceived);
+    QSignalSpy unauthClosed(&unauthenticated, &QWebSocket::disconnected);
+    unauthenticated.open(QUrl(QStringLiteral("ws://127.0.0.1:%1/vision-monitor/v1")
+                                  .arg(adapter.port())));
+    QTRY_COMPARE_WITH_TIMEOUT(unauthConnected.count(), 1, 1'000);
+    CameraFrame frame {jpegPayload("private"), 1,
+                       QDateTime::currentDateTimeUtc()};
+    adapter.publishCameraFrame(frame);
+    QTest::qWait(50);
+    QCOMPARE(unauthFrames.count(), 0);
+    const QJsonObject wrongAuth {
+        {QStringLiteral("type"), QStringLiteral("authenticate")},
+        {QStringLiteral("protocol_version"), 1},
+        {QStringLiteral("session_id"), session.sessionId},
+        {QStringLiteral("token"), QStringLiteral("wrong-token")}
+    };
+    unauthenticated.sendBinaryMessage(MediaFrameProtocol::encode(
+        MediaStreamType::Control, 1, 1,
+        QJsonDocument(wrongAuth).toJson(QJsonDocument::Compact)));
+    QTRY_COMPARE_WITH_TIMEOUT(unauthClosed.count(), 1, 1'000);
+
+    session = adapter.createSession(7, &error);
+    QVERIFY2(session.isValid(), qPrintable(error));
+    QWebSocket authenticated;
+    QSignalSpy connected(&authenticated, &QWebSocket::connected);
+    QSignalSpy frames(&authenticated, &QWebSocket::binaryMessageReceived);
+    QSignalSpy startRequests(&adapter,
+        &FamilyVisionStreamPort::viewerStartRequested);
+    QSignalSpy stopped(&adapter, &FamilyVisionStreamPort::viewerStopped);
+    authenticated.open(QUrl(QStringLiteral(
+        "ws://127.0.0.1:%1/vision-monitor/v1").arg(adapter.port())));
+    QTRY_COMPARE_WITH_TIMEOUT(connected.count(), 1, 1'000);
+    const QJsonObject auth {
+        {QStringLiteral("type"), QStringLiteral("authenticate")},
+        {QStringLiteral("protocol_version"), 1},
+        {QStringLiteral("session_id"), session.sessionId},
+        {QStringLiteral("token"), session.token}
+    };
+    authenticated.sendBinaryMessage(MediaFrameProtocol::encode(
+        MediaStreamType::Control, 1, 1,
+        QJsonDocument(auth).toJson(QJsonDocument::Compact)));
+    QTRY_COMPARE_WITH_TIMEOUT(startRequests.count(), 1, 1'000);
+    adapter.acceptViewer(session.sessionId);
+    QTRY_VERIFY_WITH_TIMEOUT(adapter.hasViewer(), 500);
+    frames.clear();
+    adapter.publishCameraFrame(frame);
+    QTRY_VERIFY_WITH_TIMEOUT(frames.count() >= 1, 1'000);
+    bool foundVideo = false;
+    for (const QList<QVariant>& arguments : frames) {
+        MediaFrame decoded;
+        if (MediaFrameProtocol::decode(arguments.front().toByteArray(), &decoded)
+            && decoded.streamType == MediaStreamType::DeviceVideo) {
+            foundVideo = true;
+        }
+    }
+    QVERIFY(foundVideo);
+    authenticated.close();
+    QTRY_COMPARE_WITH_TIMEOUT(stopped.count(), 1, 1'000);
+    QVERIFY(!adapter.hasViewer());
+    adapter.stop();
 }
 
 void VisionV1Test::kwsGatedCallsPreserveVisionLifecycle()

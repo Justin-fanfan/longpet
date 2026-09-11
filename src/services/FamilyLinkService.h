@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/FamilyVisionModels.h"
 #include "model/ReminderModels.h"
 #include "model/SettingsModels.h"
 #include "model/SystemModels.h"
@@ -10,6 +11,7 @@
 #include <QString>
 
 class CareService;
+class FamilyVisionMonitorService;
 class ReminderService;
 class SettingsService;
 class SystemService;
@@ -36,7 +38,8 @@ public:
                       CareService* careService,
                       SettingsService* settingsService,
                       SystemService* systemService,
-                      VideoCallService* videoCallService = nullptr);
+                      VideoCallService* videoCallService = nullptr,
+                      FamilyVisionMonitorService* visionMonitorService = nullptr);
 
     bool status(FamilyLinkStatusSnapshot* snapshot, QString* error = nullptr) const;
     bool settings(FamilyLinkSettingsSnapshot* snapshot, QString* error = nullptr) const;
@@ -48,6 +51,8 @@ public:
     VideoCallResult startVideoCall(VideoCallMode mode) const;
     VideoCallResult applyVideoCallAction(const VideoCallActionRequest& request) const;
     bool videoCallAvailable() const;
+    FamilyVisionSession createVisionMonitorSession(QString* error = nullptr) const;
+    bool visionMonitorAvailable() const;
 
 private:
     static QString configuredDeviceId();
@@ -58,4 +63,5 @@ private:
     SettingsService* m_settingsService = nullptr;
     SystemService* m_systemService = nullptr;
     VideoCallService* m_videoCallService = nullptr;
+    FamilyVisionMonitorService* m_visionMonitorService = nullptr;
 };

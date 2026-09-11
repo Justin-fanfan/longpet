@@ -1,6 +1,7 @@
 #include "FamilyLinkService.h"
 
 #include "services/CareService.h"
+#include "services/FamilyVisionMonitorService.h"
 #include "services/ReminderService.h"
 #include "services/SettingsService.h"
 #include "services/SystemService.h"
@@ -35,12 +36,14 @@ FamilyLinkService::FamilyLinkService(ReminderService* reminderService,
                                      CareService* careService,
                                      SettingsService* settingsService,
                                      SystemService* systemService,
-                                     VideoCallService* videoCallService)
+                                     VideoCallService* videoCallService,
+                                     FamilyVisionMonitorService* visionMonitorService)
     : m_reminderService(reminderService),
       m_careService(careService),
       m_settingsService(settingsService),
       m_systemService(systemService),
-      m_videoCallService(videoCallService)
+      m_videoCallService(videoCallService),
+      m_visionMonitorService(visionMonitorService)
 {
 }
 
@@ -200,6 +203,22 @@ VideoCallResult FamilyLinkService::startVideoCall(VideoCallMode mode) const
 bool FamilyLinkService::videoCallAvailable() const
 {
     return m_videoCallService != nullptr;
+}
+
+FamilyVisionSession FamilyLinkService::createVisionMonitorSession(
+    QString* error) const
+{
+    if (!m_visionMonitorService) {
+        if (error)
+            *error = QStringLiteral("AI 视野服务未初始化");
+        return {};
+    }
+    return m_visionMonitorService->createSession(error);
+}
+
+bool FamilyLinkService::visionMonitorAvailable() const
+{
+    return m_visionMonitorService && m_visionMonitorService->isAvailable();
 }
 
 QString FamilyLinkService::configuredDeviceId()
