@@ -8,6 +8,7 @@ struct CameraFrame {
     QByteArray jpeg;
     quint64 sequence = 0;
     QDateTime timestamp;
+    int rotationDegrees = 0;
 
     bool isValid() const
     {

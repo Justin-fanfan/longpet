@@ -17,6 +17,7 @@ public:
     virtual bool isAvailable() const = 0;
     virtual int consumerCount() const = 0;
     virtual CameraFrame latestFrame() const = 0;
+    virtual int rotationDegrees() const { return 0; }
 
 signals:
     void frameReady(const CameraFrame& frame);

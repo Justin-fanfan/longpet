@@ -19,7 +19,8 @@ public:
     virtual quint16 port() const = 0;
     virtual FamilyVisionSession createSession(int frameRate,
                                                QString* error = nullptr) = 0;
-    virtual void acceptViewer(const QString& sessionId) = 0;
+    virtual void acceptViewer(const QString& sessionId,
+                              int cameraRotationDegrees = 0) = 0;
     virtual void rejectViewer(const QString& sessionId,
                               const QString& code,
                               const QString& message) = 0;

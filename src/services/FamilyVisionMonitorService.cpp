@@ -129,7 +129,7 @@ void FamilyVisionMonitorService::handleViewerStartRequested(
     }
     m_cameraAcquired = true;
     m_frameClock.invalidate();
-    m_streamPort->acceptViewer(sessionId);
+    m_streamPort->acceptViewer(sessionId, m_cameraSource->rotationDegrees());
 
     if (m_latestTelemetry.observation.publishedAt.isValid()) {
         TargetObservation observation = m_latestTelemetry.observation;

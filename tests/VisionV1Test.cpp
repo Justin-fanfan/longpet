@@ -269,9 +269,11 @@ public:
         value.expiresAt = QDateTime::currentDateTimeUtc().addSecs(30);
         return value;
     }
-    void acceptViewer(const QString& sessionId) override
+    void acceptViewer(const QString& sessionId,
+                      int cameraRotationDegrees = 0) override
     {
         acceptedSession = sessionId;
+        acceptedRotation = cameraRotationDegrees;
         viewer = true;
     }
     void rejectViewer(const QString&, const QString& code,
@@ -303,6 +305,7 @@ public:
     QList<CameraFrame> frames;
     QList<FamilyVisionTelemetry> telemetry;
     QString acceptedSession;
+    int acceptedRotation = 0;
     QString rejectedCode;
     QString rejectedMessage;
     quint16 listeningPort = 0;
@@ -317,6 +320,7 @@ class VisionV1Test final : public QObject {
 private slots:
     void cameraSourceSharesLifecycleAndKeepsLatestJpeg();
     void cameraDeviceConfigurationPreservesLegacyFallback();
+    void cameraRotationConfigurationIsAttachedToFrames();
     void fastestDetPostprocessMapsFiltersAndNormalizesPerson();
     void tinyissimoPostprocessMapsLetterboxAndAppliesNms();
     void detectorFactoryDefaultsToTinyissimoAndKeepsFastestDetFallback();
@@ -379,6 +383,29 @@ void VisionV1Test::cameraDeviceConfigurationPreservesLegacyFallback()
         qunsetenv("LONGPET_CALL_CAMERA_DEVICE");
     else
         qputenv("LONGPET_CALL_CAMERA_DEVICE", legacy);
+}
+
+void VisionV1Test::cameraRotationConfigurationIsAttachedToFrames()
+{
+    const QByteArray original = qgetenv("LONGPET_CAMERA_ROTATION");
+    qputenv("LONGPET_CAMERA_ROTATION", "180");
+    QCOMPARE(CameraCaptureAdapter::configuredRotationDegrees(), 180);
+
+    TestCameraCaptureAdapter camera;
+    QCOMPARE(camera.rotationDegrees(), 180);
+    QObject consumer;
+    QString error;
+    QVERIFY(camera.acquire(&consumer, &error));
+    camera.feed(jpegPayload("orientation"));
+    QCOMPARE(camera.latestFrame().rotationDegrees, 180);
+    camera.release(&consumer);
+
+    qputenv("LONGPET_CAMERA_ROTATION", "45");
+    QCOMPARE(CameraCaptureAdapter::configuredRotationDegrees(), 0);
+    if (original.isNull())
+        qunsetenv("LONGPET_CAMERA_ROTATION");
+    else
+        qputenv("LONGPET_CAMERA_ROTATION", original);
 }
 
 void VisionV1Test::fastestDetPostprocessMapsFiltersAndNormalizesPerson()
@@ -639,6 +666,7 @@ void VisionV1Test::familyAiViewSharesCameraWithoutPausingVision()
     QVERIFY2(session.isValid(), qPrintable(error));
     stream.requestViewer(session.sessionId);
     QCOMPARE(stream.acceptedSession, session.sessionId);
+    QCOMPARE(stream.acceptedRotation, camera.rotationDegrees());
     QCOMPARE(camera.consumerCount(), 2);
     QCOMPARE(camera.startCount, 1);
     QVERIFY(!vision.isPaused());
@@ -764,8 +792,16 @@ void VisionV1Test::familyAiViewWebSocketRequiresEphemeralAuthentication()
         MediaStreamType::Control, 1, 1,
         QJsonDocument(auth).toJson(QJsonDocument::Compact)));
     QTRY_COMPARE_WITH_TIMEOUT(startRequests.count(), 1, 1'000);
-    adapter.acceptViewer(session.sessionId);
+    adapter.acceptViewer(session.sessionId, 180);
     QTRY_VERIFY_WITH_TIMEOUT(adapter.hasViewer(), 500);
+    QTRY_VERIFY_WITH_TIMEOUT(frames.count() >= 1, 1'000);
+    MediaFrame startedFrame;
+    QVERIFY(MediaFrameProtocol::decode(
+        frames.constFirst().front().toByteArray(), &startedFrame));
+    QCOMPARE(startedFrame.streamType, MediaStreamType::Control);
+    const QJsonObject started =
+        QJsonDocument::fromJson(startedFrame.payload).object();
+    QCOMPARE(started.value(QStringLiteral("camera_rotation")).toInt(), 180);
     frames.clear();
     adapter.publishCameraFrame(frame);
     QTRY_VERIFY_WITH_TIMEOUT(frames.count() >= 1, 1'000);

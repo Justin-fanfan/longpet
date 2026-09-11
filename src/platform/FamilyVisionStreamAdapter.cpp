@@ -108,7 +108,8 @@ FamilyVisionSession FamilyVisionStreamAdapter::createSession(int frameRate,
     return m_pendingSession;
 }
 
-void FamilyVisionStreamAdapter::acceptViewer(const QString& sessionId)
+void FamilyVisionStreamAdapter::acceptViewer(const QString& sessionId,
+                                             int cameraRotationDegrees)
 {
     if (!m_socket || !m_awaitingService || sessionId != m_activeSessionId)
         return;
@@ -117,7 +118,8 @@ void FamilyVisionStreamAdapter::acceptViewer(const QString& sessionId)
     sendControl({
         {QStringLiteral("type"), QStringLiteral("stream_started")},
         {QStringLiteral("protocol_version"), FamilyVisionProtocol::Version},
-        {QStringLiteral("frame_rate"), m_pendingSession.frameRate}
+        {QStringLiteral("frame_rate"), m_pendingSession.frameRate},
+        {QStringLiteral("camera_rotation"), cameraRotationDegrees}
     });
     resetPendingSession();
 }

@@ -4,6 +4,8 @@
 [Service]
 Environment="LONGPET_VISION_ENABLED=0"
 Environment="LONGPET_VISION_DETECTOR=tinyissimo"
+# 顺时针旋转角度，仅允许 0/90/180/270；物理倒装的 LongPet 使用 180。
+Environment="LONGPET_CAMERA_ROTATION=0"
 # Frozen Vision V1.2 domain-finetuned detector (SHA256 cb3defed...).
 Environment="LONGPET_VISION_MODEL_PATH=/home/longpet/models/tinyissimo-person-128-longpet-v1.onnx"
 Environment="LONGPET_VISION_CONFIDENCE_THRESHOLD=0.25"

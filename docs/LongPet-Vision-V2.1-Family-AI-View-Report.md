@@ -205,11 +205,16 @@ Environment="LONGPET_FAMILY_LINK_PORT=8787"
 Environment="LONGPET_FAMILY_LINK_TOKEN=replace-with-a-random-token"
 Environment="LONGPET_VISION_MONITOR_PORT=8789"
 Environment="LONGPET_VISION_MONITOR_FPS=7"
+Environment="LONGPET_CAMERA_ROTATION=180"
 ```
 
 AI bbox 还要求按现有 Vision 部署说明启用 `LONGPET_VISION_ENABLED=1` 并配置有效模型路径。Vision
 未启用时 AI View 仍可显示摄像头，但不会伪造目标 metadata。若 10 FPS 对板端负载过高，优先使用
 默认 7 FPS 或降到 5 FPS。
+
+`LONGPET_CAMERA_ROTATION` 支持顺时针 `0/90/180/270`。方向随共享 `CameraFrame` 传播：Detector 和
+Sparse LK 对解码图像做同一旋转；WebSocket 控制消息把角度通知 Windows，Canvas 只在显示板端
+JPEG 时旋转。原始 MJPEG 不在 2K300 上重新编码，家属端摄像头也不受影响。
 
 家属端仍连接：
 
@@ -224,7 +229,7 @@ http://192.168.137.32:8787
 ### 11.1 LongPet Windows Release
 
 - Qt 6.11 / MinGW Release 编译通过；
-- `LongPetVisionV1Tests`：15 passed，0 failed；
+- `LongPetVisionV1Tests`：旋转补充后 16 passed，0 failed；
 - `LongPetV02Tests`：43 passed，0 failed，2 skipped；跳过项分别需要 Python KWS bridge 配置和
   UI capture 环境变量，与 V2.1 无关。
 
@@ -252,7 +257,7 @@ D:\Qt\6.11.0\mingw_64\bin
 
 ### 11.2 家属端
 
-- Node 测试：26 passed，0 failed；
+- Node 测试：旋转补充后 27 passed，0 failed；
 - `npm run check`：JS syntax check 与 Vite production build 通过；
 - Electron mock smoke：AI 视野导航、画面区域、状态卡、debug 开关和隐私说明渲染正常；
 - 新测试覆盖 HTTP session、LPMF 复用、URL 推导、normalized bbox 解析、SEARCHING/LOST/absent/
@@ -317,3 +322,31 @@ top -b -d 1 -p "$(pidof LongPet)"
 下一步不要立即进入底盘控制。先完成上述板端联调并保存一组 Vision + KWS + AI View 数据；若 7 FPS
 对 target update rate 影响明显，先降到 5 FPS。数据通过后，再建立语义层（LEFT/CENTER/RIGHT、
 NEAR/MEDIUM/FAR、稳定窗口）和 MotionService 安全边界，为头部朝向与人物跟随提供输入。
+
+## 15. 补充：倒装摄像头统一方向校正
+
+实机 AI View 确认摄像头物理倒装 180°，视频通话中的板端画面也同样倒置。板端只读检查表明，
+该 UVC 摄像头未暴露 V4L2 rotate/flip 控件，当前 Buildroot 也没有 GStreamer `videoflip`。没有采用
+`jpegdec -> videoflip -> jpegenc`，因为它会让单核 2K300 对 30 FPS MJPEG 全量解码和重编码。
+
+本轮增加统一配置：
+
+```ini
+Environment="LONGPET_CAMERA_ROTATION=180"
+```
+
+实现语义为顺时针旋转，允许 `0/90/180/270`，缺省及非法值回退为 `0`。方向由
+`CameraCaptureAdapter` 写入 `CameraFrame::rotationDegrees`：
+
+1. Tinyissimo 和 FastestDet 在 JPEG 解码后、resize/letterbox 前旋转；
+2. Sparse LK 在灰度 JPEG 解码后做同一旋转，Detector/Tracker 始终共享坐标系；
+3. AI View `stream_started.camera_rotation` 通知 Windows Canvas 旋转板端 JPEG，bbox 继续使用旋转后
+   的 normalized 坐标；
+4. 视频通话 `authenticated.cameraRotation` 执行相同显示校正，只影响 LongPet 发出的 DeviceVideo，
+   不旋转 Windows 本地摄像头和 LongPet 收到的 FamilyVideo；
+5. 网络仍发送摄像头原始 MJPEG，不增加板端 JPEG 重编码负载。
+
+补充验证结果：Windows Qt Release 编译通过，完整 CTest 2/2 通过；Vision 测试 16/16 通过；
+家属端 Node 测试 27/27 通过，Vite production build 通过。按用户要求终止本次 LoongArch 交叉构建，
+未将不完整构建计为通过，也未部署本补充版本。板端需要验证画面、bbox 和移动方向一致，并复测视频
+通话中只有板端画面被校正。

@@ -10,7 +10,8 @@ const QByteArray JpegEndMarker = QByteArray::fromHex("ffd9");
 }
 
 CameraCaptureAdapter::CameraCaptureAdapter(QObject* parent)
-    : CameraSourcePort(parent)
+    : CameraSourcePort(parent),
+      m_rotationDegrees(configuredRotationDegrees())
 {
     qRegisterMetaType<CameraFrame>();
     connect(&m_cameraProcess, &QProcess::readyReadStandardOutput,
@@ -105,6 +106,11 @@ CameraFrame CameraCaptureAdapter::latestFrame() const
     return m_latestFrame;
 }
 
+int CameraCaptureAdapter::rotationDegrees() const
+{
+    return m_rotationDegrees;
+}
+
 QString CameraCaptureAdapter::configuredDevice()
 {
     const QString sharedDevice =
@@ -115,6 +121,23 @@ QString CameraCaptureAdapter::configuredDevice()
         qEnvironmentVariable("LONGPET_CALL_CAMERA_DEVICE").trimmed();
     return legacyCallDevice.isEmpty()
         ? QStringLiteral("/dev/video0") : legacyCallDevice;
+}
+
+int CameraCaptureAdapter::configuredRotationDegrees()
+{
+    const QByteArray raw = qgetenv("LONGPET_CAMERA_ROTATION").trimmed();
+    if (raw.isEmpty())
+        return 0;
+    bool valid = false;
+    const int degrees = raw.toInt(&valid);
+    if (valid && (degrees == 0 || degrees == 90
+                  || degrees == 180 || degrees == 270)) {
+        return degrees;
+    }
+    qWarning().noquote()
+        << QStringLiteral("LONGPET_CAMERA_ROTATION=%1 无效；仅支持 0/90/180/270，回退为 0")
+               .arg(QString::fromUtf8(raw));
+    return 0;
 }
 
 bool CameraCaptureAdapter::startCapture(QString* error)
@@ -148,8 +171,9 @@ bool CameraCaptureAdapter::startCapture(QString* error)
         return false;
     }
     qInfo().noquote()
-        << QStringLiteral("Shared camera started: %1, 640x480 MJPEG @ 30 FPS")
-               .arg(configuredDevice());
+        << QStringLiteral(
+               "Shared camera started: %1, 640x480 MJPEG @ 30 FPS, rotation=%2")
+               .arg(configuredDevice()).arg(m_rotationDegrees);
     return true;
 #endif
 }
@@ -227,6 +251,7 @@ void CameraCaptureAdapter::publishFrame(QByteArray jpeg)
     frame.jpeg = std::move(jpeg);
     frame.sequence = ++m_nextSequence;
     frame.timestamp = QDateTime::currentDateTimeUtc();
+    frame.rotationDegrees = m_rotationDegrees;
     m_latestFrame = frame;
     emit frameReady(frame);
 }

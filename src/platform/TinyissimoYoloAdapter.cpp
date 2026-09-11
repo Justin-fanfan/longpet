@@ -1,6 +1,7 @@
 #include "TinyissimoYoloAdapter.h"
 
 #include "TinyissimoYoloPostProcessor.h"
+#include "CameraImageTransform.h"
 
 #include <QElapsedTimer>
 #include <QFileInfo>
@@ -285,13 +286,14 @@ VisionFrameResult TinyissimoYoloAdapter::detect(const CameraFrame& frame,
         QElapsedTimer stageTimer;
         stageTimer.start();
         const std::vector<uchar> encoded(frame.jpeg.cbegin(), frame.jpeg.cend());
-        const cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_COLOR);
-        result.decodeMs = stageTimer.nsecsElapsed() / 1'000'000.0;
+        cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_COLOR);
         if (decoded.empty()) {
             if (error)
                 *error = QStringLiteral("OpenCV 无法解码摄像头 JPEG");
             return result;
         }
+        applyCameraRotation(frame, &decoded);
+        result.decodeMs = stageTimer.nsecsElapsed() / 1'000'000.0;
         result.sourceSize = QSize(decoded.cols, decoded.rows);
 
         stageTimer.restart();

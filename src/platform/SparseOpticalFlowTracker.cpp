@@ -1,4 +1,5 @@
 #include "SparseOpticalFlowTracker.h"
+#include "CameraImageTransform.h"
 
 #include <QElapsedTimer>
 
@@ -56,6 +57,7 @@ bool decodeGrayscale(const CameraFrame& frame, double processingScale,
             *error = QStringLiteral("OpenCV 无法解码跟踪帧 JPEG");
         return false;
     }
+    applyCameraRotation(frame, &decoded);
     *sourceSize = QSize(decoded.cols, decoded.rows);
     if (processingScale < 0.999) {
         cv::resize(decoded, *grayscale, cv::Size(), processingScale,

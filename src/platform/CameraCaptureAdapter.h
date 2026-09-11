@@ -19,8 +19,10 @@ public:
     bool isAvailable() const override;
     int consumerCount() const override;
     CameraFrame latestFrame() const override;
+    int rotationDegrees() const override;
 
     static QString configuredDevice();
+    static int configuredRotationDegrees();
 
 protected:
     virtual bool startCapture(QString* error);
@@ -39,6 +41,7 @@ private:
     QByteArray m_cameraBuffer;
     CameraFrame m_latestFrame;
     quint64 m_nextSequence = 0;
+    int m_rotationDegrees = 0;
     bool m_running = false;
     bool m_stoppingProcess = false;
 };

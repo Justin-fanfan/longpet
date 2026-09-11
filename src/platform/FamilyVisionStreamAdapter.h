@@ -22,7 +22,8 @@ public:
     quint16 port() const override;
     FamilyVisionSession createSession(int frameRate,
                                        QString* error = nullptr) override;
-    void acceptViewer(const QString& sessionId) override;
+    void acceptViewer(const QString& sessionId,
+                      int cameraRotationDegrees = 0) override;
     void rejectViewer(const QString& sessionId,
                       const QString& code,
                       const QString& message) override;

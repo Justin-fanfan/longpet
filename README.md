@@ -49,6 +49,10 @@ docs/          设计、实验、开发、部署与维护文档
 不再是当前 roadmap 的下一版本必做项。V1.2 PC 结果与尚未覆盖的无人误报指标见
 [Vision V1.2 报告](docs/LongPet-Vision-V1.2-Domain-Finetune-Report.md)。
 
+倒装摄像头可通过 `LONGPET_CAMERA_ROTATION=180` 统一校正。支持 `0/90/180/270`（顺时针）；
+Detector 与 Tracker 在解码后旋转，AI 视野和视频通话在 Windows Canvas 旋转原始 JPEG，避免板端
+逐帧重新编码。
+
 ## 构建
 
 需要 CMake 3.21+、C++17 与 Qt 6.5+，Qt 组件为 Core、Gui、Widgets、Svg、Sql、Network；测试还需要 Qt Test。

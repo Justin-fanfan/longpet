@@ -97,6 +97,7 @@ set(
     src/platform/VideoCallMediaAdapter.h
     src/platform/CameraCaptureAdapter.cpp
     src/platform/CameraCaptureAdapter.h
+    src/platform/CameraImageTransform.h
     src/platform/FastestDetAdapter.cpp
     src/platform/FastestDetAdapter.h
     src/platform/FastestDetPostProcessor.cpp

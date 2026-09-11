@@ -271,7 +271,9 @@ void VideoCallMediaAdapter::handleControlFrame(const QByteArray& payload)
         sendControl(QStringLiteral("authenticated"), {
             {QStringLiteral("audioEnabled"), m_audioStarted},
             {QStringLiteral("mode"), m_session.mode == VideoCallMode::Video
-                ? QStringLiteral("video") : QStringLiteral("voice")}
+                ? QStringLiteral("video") : QStringLiteral("voice")},
+            {QStringLiteral("cameraRotation"),
+                m_cameraSource ? m_cameraSource->rotationDegrees() : 0}
         });
         emit peerAuthenticated();
         checkReady();
