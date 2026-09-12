@@ -35,6 +35,28 @@ QString headMotionName(HeadMotion motion)
     return QStringLiteral("CENTER");
 }
 
+QString physicalHeadDirectionName(PhysicalHeadDirection direction)
+{
+    switch (direction) {
+    case PhysicalHeadDirection::Left: return QStringLiteral("LEFT");
+    case PhysicalHeadDirection::Centered: return QStringLiteral("CENTERED");
+    case PhysicalHeadDirection::Right: return QStringLiteral("RIGHT");
+    case PhysicalHeadDirection::Unknown: break;
+    }
+    return QStringLiteral("UNKNOWN");
+}
+
+PhysicalHeadDirection physicalHeadDirection(int offsetUs, int centeredUs)
+{
+    if (centeredUs < 0)
+        return PhysicalHeadDirection::Unknown;
+    if (offsetUs < -centeredUs)
+        return PhysicalHeadDirection::Left;
+    if (offsetUs > centeredUs)
+        return PhysicalHeadDirection::Right;
+    return PhysicalHeadDirection::Centered;
+}
+
 bool motionControlModeFromName(const QString& name, MotionControlMode* mode)
 {
     if (!mode)
@@ -73,4 +95,3 @@ bool headMotionFromName(const QString& name, HeadMotion* motion)
     else return false;
     return true;
 }
-

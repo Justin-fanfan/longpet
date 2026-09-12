@@ -25,6 +25,22 @@ QByteArray EspMotionProtocol::moveCommand(ChassisMotion motion, int speed)
         + ' ' + QByteArray::number(speed) + '\n';
 }
 
+QByteArray EspMotionProtocol::followMoveCommand(ChassisMotion motion,
+                                                int speed)
+{
+    if (motion == ChassisMotion::Stopped)
+        return QByteArrayLiteral("FOLLOW_MOVE STOP\n");
+    if ((motion != ChassisMotion::Forward
+         && motion != ChassisMotion::RotateLeft
+         && motion != ChassisMotion::RotateRight)
+        || speed < 1 || speed > 100) {
+        return {};
+    }
+    return QByteArrayLiteral("FOLLOW_MOVE ")
+        + chassisMotionName(motion).toLatin1() + ' '
+        + QByteArray::number(speed) + '\n';
+}
+
 QByteArray EspMotionProtocol::headCommand(HeadMotion motion, int stepUs)
 {
     if (motion == HeadMotion::Center)
@@ -62,7 +78,7 @@ bool EspMotionProtocol::parseStatusLine(const QByteArray& line,
         return false;
     }
     static const QRegularExpression pattern(QStringLiteral(
-        R"(^\[STATUS\] mode=([A-Z_]+) motion=([A-Z_]+) stop=([A-Z_]+) fault=([01]) target=([01]) servo=([0-9]+) imu=([01])$)"));
+        R"(^\[STATUS\] mode=([A-Z_]+) motion=([A-Z_]+) stop=([A-Z_]+) fault=([01]) target=([01]) servo=([0-9]+)(?: head_offset=(-?[0-9]+))? imu=([01])$)"));
     const QString text = QString::fromLatin1(line).trimmed();
     const QRegularExpressionMatch match = pattern.match(text);
     if (!match.hasMatch()) {
@@ -84,7 +100,10 @@ bool EspMotionProtocol::parseStatusLine(const QByteArray& line,
     status->fault = match.captured(4) == QStringLiteral("1");
     status->targetAvailable = match.captured(5) == QStringLiteral("1");
     status->servoPulseUs = match.captured(6).toInt();
-    status->imuAvailable = match.captured(7) == QStringLiteral("1");
-    status->updatedAt = QDateTime::currentDateTimeUtc();
+    status->headOffsetAvailable = !match.captured(7).isEmpty();
+    status->headOffsetUs = match.captured(7).toInt();
+    status->imuAvailable = match.captured(8) == QStringLiteral("1");
+    status->mcuReportedAt = QDateTime::currentDateTimeUtc();
+    status->updatedAt = status->mcuReportedAt;
     return true;
 }

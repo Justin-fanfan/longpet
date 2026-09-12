@@ -35,6 +35,8 @@ private:
     FamilyLinkHttpResponse automaticHeadTrackingResponse() const;
     FamilyLinkHttpResponse updateAutomaticHeadTrackingResponse(
         const QByteArray& body) const;
+    FamilyLinkHttpResponse updateAutomaticTrackingResponse(
+        const QByteArray& body) const;
     FamilyLinkHttpResponse updateSettingsResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse createReminderResponse(const QByteArray& body) const;
     FamilyLinkHttpResponse updateReminderResponse(ReminderId id,

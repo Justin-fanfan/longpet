@@ -23,6 +23,8 @@ public:
     bool sendMode(MotionControlMode mode, QString* error = nullptr) override;
     bool sendMove(ChassisMotion motion, int speed,
                   QString* error = nullptr) override;
+    bool sendFollowMove(ChassisMotion motion, int speed,
+                        QString* error = nullptr) override;
     bool sendHead(HeadMotion motion, int stepUs,
                   QString* error = nullptr) override;
     bool sendTarget(const MotionTargetFrame& target,

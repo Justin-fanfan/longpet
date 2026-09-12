@@ -15,7 +15,7 @@ struct MotionServiceConfiguration {
     int remoteLeaseTimeoutMs = 350;
     int defaultSpeed = 20;
     int headStepUs = 20;
-    int statusPollIntervalMs = 1'000;
+    int statusPollIntervalMs = 250;
     int mcuOfflineTimeoutMs = 2'500;
 };
 
@@ -37,16 +37,23 @@ public:
     FamilyMotionSession createRemoteSession(QString* error = nullptr);
     MotionStatusSnapshot status() const;
     bool beginAutomaticHeadControl(QString* error = nullptr);
+    bool beginAutomaticFollowControl(QString* error = nullptr);
     void endAutomaticHeadControl(const QString& reason = {});
     bool sendAutomaticTarget(const MotionTargetFrame& target,
                              QString* error = nullptr);
+    bool sendAutomaticFollowMove(ChassisMotion motion, int speed,
+                                 QString* error = nullptr);
     bool isAutomaticHeadControlActive() const;
+    bool isAutomaticFollowControlActive() const;
+    MotionControlMode automaticControlMode() const;
     bool isManualControlActive() const;
 
 signals:
     void statusChanged(const MotionStatusSnapshot& status);
     void manualControlChanged(bool active);
     void automaticHeadControlChanged(bool active, const QString& reason);
+    void automaticControlChanged(MotionControlMode mode, bool active,
+                                 const QString& reason);
 
 private:
     void handleControllerStart(const QString& sessionId);
@@ -62,6 +69,8 @@ private:
     void pollMcuStatus();
     void publishStatus();
     bool commandStop(QString* error = nullptr);
+    bool beginAutomaticControl(MotionControlMode mode, QString* error);
+    void clearAutomaticControl(const QString& reason, bool sendSafeCommands);
     void clearChassisState(const QString& reason);
     void endRemoteControl(const QString& reason, bool notifyClient,
                           const QString& errorCode = {});
@@ -75,7 +84,7 @@ private:
     QTimer m_refreshTimer;
     QTimer m_statusTimer;
     QString m_activeSessionId;
-    bool m_automaticHeadControlActive = false;
+    MotionControlMode m_automaticControlMode = MotionControlMode::Unknown;
     ChassisMotion m_requestedMotion = ChassisMotion::Stopped;
     int m_requestedSpeed = 0;
     qint64 m_lastRemoteRefreshMs = -1;

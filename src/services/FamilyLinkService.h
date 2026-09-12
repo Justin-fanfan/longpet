@@ -68,6 +68,9 @@ public:
     bool setAutomaticHeadTracking(
         bool enabled, AutomaticHeadTrackingSnapshot* snapshot,
         QString* error = nullptr) const;
+    bool setAutomaticTrackingMode(
+        AutomaticTrackingMode mode, AutomaticHeadTrackingSnapshot* snapshot,
+        QString* error = nullptr) const;
     bool automaticHeadTrackingAvailable() const;
 
 private:

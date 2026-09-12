@@ -121,6 +121,14 @@ int configuredMotionInteger(const char* name, int fallback,
     return valid ? std::clamp(value, minimum, maximum) : fallback;
 }
 
+qreal configuredMotionReal(const char* name, qreal fallback,
+                           qreal minimum, qreal maximum)
+{
+    bool valid = false;
+    const qreal value = qEnvironmentVariable(name).toDouble(&valid);
+    return valid ? std::clamp(value, minimum, maximum) : fallback;
+}
+
 quint16 configuredMotionControlPort()
 {
     return static_cast<quint16>(configuredMotionInteger(
@@ -216,6 +224,8 @@ bool Application::initialize(QString* error)
         "LONGPET_MOTION_DEFAULT_SPEED", 20, 1, 100);
     motionConfiguration.headStepUs = configuredMotionInteger(
         "LONGPET_MOTION_HEAD_STEP_US", 20, 1, 100);
+    motionConfiguration.statusPollIntervalMs = configuredMotionInteger(
+        "LONGPET_MOTION_STATUS_POLL_MS", 250, 200, 2'000);
     m_motionService = std::make_unique<MotionService>(
         m_espSerialAdapter.get(), m_familyMotionControlAdapter.get(),
         motionConfiguration);
@@ -224,6 +234,32 @@ bool Application::initialize(QString* error)
         "LONGPET_AUTO_HEAD_MAX_TARGET_AGE_MS", 500, 100, 2'500);
     headTrackingConfiguration.targetExpiryMs = configuredMotionInteger(
         "LONGPET_AUTO_HEAD_TARGET_EXPIRY_MS", 500, 200, 2'500);
+    headTrackingConfiguration.targetStableMs = configuredMotionInteger(
+        "LONGPET_FOLLOW_TARGET_STABLE_MS", 600, 100, 5'000);
+    headTrackingConfiguration.motionStatusMaximumAgeMs = configuredMotionInteger(
+        "LONGPET_FOLLOW_MOTION_STATUS_MAX_AGE_MS", 750, 200, 5'000);
+    headTrackingConfiguration.headAlignEnterUs = configuredMotionInteger(
+        "LONGPET_FOLLOW_ALIGN_ENTER_US", 220, 20, 700);
+    headTrackingConfiguration.headAlignExitUs = configuredMotionInteger(
+        "LONGPET_FOLLOW_ALIGN_EXIT_US", 100, 0, 699);
+    headTrackingConfiguration.alignEnterDwellMs = configuredMotionInteger(
+        "LONGPET_FOLLOW_ALIGN_ENTER_DWELL_MS", 400, 0, 5'000);
+    headTrackingConfiguration.alignExitDwellMs = configuredMotionInteger(
+        "LONGPET_FOLLOW_ALIGN_EXIT_DWELL_MS", 400, 0, 5'000);
+    headTrackingConfiguration.minimumMotionDurationMs = configuredMotionInteger(
+        "LONGPET_FOLLOW_MIN_MOTION_MS", 300, 0, 5'000);
+    headTrackingConfiguration.farEnterBboxHeight = configuredMotionReal(
+        "LONGPET_FOLLOW_FAR_ENTER_HEIGHT", 0.28, 0.02, 0.90);
+    headTrackingConfiguration.farExitBboxHeight = configuredMotionReal(
+        "LONGPET_FOLLOW_FAR_EXIT_HEIGHT", 0.34, 0.03, 0.94);
+    headTrackingConfiguration.nearEnterBboxHeight = configuredMotionReal(
+        "LONGPET_FOLLOW_NEAR_ENTER_HEIGHT", 0.78, 0.04, 0.99);
+    headTrackingConfiguration.nearExitBboxHeight = configuredMotionReal(
+        "LONGPET_FOLLOW_NEAR_EXIT_HEIGHT", 0.70, 0.03, 0.98);
+    headTrackingConfiguration.followForwardSpeed = configuredMotionInteger(
+        "LONGPET_FOLLOW_FORWARD_SPEED", 12, 1, 100);
+    headTrackingConfiguration.followRotateSpeed = configuredMotionInteger(
+        "LONGPET_FOLLOW_ROTATE_SPEED", 10, 1, 100);
     m_automaticHeadTrackingService =
         std::make_unique<AutomaticHeadTrackingService>(
             m_motionService.get(), headTrackingConfiguration);

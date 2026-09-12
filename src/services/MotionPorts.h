@@ -21,6 +21,8 @@ public:
                           QString* error = nullptr) = 0;
     virtual bool sendMove(ChassisMotion motion, int speed,
                           QString* error = nullptr) = 0;
+    virtual bool sendFollowMove(ChassisMotion motion, int speed,
+                                QString* error = nullptr) = 0;
     virtual bool sendHead(HeadMotion motion, int stepUs,
                           QString* error = nullptr) = 0;
     virtual bool sendTarget(const MotionTargetFrame& target,

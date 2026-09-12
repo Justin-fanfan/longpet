@@ -140,6 +140,8 @@ QJsonObject automaticHeadTrackingObject(
     return {
         {QStringLiteral("enabled"), snapshot.enabled},
         {QStringLiteral("active"), snapshot.active},
+        {QStringLiteral("mode"),
+         automaticTrackingModeName(snapshot.mode)},
         {QStringLiteral("state"),
          automaticHeadTrackingStateName(snapshot.state)},
         {QStringLiteral("visionStatus"),
@@ -150,6 +152,24 @@ QJsonObject automaticHeadTrackingObject(
         {QStringLiteral("dx"), snapshot.dx},
         {QStringLiteral("dy"), snapshot.dy},
         {QStringLiteral("area"), snapshot.area},
+        {QStringLiteral("normalizedBboxWidth"),
+         snapshot.normalizedBboxWidth},
+        {QStringLiteral("normalizedBboxHeight"),
+         snapshot.normalizedBboxHeight},
+        {QStringLiteral("normalizedBboxAreaRatio"),
+         snapshot.normalizedBboxAreaRatio},
+        {QStringLiteral("followState"),
+         personFollowStateName(snapshot.followState)},
+        {QStringLiteral("distanceClass"),
+         personDistanceClassName(snapshot.distanceClass)},
+        {QStringLiteral("headDirection"),
+         physicalHeadDirectionName(snapshot.headDirection)},
+        {QStringLiteral("headOffsetAvailable"),
+         snapshot.headOffsetAvailable},
+        {QStringLiteral("headOffsetUs"), snapshot.headOffsetUs},
+        {QStringLiteral("chassisMotion"),
+         chassisMotionName(snapshot.chassisMotion)},
+        {QStringLiteral("targetStableMs"), snapshot.targetStableMs},
         {QStringLiteral("detail"), snapshot.detail},
         {QStringLiteral("updatedAt"), dateTimeValue(snapshot.updatedAt)}
     };
@@ -594,6 +614,11 @@ FamilyLinkHttpResponse FamilyLinkController::handleRequest(
             return automaticHeadTrackingResponse();
         if (request.method == QByteArrayLiteral("PUT"))
             return updateAutomaticHeadTrackingResponse(request.body);
+    } else if (path == QStringLiteral("/api/v1/automatic-tracking")) {
+        if (request.method == QByteArrayLiteral("GET"))
+            return automaticHeadTrackingResponse();
+        if (request.method == QByteArrayLiteral("PUT"))
+            return updateAutomaticTrackingResponse(request.body);
     } else {
         ReminderId id = 0;
         if (!reminderIdFromPath(path, &id)) {
@@ -638,6 +663,8 @@ FamilyLinkHttpResponse FamilyLinkController::statusResponse() const
         {QStringLiteral("visionMonitor"), m_service->visionMonitorAvailable()},
         {QStringLiteral("motionControl"), m_service->motionControlAvailable()},
         {QStringLiteral("automaticHeadTracking"),
+         m_service->automaticHeadTrackingAvailable()},
+        {QStringLiteral("automaticPersonFollowing"),
          m_service->automaticHeadTrackingAvailable()}
     };
     const QJsonObject device {
@@ -878,6 +905,50 @@ FamilyLinkController::updateAutomaticHeadTrackingResponse(
                              QStringLiteral("AUTO_HEAD_UNAVAILABLE"),
                              error.isEmpty()
                                  ? QStringLiteral("自动跟头设置失败") : error);
+    }
+    return jsonResponse(200, QByteArrayLiteral("OK"),
+                        automaticHeadTrackingObject(snapshot));
+}
+
+FamilyLinkHttpResponse
+FamilyLinkController::updateAutomaticTrackingResponse(
+    const QByteArray& body) const
+{
+    if (!m_service || !m_service->automaticHeadTrackingAvailable()) {
+        return errorResponse(503, QByteArrayLiteral("Service Unavailable"),
+                             QStringLiteral("AUTO_TRACK_UNAVAILABLE"),
+                             QStringLiteral("自动视觉运动服务尚未就绪"));
+    }
+    QJsonParseError parseError;
+    const QJsonDocument document = QJsonDocument::fromJson(body, &parseError);
+    if (parseError.error != QJsonParseError::NoError
+        || !document.isObject()) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"),
+                             QStringLiteral("请求必须是 JSON 对象"));
+    }
+    const QJsonObject object = document.object();
+    if (object.size() != 1 || !object.value(QStringLiteral("mode")).isString()) {
+        return errorResponse(422, QByteArrayLiteral("Unprocessable Content"),
+                             QStringLiteral("VALIDATION_ERROR"),
+                             QStringLiteral("只允许字符串字段 mode"));
+    }
+    AutomaticTrackingMode mode = AutomaticTrackingMode::Disabled;
+    if (!automaticTrackingModeFromName(
+            object.value(QStringLiteral("mode")).toString(), &mode)) {
+        return errorResponse(
+            422, QByteArrayLiteral("Unprocessable Content"),
+            QStringLiteral("VALIDATION_ERROR"),
+            QStringLiteral("mode 只支持 DISABLED、HEAD_ONLY、PERSON_FOLLOW"));
+    }
+    AutomaticHeadTrackingSnapshot snapshot;
+    QString error;
+    if (!m_service->setAutomaticTrackingMode(mode, &snapshot, &error)) {
+        return errorResponse(409, QByteArrayLiteral("Conflict"),
+                             QStringLiteral("AUTO_TRACK_REJECTED"),
+                             error.isEmpty()
+                                 ? QStringLiteral("自动视觉运动模式切换失败")
+                                 : error);
     }
     return jsonResponse(200, QByteArrayLiteral("OK"),
                         automaticHeadTrackingObject(snapshot));

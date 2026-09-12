@@ -26,19 +26,33 @@ enum class HeadMotion {
     Right
 };
 
+// Semantic direction reported by the motion controller. The sign is defined
+// in physical LongPet coordinates and is intentionally independent from the
+// servo's electrical pulse direction.
+enum class PhysicalHeadDirection {
+    Unknown,
+    Left,
+    Centered,
+    Right
+};
+
 struct MotionStatusSnapshot {
     bool uartAvailable = false;
     bool mcuOnline = false;
     bool fault = false;
     bool remoteControlActive = false;
     bool automaticHeadTrackingActive = false;
+    bool automaticPersonFollowingActive = false;
     MotionControlMode mode = MotionControlMode::Unknown;
     ChassisMotion motion = ChassisMotion::Stopped;
     QString stopReason;
     int servoPulseUs = -1;
+    bool headOffsetAvailable = false;
+    int headOffsetUs = 0; // negative=physical left, positive=physical right
     bool targetAvailable = false;
     bool imuAvailable = false;
     QString detail;
+    QDateTime mcuReportedAt;
     QDateTime updatedAt;
 };
 
@@ -70,6 +84,8 @@ struct FamilyMotionSession {
 QString motionControlModeName(MotionControlMode mode);
 QString chassisMotionName(ChassisMotion motion);
 QString headMotionName(HeadMotion motion);
+QString physicalHeadDirectionName(PhysicalHeadDirection direction);
+PhysicalHeadDirection physicalHeadDirection(int offsetUs, int centeredUs);
 bool motionControlModeFromName(const QString& name, MotionControlMode* mode);
 bool chassisMotionFromName(const QString& name, ChassisMotion* motion);
 bool headMotionFromName(const QString& name, HeadMotion* motion);
@@ -77,4 +93,5 @@ bool headMotionFromName(const QString& name, HeadMotion* motion);
 Q_DECLARE_METATYPE(MotionStatusSnapshot)
 Q_DECLARE_METATYPE(ChassisMotion)
 Q_DECLARE_METATYPE(HeadMotion)
+Q_DECLARE_METATYPE(PhysicalHeadDirection)
 Q_DECLARE_METATYPE(MotionTargetFrame)

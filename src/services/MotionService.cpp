@@ -148,8 +148,27 @@ MotionStatusSnapshot MotionService::status() const
 
 bool MotionService::beginAutomaticHeadControl(QString* error)
 {
-    if (m_automaticHeadControlActive)
+    return beginAutomaticControl(MotionControlMode::HeadOnly, error);
+}
+
+bool MotionService::beginAutomaticFollowControl(QString* error)
+{
+    return beginAutomaticControl(MotionControlMode::Follow, error);
+}
+
+bool MotionService::beginAutomaticControl(MotionControlMode mode,
+                                          QString* error)
+{
+    if (mode != MotionControlMode::HeadOnly
+        && mode != MotionControlMode::Follow) {
+        if (error)
+            *error = QStringLiteral("自动控制模式无效");
+        return false;
+    }
+    if (m_automaticControlMode == mode)
         return true;
+    if (m_automaticControlMode != MotionControlMode::Unknown)
+        clearAutomaticControl(QStringLiteral("切换自动控制模式"), true);
     if (!m_started || !m_motionPort || !m_motionPort->isTransportAvailable()) {
         if (error)
             *error = QStringLiteral("Motion UART 未连接");
@@ -173,55 +192,76 @@ bool MotionService::beginAutomaticHeadControl(QString* error)
 
     QString commandError;
     if (!commandStop(&commandError)
-        || !m_motionPort->sendMode(MotionControlMode::HeadOnly, &commandError)
+        || !m_motionPort->sendMode(mode, &commandError)
         || !m_motionPort->requestStatus(&commandError)) {
         if (error) {
             *error = commandError.isEmpty()
-                ? QStringLiteral("无法进入 HEAD_ONLY 模式") : commandError;
+                ? QStringLiteral("无法进入 %1 模式")
+                      .arg(motionControlModeName(mode)) : commandError;
         }
         return false;
     }
-    m_automaticHeadControlActive = true;
+    m_automaticControlMode = mode;
     m_status.automaticHeadTrackingActive = true;
-    m_status.mode = MotionControlMode::HeadOnly;
+    m_status.automaticPersonFollowingActive = mode == MotionControlMode::Follow;
+    m_status.mode = mode;
     m_status.motion = ChassisMotion::Stopped;
     m_status.targetAvailable = false;
-    m_status.detail = QStringLiteral("自动跟头已进入 HEAD_ONLY");
+    m_status.detail = mode == MotionControlMode::Follow
+        ? QStringLiteral("人物跟随已进入 FOLLOW")
+        : QStringLiteral("自动跟头已进入 HEAD_ONLY");
     publishStatus();
-    emit automaticHeadControlChanged(true, QStringLiteral("HEAD_ONLY entered"));
-    qInfo().noquote() << "AUTO_HEAD HEAD_ONLY entered";
+    emit automaticHeadControlChanged(true,
+        QStringLiteral("%1 entered").arg(motionControlModeName(mode)));
+    emit automaticControlChanged(mode, true, m_status.detail);
+    qInfo().noquote() << "AUTO_TRACK" << motionControlModeName(mode)
+                      << "entered";
     return true;
 }
 
 void MotionService::endAutomaticHeadControl(const QString& reason)
 {
-    if (!m_automaticHeadControlActive)
+    clearAutomaticControl(reason, true);
+}
+
+void MotionService::clearAutomaticControl(const QString& reason,
+                                          bool sendSafeCommands)
+{
+    if (m_automaticControlMode == MotionControlMode::Unknown)
         return;
+    const MotionControlMode previousMode = m_automaticControlMode;
     QString commandError;
-    if (m_motionPort && m_motionPort->isTransportAvailable()) {
+    if (sendSafeCommands && m_motionPort
+        && m_motionPort->isTransportAvailable()) {
         m_motionPort->sendTarget(MotionTargetFrame {}, &commandError);
+        if (previousMode == MotionControlMode::Follow)
+            m_motionPort->sendFollowMove(ChassisMotion::Stopped, 0,
+                                         &commandError);
         commandStop(&commandError);
         m_motionPort->sendMode(MotionControlMode::Safe, &commandError);
     }
-    m_automaticHeadControlActive = false;
+    m_automaticControlMode = MotionControlMode::Unknown;
     m_status.automaticHeadTrackingActive = false;
+    m_status.automaticPersonFollowingActive = false;
     m_status.targetAvailable = false;
     m_status.motion = ChassisMotion::Stopped;
     m_status.mode = MotionControlMode::Safe;
     m_status.detail = reason.isEmpty()
-        ? QStringLiteral("自动跟头已退出") : reason;
+        ? QStringLiteral("自动视觉运动已退出") : reason;
     publishStatus();
     emit automaticHeadControlChanged(false, m_status.detail);
-    qInfo().noquote() << "AUTO_HEAD disabled control:" << m_status.detail;
+    emit automaticControlChanged(previousMode, false, m_status.detail);
+    qInfo().noquote() << "AUTO_TRACK disabled control:" << m_status.detail;
 }
 
 bool MotionService::sendAutomaticTarget(const MotionTargetFrame& target,
                                         QString* error)
 {
-    if (!m_automaticHeadControlActive || !m_activeSessionId.isEmpty()
-        || m_status.mode != MotionControlMode::HeadOnly) {
+    if (m_automaticControlMode == MotionControlMode::Unknown
+        || !m_activeSessionId.isEmpty()
+        || m_status.mode != m_automaticControlMode) {
         if (error)
-            *error = QStringLiteral("自动跟头当前未持有 HEAD_ONLY");
+            *error = QStringLiteral("自动视觉运动当前未持有有效模式");
         return false;
     }
     if (!m_motionPort->sendTarget(target, error))
@@ -230,9 +270,48 @@ bool MotionService::sendAutomaticTarget(const MotionTargetFrame& target,
     return true;
 }
 
+bool MotionService::sendAutomaticFollowMove(ChassisMotion motion, int speed,
+                                            QString* error)
+{
+    if (m_automaticControlMode != MotionControlMode::Follow
+        || !m_activeSessionId.isEmpty()
+        || m_status.mode != MotionControlMode::Follow) {
+        if (error)
+            *error = QStringLiteral("人物跟随当前未持有 FOLLOW");
+        return false;
+    }
+    if (motion != ChassisMotion::Stopped
+        && motion != ChassisMotion::Forward
+        && motion != ChassisMotion::RotateLeft
+        && motion != ChassisMotion::RotateRight) {
+        if (error)
+            *error = QStringLiteral("FOLLOW 只允许前进或原地旋转");
+        return false;
+    }
+    if (!m_motionPort->sendFollowMove(motion, speed, error))
+        return false;
+    m_status.motion = motion;
+    if (motion == ChassisMotion::Stopped)
+        m_status.stopReason = QStringLiteral("FOLLOW_POLICY_STOP");
+    else
+        m_status.stopReason.clear();
+    publishStatus();
+    return true;
+}
+
 bool MotionService::isAutomaticHeadControlActive() const
 {
-    return m_automaticHeadControlActive;
+    return m_automaticControlMode == MotionControlMode::HeadOnly;
+}
+
+bool MotionService::isAutomaticFollowControlActive() const
+{
+    return m_automaticControlMode == MotionControlMode::Follow;
+}
+
+MotionControlMode MotionService::automaticControlMode() const
+{
+    return m_automaticControlMode;
 }
 
 bool MotionService::isManualControlActive() const
@@ -269,14 +348,12 @@ void MotionService::handleControllerStart(const QString& sessionId)
         return;
     }
 
-    if (m_automaticHeadControlActive) {
-        m_automaticHeadControlActive = false;
-        m_status.automaticHeadTrackingActive = false;
-        m_status.targetAvailable = false;
-        emit automaticHeadControlChanged(
-            false, QStringLiteral("manual override"));
-        qInfo().noquote() << "AUTO_HEAD manual override";
-    }
+    // Reserve MANUAL before releasing automatic control. Synchronous status
+    // callbacks must observe the override and may not reacquire HEAD_ONLY or
+    // FOLLOW in the transition window.
+    m_activeSessionId = sessionId;
+    if (m_automaticControlMode != MotionControlMode::Unknown)
+        clearAutomaticControl(QStringLiteral("manual override"), false);
 
     QString commandError;
     if (!commandStop(&commandError)
@@ -286,9 +363,10 @@ void MotionService::handleControllerStart(const QString& sessionId)
             sessionId, QStringLiteral("MOTION_COMMAND_FAILED"),
             commandError.isEmpty() ? QStringLiteral("无法进入 MANUAL 模式")
                                    : commandError);
+        m_activeSessionId.clear();
+        publishStatus();
         return;
     }
-    m_activeSessionId = sessionId;
     m_status.remoteControlActive = true;
     m_status.mode = MotionControlMode::Manual;
     m_status.detail = QStringLiteral("远程操控已连接");
@@ -370,13 +448,9 @@ void MotionService::handleTransportAvailability(bool available,
     if (!available) {
         m_status.mcuOnline = false;
         m_lastMcuActivityMs = -1;
-        if (m_automaticHeadControlActive) {
-            m_automaticHeadControlActive = false;
-            m_status.automaticHeadTrackingActive = false;
-            m_status.targetAvailable = false;
-            emit automaticHeadControlChanged(
-                false, QStringLiteral("Motion UART 连接已中断"));
-        }
+        if (m_automaticControlMode != MotionControlMode::Unknown)
+            clearAutomaticControl(
+                QStringLiteral("Motion UART 连接已中断"), false);
         if (!m_activeSessionId.isEmpty()) {
             endRemoteControl(QStringLiteral("Motion UART 连接已中断"), true,
                              QStringLiteral("MOTION_UART_DISCONNECTED"));
@@ -404,12 +478,15 @@ void MotionService::handleMcuActivity()
 void MotionService::handleMcuStatus(const MotionStatusSnapshot& status)
 {
     const bool remoteActive = !m_activeSessionId.isEmpty();
-    const bool autoHeadActive = m_automaticHeadControlActive;
+    const MotionControlMode automaticMode = m_automaticControlMode;
     m_status = status;
     m_status.uartAvailable = m_motionPort && m_motionPort->isTransportAvailable();
     m_status.mcuOnline = true;
     m_status.remoteControlActive = remoteActive;
-    m_status.automaticHeadTrackingActive = autoHeadActive;
+    m_status.automaticHeadTrackingActive =
+        automaticMode != MotionControlMode::Unknown;
+    m_status.automaticPersonFollowingActive =
+        automaticMode == MotionControlMode::Follow;
     m_status.detail = status.fault ? QStringLiteral("Motion MCU fault")
                                    : QStringLiteral("Motion MCU 状态正常");
     m_lastMcuActivityMs = m_clock.elapsed();
@@ -423,13 +500,11 @@ void MotionService::handleMcuStatus(const MotionStatusSnapshot& status)
                          QStringLiteral("MOTION_MODE_CHANGED"));
         return;
     }
-    if (autoHeadActive && status.mode != MotionControlMode::HeadOnly) {
-        m_automaticHeadControlActive = false;
-        m_status.automaticHeadTrackingActive = false;
-        m_status.targetAvailable = false;
-        publishStatus();
-        emit automaticHeadControlChanged(
-            false, QStringLiteral("Motion MCU 已离开 HEAD_ONLY 模式"));
+    if (automaticMode != MotionControlMode::Unknown
+        && status.mode != automaticMode) {
+        clearAutomaticControl(
+            QStringLiteral("Motion MCU 已离开 %1 模式")
+                .arg(motionControlModeName(automaticMode)), false);
         return;
     }
     publishStatus();
@@ -439,12 +514,8 @@ void MotionService::handleMcuFault(const QString& reason)
 {
     m_status.fault = true;
     m_status.detail = QStringLiteral("Motion MCU fault：%1").arg(reason);
-    if (m_automaticHeadControlActive) {
-        m_automaticHeadControlActive = false;
-        m_status.automaticHeadTrackingActive = false;
-        m_status.targetAvailable = false;
-        emit automaticHeadControlChanged(false, m_status.detail);
-    }
+    if (m_automaticControlMode != MotionControlMode::Unknown)
+        clearAutomaticControl(m_status.detail, false);
     if (!m_activeSessionId.isEmpty()) {
         endRemoteControl(m_status.detail, true,
                          QStringLiteral("MOTION_MCU_FAULT"));
@@ -460,12 +531,8 @@ void MotionService::refreshMotionLease()
     if (m_status.mcuOnline && !isMcuFresh()) {
         m_status.mcuOnline = false;
         m_status.detail = QStringLiteral("Motion MCU 状态响应超时");
-        if (m_automaticHeadControlActive) {
-            m_automaticHeadControlActive = false;
-            m_status.automaticHeadTrackingActive = false;
-            m_status.targetAvailable = false;
-            emit automaticHeadControlChanged(false, m_status.detail);
-        }
+        if (m_automaticControlMode != MotionControlMode::Unknown)
+            clearAutomaticControl(m_status.detail, false);
         if (!m_activeSessionId.isEmpty()) {
             endRemoteControl(m_status.detail, true,
                              QStringLiteral("MOTION_MCU_OFFLINE"));
@@ -510,7 +577,10 @@ void MotionService::pollMcuStatus()
 void MotionService::publishStatus()
 {
     m_status.remoteControlActive = !m_activeSessionId.isEmpty();
-    m_status.automaticHeadTrackingActive = m_automaticHeadControlActive;
+    m_status.automaticHeadTrackingActive =
+        m_automaticControlMode != MotionControlMode::Unknown;
+    m_status.automaticPersonFollowingActive =
+        m_automaticControlMode == MotionControlMode::Follow;
     m_status.updatedAt = QDateTime::currentDateTimeUtc();
     emit statusChanged(m_status);
     if (m_controlPort)

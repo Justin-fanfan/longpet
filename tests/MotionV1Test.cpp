@@ -29,6 +29,9 @@ public:
             status.mode = MotionControlMode::Safe;
             status.motion = ChassisMotion::Stopped;
             status.servoPulseUs = 1570;
+            status.headOffsetAvailable = true;
+            status.headOffsetUs = 0;
+            status.mcuReportedAt = QDateTime::currentDateTimeUtc();
             emit statusReceived(status);
         }
         return true;
@@ -41,6 +44,15 @@ public:
     { return record(QStringLiteral("MODE %1").arg(motionControlModeName(mode)), error); }
     bool sendMove(ChassisMotion motion, int speed, QString* error) override
     { return record(QStringLiteral("MOVE %1 %2").arg(chassisMotionName(motion)).arg(speed), error); }
+    bool sendFollowMove(ChassisMotion motion, int speed,
+                        QString* error) override
+    {
+        const QString command = motion == ChassisMotion::Stopped
+            ? QStringLiteral("FOLLOW_MOVE STOP")
+            : QStringLiteral("FOLLOW_MOVE %1 %2")
+                  .arg(chassisMotionName(motion)).arg(speed);
+        return record(command, error);
+    }
     bool sendHead(HeadMotion motion, int stepUs, QString* error) override
     {
         const QString command = motion == HeadMotion::Center
@@ -61,6 +73,22 @@ public:
     {
         available = false;
         emit transportAvailabilityChanged(false, QStringLiteral("fake disconnect"));
+    }
+
+    void reportStatus(int headOffsetUs,
+                      MotionControlMode mode = MotionControlMode::Follow)
+    {
+        emit mcuActivity();
+        MotionStatusSnapshot status;
+        status.uartAvailable = true;
+        status.mcuOnline = true;
+        status.mode = mode;
+        status.motion = ChassisMotion::Stopped;
+        status.servoPulseUs = 1570;
+        status.headOffsetAvailable = true;
+        status.headOffsetUs = headOffsetUs;
+        status.mcuReportedAt = QDateTime::currentDateTimeUtc();
+        emit statusReceived(status);
     }
 
     bool record(const QString& command, QString* error)
@@ -143,6 +171,8 @@ private slots:
     void protocolSerializesAndParsesMcuV2();
     void targetGeometryUsesActualSourceSize();
     void automaticHeadLifecycleRejectsStaleAndYieldsToManualAndCall();
+    void personFollowAlignsBeforeApproachAndUsesHysteresis();
+    void personFollowStopsAndDoesNotResumeAfterPreemption();
     void manualLifecycleRefreshesLeaseAndStopsSafely();
     void unavailableAndReconnectPathsDoNotCrash();
     void controlWebSocketAuthenticatesAndRejectsShift();
@@ -161,6 +191,14 @@ void MotionV1Test::protocolSerializesAndParsesMcuV2()
              QByteArray("HEAD CENTER\n"));
     QCOMPARE(EspMotionProtocol::targetCommand({-85, 12, 7400}),
              QByteArray("TARGET -85 12 7400\n"));
+    QCOMPARE(EspMotionProtocol::followMoveCommand(
+                 ChassisMotion::Forward, 12),
+             QByteArray("FOLLOW_MOVE FORWARD 12\n"));
+    QCOMPARE(EspMotionProtocol::followMoveCommand(
+                 ChassisMotion::Stopped, 0),
+             QByteArray("FOLLOW_MOVE STOP\n"));
+    QVERIFY(EspMotionProtocol::followMoveCommand(
+                ChassisMotion::Backward, 12).isEmpty());
     QVERIFY(EspMotionProtocol::moveCommand(ChassisMotion::Stopped, 20).isEmpty());
     QVERIFY(EspMotionProtocol::moveCommand(ChassisMotion::Forward, 0).isEmpty());
     QVERIFY(EspMotionProtocol::headCommand(HeadMotion::Right, 101).isEmpty());
@@ -176,7 +214,149 @@ void MotionV1Test::protocolSerializesAndParsesMcuV2()
     QCOMPARE(status.servoPulseUs, 1570);
     QVERIFY(!status.targetAvailable);
     QVERIFY(status.imuAvailable);
+    QVERIFY(!status.headOffsetAvailable);
+    QVERIFY2(EspMotionProtocol::parseStatusLine(
+        "[STATUS] mode=FOLLOW motion=ROTATE_LEFT stop=NONE fault=0 target=1 servo=1800 head_offset=-230 imu=1",
+        &status, &error), qPrintable(error));
+    QVERIFY(status.headOffsetAvailable);
+    QCOMPARE(status.headOffsetUs, -230);
     QVERIFY(!EspMotionProtocol::parseStatusLine("[STATUS] broken", &status, &error));
+}
+
+void MotionV1Test::personFollowAlignsBeforeApproachAndUsesHysteresis()
+{
+    FakeMotionPort motion;
+    FakeControlPort control;
+    MotionServiceConfiguration motionConfiguration;
+    motionConfiguration.mcuOfflineTimeoutMs = 5'000;
+    MotionService motionService(&motion, &control, motionConfiguration);
+    QString error;
+    QVERIFY(motionService.start(QHostAddress::LocalHost, 9881,
+                                QStringLiteral("fake"), 115200, &error));
+    AutomaticHeadTrackingConfiguration configuration;
+    configuration.targetStableMs = 0;
+    configuration.alignEnterDwellMs = 0;
+    configuration.alignExitDwellMs = 20;
+    configuration.minimumMotionDurationMs = 0;
+    configuration.targetExpiryMs = 1'000;
+    AutomaticHeadTrackingService automatic(&motionService, configuration);
+    automatic.setVisionAvailable(true);
+    QVERIFY2(automatic.setMode(AutomaticTrackingMode::PersonFollow, &error),
+             qPrintable(error));
+    QCOMPARE(motionService.status().mode, MotionControlMode::Follow);
+    QVERIFY(motion.commands.contains(QStringLiteral("MODE FOLLOW")));
+
+    TargetObservation observation;
+    observation.present = true;
+    observation.fresh = true;
+    observation.status = TargetTrackingStatus::Tracking;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    observation.sourceSize = QSize(640, 480);
+    observation.target.normalizedCenter = QPointF(0.4, 0.5);
+    observation.target.normalizedSize = QSizeF(0.15, 0.20);
+
+    motion.reportStatus(-300);
+    observation.frameSequence = 100;
+    automatic.handleTargetObservation(observation);
+    observation.frameSequence = 101;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().followState, PersonFollowState::Aligning);
+    QCOMPARE(automatic.snapshot().chassisMotion, ChassisMotion::RotateLeft);
+    QVERIFY(motion.commands.contains(
+        QStringLiteral("FOLLOW_MOVE ROTATE_LEFT 10")));
+    QVERIFY(!motion.commands.contains(QStringLiteral("FOLLOW_MOVE FORWARD 12")));
+
+    motion.reportStatus(0);
+    observation.frameSequence = 102;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().chassisMotion, ChassisMotion::Stopped);
+    QTest::qWait(25);
+    observation.frameSequence = 103;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().followState, PersonFollowState::Approaching);
+    QCOMPARE(automatic.snapshot().chassisMotion, ChassisMotion::Forward);
+
+    // FAR stays latched until far-exit, then GOOD stays latched until the
+    // lower far-enter boundary is crossed.
+    observation.target.normalizedSize.setHeight(0.30);
+    observation.frameSequence = 104;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().distanceClass, PersonDistanceClass::Far);
+    observation.target.normalizedSize.setHeight(0.35);
+    observation.frameSequence = 105;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().distanceClass, PersonDistanceClass::Good);
+    QCOMPARE(automatic.snapshot().chassisMotion, ChassisMotion::Stopped);
+    observation.target.normalizedSize.setHeight(0.29);
+    observation.frameSequence = 106;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().distanceClass, PersonDistanceClass::Good);
+    observation.target.normalizedSize.setHeight(0.80);
+    observation.frameSequence = 107;
+    observation.timestamp = QDateTime::currentDateTimeUtc();
+    automatic.handleTargetObservation(observation);
+    QCOMPARE(automatic.snapshot().distanceClass, PersonDistanceClass::Near);
+    QCOMPARE(automatic.snapshot().chassisMotion, ChassisMotion::Stopped);
+    for (const QString& command : motion.commands)
+        QVERIFY2(!command.startsWith(QStringLiteral("FOLLOW_MOVE BACKWARD")),
+                 qPrintable(command));
+}
+
+void MotionV1Test::personFollowStopsAndDoesNotResumeAfterPreemption()
+{
+    FakeMotionPort motion;
+    FakeControlPort control;
+    MotionServiceConfiguration motionConfiguration;
+    motionConfiguration.mcuOfflineTimeoutMs = 5'000;
+    MotionService motionService(&motion, &control, motionConfiguration);
+    QString error;
+    QVERIFY(motionService.start(QHostAddress::LocalHost, 9882,
+                                QStringLiteral("fake"), 115200, &error));
+    AutomaticHeadTrackingConfiguration configuration;
+    configuration.targetStableMs = 0;
+    configuration.alignEnterDwellMs = 0;
+    configuration.alignExitDwellMs = 0;
+    configuration.minimumMotionDurationMs = 0;
+    AutomaticHeadTrackingService automatic(&motionService, configuration);
+    automatic.setVisionAvailable(true);
+    QVERIFY(automatic.setMode(AutomaticTrackingMode::PersonFollow, &error));
+
+    // The legacy boolean API remains a HEAD_ONLY API. Calling enabled=true
+    // while FOLLOW is active must switch modes rather than silently keeping
+    // autonomous chassis control enabled.
+    QVERIFY(automatic.setEnabled(true, &error));
+    QCOMPARE(automatic.snapshot().mode, AutomaticTrackingMode::HeadOnly);
+    QVERIFY(motionService.isAutomaticHeadControlActive());
+    QVERIFY(!motionService.isAutomaticFollowControlActive());
+    QVERIFY(automatic.setMode(AutomaticTrackingMode::PersonFollow, &error));
+
+    const FamilyMotionSession session = motionService.createRemoteSession(&error);
+    emit control.controllerStartRequested(session.sessionId);
+    QCOMPARE(automatic.snapshot().mode, AutomaticTrackingMode::Disabled);
+    QVERIFY(!automatic.snapshot().enabled);
+    QCOMPARE(motionService.status().mode, MotionControlMode::Manual);
+    emit control.controllerStopped(QStringLiteral("manual complete"));
+    QCOMPARE(motionService.status().mode, MotionControlMode::Safe);
+    QVERIFY(!motionService.isAutomaticFollowControlActive());
+
+    motion.reportStatus(0, MotionControlMode::Safe);
+    QVERIFY(automatic.setMode(AutomaticTrackingMode::PersonFollow, &error));
+    automatic.setVideoCallActive(true);
+    QCOMPARE(automatic.snapshot().mode, AutomaticTrackingMode::Disabled);
+    QVERIFY(!motionService.isAutomaticFollowControlActive());
+    automatic.setVideoCallActive(false);
+    QVERIFY(!motionService.isAutomaticFollowControlActive());
+
+    QVERIFY(automatic.setMode(AutomaticTrackingMode::PersonFollow, &error));
+    motion.disconnectTransport();
+    QCOMPARE(automatic.snapshot().mode, AutomaticTrackingMode::Disabled);
+    QVERIFY(!automatic.snapshot().enabled);
 }
 
 void MotionV1Test::targetGeometryUsesActualSourceSize()

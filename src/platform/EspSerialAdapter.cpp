@@ -85,6 +85,12 @@ bool EspSerialAdapter::sendMove(ChassisMotion motion, int speed,
     return sendBytes(EspMotionProtocol::moveCommand(motion, speed), error);
 }
 
+bool EspSerialAdapter::sendFollowMove(ChassisMotion motion, int speed,
+                                      QString* error)
+{
+    return sendBytes(EspMotionProtocol::followMoveCommand(motion, speed), error);
+}
+
 bool EspSerialAdapter::sendHead(HeadMotion motion, int stepUs,
                                 QString* error)
 {

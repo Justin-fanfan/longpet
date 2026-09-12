@@ -9,6 +9,7 @@ namespace EspMotionProtocol {
 QByteArray stopCommand();
 QByteArray modeCommand(MotionControlMode mode);
 QByteArray moveCommand(ChassisMotion motion, int speed);
+QByteArray followMoveCommand(ChassisMotion motion, int speed);
 QByteArray headCommand(HeadMotion motion, int stepUs);
 QByteArray targetCommand(const MotionTargetFrame& target);
 QByteArray statusCommand();

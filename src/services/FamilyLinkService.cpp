@@ -271,6 +271,21 @@ bool FamilyLinkService::setAutomaticHeadTracking(
     return true;
 }
 
+bool FamilyLinkService::setAutomaticTrackingMode(
+    AutomaticTrackingMode mode, AutomaticHeadTrackingSnapshot* snapshot,
+    QString* error) const
+{
+    if (!snapshot || !m_automaticHeadTrackingService) {
+        if (error)
+            *error = QStringLiteral("自动视觉运动服务未初始化");
+        return false;
+    }
+    if (!m_automaticHeadTrackingService->setMode(mode, error))
+        return false;
+    *snapshot = m_automaticHeadTrackingService->snapshot();
+    return true;
+}
+
 bool FamilyLinkService::automaticHeadTrackingAvailable() const
 {
     return m_automaticHeadTrackingService != nullptr;
