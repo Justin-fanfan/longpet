@@ -103,7 +103,7 @@ QT_QPA_PLATFORM=linuxfb:fb=/dev/fb0
 /proc/<LongPet PID>/fd/6 -> /dev/tty0
 ```
 
-因此，agetty/fbcon 的终端输出、VT 清理/切换与 Qt 对 `/dev/fb0`、`/dev/tty0` 的使用会互相覆盖，形成“默认终端页面”和 Qt UI 抢屏。
+agetty/fbcon 的终端输出、VT 清理/切换与 Qt 对 `/dev/fb0`、`/dev/tty0` 的使用会互相覆盖，形成“默认终端页面”和 Qt UI 抢屏。
 
 ## 3. 证据链与根因判断
 

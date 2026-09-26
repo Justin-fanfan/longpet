@@ -396,7 +396,7 @@ Run 自身已超过 2.7 秒，配置较短 interval 不能提高吞吐。
 
 ### 13.5 性能结论
 
-按照任务给出的工程参考，`> 2 s/frame` 原则上应淘汰该方案。实测结论是：
+按照任务给出的工程参考，`> 2 s/frame` 原则上应淘汰该方案。实测结果表明：
 
 - 共享 Camera、异步调度、FastestDet 解码和结构化结果链路正确；
 - FastestDet FP32 + 当前 ORT scalar CPU 后端不适合作为 LongPet 常驻实时视觉基础；

@@ -63,7 +63,7 @@ VT / tty1
 LCD
 ```
 
-因此，如果不处理 VT，Linux 控制台和 Qt 都可能操作同一个 framebuffer。
+如果不处理 VT，Linux 控制台和 Qt 都可能操作同一个 framebuffer。
 
 这会导致：
 
