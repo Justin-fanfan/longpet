@@ -190,7 +190,7 @@ void SettingsPage::setDeviceSummary(const DeviceSummary& summary)
     m_familyRow->setSubtitle(summary.familySummary.isEmpty()
         ? QStringLiteral("尚未配对") : summary.familySummary);
     m_versionSummary->setText(summary.softwareVersion.isEmpty()
-        ? QStringLiteral("LongPet V0.2")
+        ? QStringLiteral("LongPet V0.3")
         : QStringLiteral("LongPet V%1").arg(summary.softwareVersion));
 }
 

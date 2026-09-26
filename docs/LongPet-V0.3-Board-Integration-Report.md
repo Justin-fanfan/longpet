@@ -1,4 +1,4 @@
-# LongPet V0.2 开发板软硬件联调工作报告
+# LongPet V0.3 开发板软硬件联调工作报告
 
 > 历史记录：本文中的工程目录和 10.x 板端地址是 2026-08-17 的联调事实；当前部署地址和命令见
 > [最新配置说明](../deploy/配置说明.md)。
@@ -14,7 +14,7 @@
 
 ## 1. 完成结论
 
-本轮已完成 LongPet V0.2 在 LS2K300 开发板上的真实软硬件接入、交叉构建、部署、持久化验证、故障恢复验证和整板重启验证。
+本轮已完成 LongPet V0.3 在 LS2K300 开发板上的真实软硬件接入、交叉构建、部署、持久化验证、故障恢复验证和整板重启验证。
 
 已接通并验证的接口：
 
@@ -143,7 +143,7 @@ Page、Widget、MainWindow 均未直接依赖 ALSA、sysfs、NetworkManager 或 
 - `src/platform/PowerStatusAdapter.cpp`
 - `scripts/run-board.sh`
 - `deploy/longpet.service`
-- `reports/LongPet-V0.2-Board-Integration-Report.md`
+- `reports/LongPet-V0.3-Board-Integration-Report.md`
 
 ### 修改
 

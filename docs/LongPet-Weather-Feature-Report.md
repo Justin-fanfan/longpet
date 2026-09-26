@@ -357,5 +357,5 @@ ctest --test-dir build -C Release --output-on-failure
 ## 9. 相关文档
 
 - 部署：`deploy/配置说明.md`（§2/§3.5/§5/§8/§11/§12/§14/§15.6）
-- 上板集成：`docs/LongPet-V0.2-Board-Integration-Report.md`
+- 上板集成：`docs/LongPet-V0.3-Board-Integration-Report.md`
 - 本报告：`docs/LongPet-Weather-Feature-Report.md`

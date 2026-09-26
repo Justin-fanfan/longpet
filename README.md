@@ -1,6 +1,6 @@
-# LongPet V0.2
+# LongPet V0.3
 
-LongPet V0.2 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本在 V0.1 的正式 UI 骨架上完成了首个可持久化的本地业务闭环：提醒管理、今日关怀、用户设置与设备状态入口。
+LongPet V0.3 是面向 1024×600 触控终端的 Qt 6 Widgets 应用。本版本在 V0.1 的正式 UI 骨架上完成了首个可持久化的本地业务闭环：提醒管理、今日关怀、用户设置与设备状态入口。
 
 ## 已实现
 
@@ -81,7 +81,7 @@ ctest --test-dir build --output-on-failure
 - `FamilyLinkHttpAdapter → FamilyLinkController → FamilyLinkService`
 - `FamilyMotionControlAdapter → MotionService → MotionPort → EspSerialAdapter`
 
-具体上机验证项和当前限制见 [V0.2 工作报告](docs/LongPet-V0.2-Work-Report.md)。
+具体上机验证项和当前限制见 [V0.3 工作报告](docs/LongPet-V0.3-Work-Report.md)。
 
 ## FamilyLink API
 

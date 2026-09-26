@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.21)
 
 project(
     LongPet
-    VERSION 0.2.0
+    VERSION 0.3.0
     LANGUAGES CXX
 )
 
@@ -315,7 +315,7 @@ if(LONGPET_ENABLE_VISION)
     install(TARGETS LongPetVisionBench RUNTIME DESTINATION bin)
 endif()
 
-option(LONGPET_BUILD_TESTS "Build LongPet V0.2 tests" OFF)
+option(LONGPET_BUILD_TESTS "Build LongPet V0.3 tests" OFF)
 
 if(LONGPET_BUILD_TESTS)
     enable_testing()

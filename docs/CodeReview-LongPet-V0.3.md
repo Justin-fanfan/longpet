@@ -1,4 +1,4 @@
-# LongPet V0.2 代码审查报告
+# LongPet V0.3 代码审查报告
 
 - 审查日期：2026-08-14（由代码审查 Agent 执行）
 - 工程目录：`D:\code_qt\longpet`
@@ -10,7 +10,7 @@
 
 ## 1. 总体评价
 
-LongPet V0.2 是一个面向 1024×600 触控终端的 Qt 6 Widgets 应用，已从 V0.1 的「UI 骨架」推进到「本地业务真实闭环」。整体工程质量明显高于同类原型项目，主要体现在：
+LongPet V0.3 是一个面向 1024×600 触控终端的 Qt 6 Widgets 应用，已从 V0.1 的「UI 骨架」推进到「本地业务真实闭环」。整体工程质量明显高于同类原型项目，主要体现在：
 
 - 分层清晰、依赖方向单一（`Page → MainWindow → AppController → Service → Repository → SQLite`）；
 - `Application` 作为组合根统一管理对象生命周期，`main.cpp` 职责极简；
@@ -46,7 +46,7 @@ LongPet V0.2 是一个面向 1024×600 触控终端的 Qt 6 Widgets 应用，已
 #### M-1 「已错过」状态只计算、不落库，与文档声明不符
 
 - 文件：`src/services/ReminderService.cpp` L39–45；`src/data/ReminderRepository.cpp` `statusToString()` L41–50
-- 相关文档：`docs/LongPet-V0.2-Work-Report.md` §4.2 表格声称 `reminder_events` 记录「投递、完成和**错过**」
+- 相关文档：`docs/LongPet-V0.3-Work-Report.md` §4.2 表格声称 `reminder_events` 记录「投递、完成和**错过**」
 
 **问题**：`ReminderOccurrenceStatus::Missed` 的展示完全在 `ReminderService::reminders()` 里按 `occurredWithoutDelivery` 即时推算，**没有任何代码路径写入 `status='missed'` 的 `reminder_events` 记录**。`statusToString()` 虽已支持 `"missed"`，但实际是无用分支。
 
@@ -109,7 +109,7 @@ LongPet V0.2 是一个面向 1024×600 触控终端的 Qt 6 Widgets 应用，已
 
 #### L-6 版本号展示多出 `.0`
 
-- `src/pages/SettingsPage.cpp` L164–165 显示 `LongPet V%1` 且 `softwareVersion=0.2.0`，结果为 `LongPet V0.2.0`；README/标题为 `V0.2`。属外观不一致，建议统一显示口径。
+- `src/pages/SettingsPage.cpp` L164–165 显示 `LongPet V%1` 且 `softwareVersion=0.2.0`，结果为 `LongPet V0.3.0`；README/标题为 `V0.3`。属外观不一致，建议统一显示口径。
 
 #### L-7 无结构化日志，仅 `qWarning/qCritical`
 
@@ -125,7 +125,7 @@ LongPet V0.2 是一个面向 1024×600 触控终端的 Qt 6 Widgets 应用，已
 
 #### L-9 `.gitignore` 与工作报告自述不一致
 
-- `.gitignore` L18–19：`docs/*` 生效，`!docs/LongPet-V0.2-Work-Report.md` 被注释掉。实测 `git check-ignore` 确认该报告**未被纳入版本库**，而 `docs/LongPet_V0.1_UI套用说明.md` 却在库中。工作报告 §14 声称「允许 V0.2 报告进入仓库」与现状矛盾。建议决定并统一：要么取消注释纳入该报告，要么修正文档表述。
+- `.gitignore` L18–19：`docs/*` 生效，`!docs/LongPet-V0.3-Work-Report.md` 被注释掉。实测 `git check-ignore` 确认该报告**未被纳入版本库**，而 `docs/LongPet_V0.1_UI套用说明.md` 却在库中。工作报告 §14 声称「允许 V0.3 报告进入仓库」与现状矛盾。建议决定并统一：要么取消注释纳入该报告，要么修正文档表述。
 
 ---
 
@@ -178,7 +178,7 @@ LongPet V0.2 是一个面向 1024×600 触控终端的 Qt 6 Widgets 应用，已
 
 ## 7. 结论
 
-LongPet V0.2 的分层架构、数据持久化、乐观并发、防重投递调度和测试覆盖都达到了可交付的工程水准，报告中「本地业务真实闭环」的自我评价基本属实。**未发现会导致当前目标机（1024×600、dpr=1）崩溃或数据损坏的缺陷**。
+LongPet V0.3 的分层架构、数据持久化、乐观并发、防重投递调度和测试覆盖都达到了可交付的工程水准，报告中「本地业务真实闭环」的自我评价基本属实。**未发现会导致当前目标机（1024×600、dpr=1）崩溃或数据损坏的缺陷**。
 
 需重点跟进的只有两件事：
 
